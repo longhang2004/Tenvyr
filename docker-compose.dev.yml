@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # In development, we mount volumes for live code reloading
+  gateway:
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./services/gateway:/usr/src/app
+      - /usr/src/app/node_modules
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+      target: development
+
+  orchestrator:
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./services/orchestrator:/usr/src/app
+      - /usr/src/app/node_modules
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+      target: development
+
+  agent-code-reviewer:
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./services/agent-code-reviewer:/usr/src/app
+      - /usr/src/app/node_modules
+    build:
+      context: .
+      dockerfile: services/agent-code-reviewer/Dockerfile
+      target: development
+
+  agent-observability:
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./services/agent-observability:/usr/src/app
+      - /usr/src/app/node_modules
+    build:
+      context: .
+      dockerfile: services/agent-observability/Dockerfile
+      target: development
+
+  frontend:
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./frontend:/usr/src/app
+      - /usr/src/app/node_modules
+      - /usr/src/app/.next
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: development

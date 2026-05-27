@@ -1,0 +1,63 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE Files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.classpath
+.project
+.settings/
+.factorypath
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+.env.development.local
+.env.local.path
+
+# CodeGraph and SQLite local files
+*.db
+*.sqlite
+.codegraph/
+
+# Skills and dynamic agent config
+.claude/
+.cursor/
+.antigravity/
+.kiro/
+.clauderules
+.cursorrules
+.antigravityrules

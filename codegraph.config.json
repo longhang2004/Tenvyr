@@ -1,0 +1,10 @@
+{
+  "exclude": [
+    "**/node_modules/**",
+    "**/target/**",
+    "**/.next/**",
+    "**/.git/**"
+  ],
+  "languages": ["typescript", "javascript", "java"],
+  "watch": true
+}

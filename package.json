@@ -1,0 +1,24 @@
+{
+  "name": "agentweave",
+  "version": "1.0.0",
+  "description": "Open-source Multi-Agent Orchestration Framework utilizing Kafka as the event bus",
+  "private": true,
+  "scripts": {
+    "dev:infra": "docker compose up -d",
+    "dev:infra:down": "docker compose down",
+    "dev:orchestrator": "pnpm --filter orchestrator run start:dev",
+    "dev:gateway": "pnpm --filter gateway run start:dev",
+    "dev:reviewer": "pnpm --filter agent-code-reviewer run start:dev",
+    "dev:observability": "pnpm --filter agent-observability run start:dev",
+    "dev:frontend": "pnpm --filter frontend run dev",
+    "build:all": "pnpm -r build",
+    "test:all": "pnpm -r test",
+    "format": "prettier --write \"**/*.{ts,js,json,md,yml,yaml}\"",
+    "skills:install": "./scripts/install-skills.sh",
+    "codegraph:init": "./scripts/codegraph-init.sh"
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

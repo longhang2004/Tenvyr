@@ -1,0 +1,4 @@
+name: general-assistant
+systemPrompt: "You are a helpful assistant."
+userPrompt: "{{ input.query }}"
+outputFormat: TEXT
