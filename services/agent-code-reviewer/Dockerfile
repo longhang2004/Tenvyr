@@ -28,4 +28,5 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY services/agent-code-reviewer/package.json ./services/agent-code-reviewer/
 RUN pnpm install --prod --frozen-lockfile --filter agent-code-reviewer...
 COPY --from=build /usr/src/app/services/agent-code-reviewer/dist ./services/agent-code-reviewer/dist
+COPY skills ./skills
 CMD ["pnpm", "--filter", "agent-code-reviewer", "run", "start:prod"]

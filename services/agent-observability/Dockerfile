@@ -28,4 +28,5 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY services/agent-observability/package.json ./services/agent-observability/
 RUN pnpm install --prod --frozen-lockfile --filter agent-observability...
 COPY --from=build /usr/src/app/services/agent-observability/dist ./services/agent-observability/dist
+COPY skills ./skills
 CMD ["pnpm", "--filter", "agent-observability", "run", "start:prod"]
