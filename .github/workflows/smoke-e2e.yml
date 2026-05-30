@@ -1,0 +1,67 @@
+name: Smoke E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: "0 6 * * *"
+
+jobs:
+  smoke:
+    name: Full-stack smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build & start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for services to be healthy
+        run: |
+          set -euo pipefail
+          endpoints=(
+            "http://localhost:3000/health"
+            "http://localhost:3001/health"
+            "http://localhost:3002/health"
+            "http://localhost:3003/health"
+            "http://localhost:8085/health"
+            "http://localhost:4000/"
+          )
+          deadline=$(( $(date +%s) + 180 ))
+          for url in "${endpoints[@]}"; do
+            echo "Waiting for ${url} ..."
+            until curl -fsS -o /dev/null "${url}"; do
+              if [ "$(date +%s)" -ge "${deadline}" ]; then
+                echo "Timed out waiting for ${url}"
+                exit 1
+              fi
+              sleep 5
+            done
+            echo "${url} is up"
+          done
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run smoke test
+        run: pnpm run smoke:e2e
+
+      - name: Dump docker compose logs
+        if: always()
+        run: docker compose logs --no-color
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose down -v
