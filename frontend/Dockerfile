@@ -17,6 +17,7 @@ CMD ["pnpm", "--filter", "frontend", "run", "dev"]
 # Build stage
 FROM base AS build
 COPY frontend/ ./frontend/
+RUN mkdir -p ./frontend/public
 # Skip type check and lint during docker builds for speed
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm --filter frontend run build

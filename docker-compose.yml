@@ -145,6 +145,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - KAFKA_BROKERS=kafka:9092
+      - GATEWAY_URL=http://gateway:3000
+      - ORCHESTRATOR_AGENT_NAMES=code-reviewer,observability
     networks:
       - agentweave-net
 
@@ -157,10 +159,11 @@ services:
       kafka:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "8085:8085"
     environment:
       - SPRING_PROFILES_ACTIVE=prod
       - KAFKA_BROKERS=kafka:9092
+      - AGENT_RUNNER_PORT=8085
       - LLM_PROVIDER=openai
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -182,7 +185,7 @@ services:
       - NODE_ENV=production
       - PORT=3002
       - KAFKA_BROKERS=kafka:9092
-      - AGENT_RUNNER_URL=http://agent-runner:8080
+      - AGENT_RUNNER_URL=http://agent-runner:8085
     networks:
       - agentweave-net
 
@@ -200,7 +203,7 @@ services:
       - NODE_ENV=production
       - PORT=3003
       - KAFKA_BROKERS=kafka:9092
-      - AGENT_RUNNER_URL=http://agent-runner:8080
+      - AGENT_RUNNER_URL=http://agent-runner:8085
     networks:
       - agentweave-net
 

@@ -22,7 +22,7 @@ Welcome to **AgentWeave**, a multi-agent orchestration framework utilizing Kafka
 
 *   **Gateway Service:** `http://localhost:3000` (NestJS) — Entrypoint for HTTP/WebSockets.
 *   **Orchestrator Service:** `http://localhost:3001` (NestJS) — Pipeline graph execution & Kafka coordinator.
-*   **Agent Runner Service:** `http://localhost:8080` (Java Spring Boot) — LLM execution & core processing.
+*   **Agent Runner Service:** `http://localhost:8085` (Java Spring Boot) — LLM execution & core processing.
 *   **Code Reviewer Agent:** `http://localhost:3002` (NestJS) — Static analysis + LLM reviewer.
 *   **Observability Agent:** `http://localhost:3003` (NestJS) — Log analysis + anomaly detector.
 *   **Frontend Dashboard:** `http://localhost:4000` (Next.js 15) — Visual graph builder and monitor.

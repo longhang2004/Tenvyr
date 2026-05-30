@@ -15,7 +15,8 @@
     "test:all": "pnpm -r test",
     "format": "prettier --write \"**/*.{ts,js,json,md,yml,yaml}\"",
     "skills:install": "./scripts/install-skills.sh",
-    "codegraph:init": "./scripts/codegraph-init.sh"
+    "codegraph:init": "./scripts/codegraph-init.sh",
+    "smoke:e2e": "node scripts/smoke-e2e.mjs"
   },
   "devDependencies": {
     "prettier": "^3.0.0"
