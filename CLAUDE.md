@@ -143,3 +143,16 @@ When working on this repository, all AI agents (including Codex, Cursor, Claude,
 4.  **No Placeholders:** All code, mock data, and templates must be fully functioning. Do not leave "TODO" blocks or dummy values.
 5.  **Run Verifications:** Always run build, syntax checks, or unit tests after applying changes to ensure correctness.
 6.  **Document Mechanics:** When adding a new feature or "mechanic", document it in `docs/agent-rules.md` to ensure future agents inherit the same workflow guidelines.
+
+---
+
+## 🚀 Installed Agent Customizations
+
+### i-have-adhd
+Output styling rules for ADHD-friendly responses.
+@./skills/i-have-adhd/SKILL.md
+
+### ponytail
+Lazy senior dev rules for minimal and efficient code.
+@./skills/ponytail/SKILL.md
+
