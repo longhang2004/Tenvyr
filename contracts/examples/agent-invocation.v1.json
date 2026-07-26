@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "fce595ea-57de-4450-9e15-7170a3a66e5d:1",
+  "executionId": "066595ff-4d5e-40e2-87b1-a5ea252f6543",
+  "stepExecutionId": "fce595ea-57de-4450-9e15-7170a3a66e5d",
+  "stepId": "review",
+  "target": {
+    "agent": "code-reviewer"
+  },
+  "input": {
+    "language": "typescript",
+    "code": "const safe = true;"
+  },
+  "attempt": 1,
+  "createdAt": "2026-07-26T00:00:00.000Z",
+  "deadlineAt": "2026-07-26T00:00:30.000Z",
+  "trace": {
+    "traceId": "066595ff-4d5e-40e2-87b1-a5ea252f6543",
+    "correlationId": "fce595ea-57de-4450-9e15-7170a3a66e5d:1"
+  }
+}

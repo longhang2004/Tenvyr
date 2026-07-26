@@ -31,7 +31,9 @@ export class ExecutionService {
       updateData.output = output;
     }
     await this.executionRepository.update(id, updateData);
-    return this.executionRepository.findOne({ where: { id } }) as Promise<ExecutionEntity>;
+    return this.executionRepository.findOne({
+      where: { id },
+    }) as Promise<ExecutionEntity>;
   }
 
   async getExecution(id: string): Promise<ExecutionEntity | null> {
@@ -120,5 +122,8 @@ export class ExecutionService {
       where: { executionId, stepId },
     });
   }
-}
 
+  async getStepExecutionById(id: string): Promise<StepExecutionEntity | null> {
+    return this.stepExecutionRepository.findOne({ where: { id } });
+  }
+}

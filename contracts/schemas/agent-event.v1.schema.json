@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweave.dev/contracts/agent-event.v1.schema.json",
+  "title": "AgentEventV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "invocationId",
+    "executionId",
+    "stepExecutionId",
+    "sequence",
+    "type",
+    "occurredAt",
+    "payload",
+    "trace"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "eventId": { "type": "string", "minLength": 1 },
+    "invocationId": { "type": "string", "minLength": 1 },
+    "executionId": { "type": "string", "minLength": 1 },
+    "stepExecutionId": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "type": {
+      "enum": [
+        "accepted",
+        "progress",
+        "log",
+        "heartbeat",
+        "artifact",
+        "completed",
+        "failed"
+      ]
+    },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceId", "correlationId"],
+      "properties": {
+        "traceId": { "type": "string", "minLength": 1 },
+        "correlationId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    }
+  },
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/jsonValue" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "fce595ea-57de-4450-9e15-7170a3a66e5d:1",
+  "executionId": "066595ff-4d5e-40e2-87b1-a5ea252f6543",
+  "stepExecutionId": "fce595ea-57de-4450-9e15-7170a3a66e5d",
+  "status": "succeeded",
+  "output": {
+    "score": 100,
+    "findings": []
+  },
+  "completedAt": "2026-07-26T00:00:12.000Z"
+}

@@ -1,4 +1,5 @@
 import * as fc from 'fast-check';
+import { parseAgentResult } from '@agentweave/contracts';
 import { KafkaService } from './kafka.service';
 
 // Test seam for the private, pure `parseDurationMs` helper.
@@ -27,13 +28,9 @@ describe('parseDurationMs - Property 1: Duration strings convert to the correct 
   // (= 3.6e12), well within Number.MAX_SAFE_INTEGER.
   it('converts "<n><unit>" to n * factor for every recognized unit', () => {
     fc.assert(
-      fc.property(
-        fc.integer({ min: 1, max: 1_000_000 }),
-        fc.constantFrom('ms', 's', 'm', 'h'),
-        (n, unit) => {
-          expect(parseDurationMs(`${n}${unit}`)).toBe(n * UNIT_FACTORS[unit]);
-        },
-      ),
+      fc.property(fc.integer({ min: 1, max: 1_000_000 }), fc.constantFrom('ms', 's', 'm', 'h'), (n, unit) => {
+        expect(parseDurationMs(`${n}${unit}`)).toBe(n * UNIT_FACTORS[unit]);
+      }),
       { numRuns: 100 },
     );
   });
@@ -137,5 +134,97 @@ describe('parseDurationMs - Property 2: Malformed or non-positive durations are 
       }),
       { numRuns: 100 },
     );
+  });
+});
+
+describe('KafkaService contract boundary', () => {
+  let boundaryService: KafkaService;
+  let send: jest.Mock;
+
+  beforeEach(() => {
+    boundaryService = new KafkaService();
+    send = jest.fn().mockResolvedValue(undefined);
+    (boundaryService as any).producer = { send };
+    (boundaryService as any).callRunner = jest.fn().mockResolvedValue({
+      data: { output: '{"score":100,"findings":[]}' },
+    });
+  });
+
+  const messagePayload = (value: unknown) =>
+    ({
+      message: {
+        key: Buffer.from('execution-1'),
+        value: Buffer.from(JSON.stringify(value)),
+        timestamp: '1785024000000',
+      },
+    }) as any;
+
+  it('consumes a v1 invocation and publishes a correlated v1 result', async () => {
+    await (boundaryService as any).processTask(
+      messagePayload({
+        schemaVersion: '1',
+        invocationId: 'step-execution-1:1',
+        executionId: 'execution-1',
+        stepExecutionId: 'step-execution-1',
+        stepId: 'review',
+        target: { agent: 'code-reviewer' },
+        input: { code: 'const safe = true;', language: 'typescript' },
+        attempt: 1,
+        createdAt: '2026-07-26T00:00:00.000Z',
+        trace: { traceId: 'execution-1', correlationId: 'step-execution-1:1' },
+      }),
+    );
+
+    const result = parseAgentResult(JSON.parse(send.mock.calls[0][0].messages[0].value));
+    expect(result).toMatchObject({
+      schemaVersion: '1',
+      invocationId: 'step-execution-1:1',
+      executionId: 'execution-1',
+      stepExecutionId: 'step-execution-1',
+      status: 'succeeded',
+    });
+  });
+
+  it('still consumes a legacy invocation and publishes a v1 result', async () => {
+    await (boundaryService as any).processTask(
+      messagePayload({
+        executionId: 'execution-1',
+        stepId: 'review',
+        agent: 'code-reviewer',
+        input: { code: 'const safe = true;', language: 'typescript' },
+        attempt: 1,
+        timestamp: '2026-07-26T00:00:00.000Z',
+      }),
+    );
+
+    const result = parseAgentResult(JSON.parse(send.mock.calls[0][0].messages[0].value));
+    expect(result).toMatchObject({
+      schemaVersion: '1',
+      invocationId: 'legacy:execution-1:review:1',
+      executionId: 'execution-1',
+      stepExecutionId: 'legacy:execution-1:review',
+      status: 'succeeded',
+    });
+  });
+
+  it('does not crash, call the runner, or publish success for an invalid task', async () => {
+    await expect(
+      (boundaryService as any).processTask(messagePayload({ executionId: 'execution-1' })),
+    ).resolves.toBeUndefined();
+    expect((boundaryService as any).callRunner).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not log malformed invocation contents', async () => {
+    const error = jest.spyOn(console, 'error').mockImplementation();
+    const payload = messagePayload({});
+    payload.message.value = Buffer.from('{TOP_SECRET:not-json');
+
+    await (boundaryService as any).processTask(payload);
+
+    expect(JSON.stringify(error.mock.calls)).not.toContain('TOP_SECRET');
+    expect((boundaryService as any).callRunner).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 });

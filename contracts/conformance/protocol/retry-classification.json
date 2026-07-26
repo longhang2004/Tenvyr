@@ -1,0 +1,62 @@
+[
+  {
+    "name": "network-error",
+    "input": { "kind": "network-error" },
+    "outcome": "retry"
+  },
+  {
+    "name": "request-timeout",
+    "input": { "kind": "network-error" },
+    "outcome": "retry"
+  },
+  {
+    "name": "request-timeout-status",
+    "input": { "kind": "http-status", "status": 408 },
+    "outcome": "retry"
+  },
+  {
+    "name": "too-many-requests",
+    "input": { "kind": "http-status", "status": 429 },
+    "outcome": "retry"
+  },
+  {
+    "name": "server-error",
+    "input": { "kind": "http-status", "status": 500 },
+    "outcome": "retry"
+  },
+  {
+    "name": "success",
+    "input": { "kind": "http-status", "status": 204 },
+    "outcome": "delivered"
+  },
+  {
+    "name": "bad-request",
+    "input": { "kind": "http-status", "status": 400 },
+    "outcome": "do-not-retry"
+  },
+  {
+    "name": "unauthorized",
+    "input": { "kind": "http-status", "status": 401 },
+    "outcome": "do-not-retry"
+  },
+  {
+    "name": "forbidden",
+    "input": { "kind": "http-status", "status": 403 },
+    "outcome": "do-not-retry"
+  },
+  {
+    "name": "not-found",
+    "input": { "kind": "http-status", "status": 404 },
+    "outcome": "do-not-retry"
+  },
+  {
+    "name": "conflict",
+    "input": { "kind": "http-status", "status": 409 },
+    "outcome": "do-not-retry"
+  },
+  {
+    "name": "redirect",
+    "input": { "kind": "http-status", "status": 302 },
+    "outcome": "do-not-retry"
+  }
+]

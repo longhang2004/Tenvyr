@@ -1,0 +1,82 @@
+[
+  {
+    "name": "minimal-json",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"a\":1,\"b\":2}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"a\":1,\"b\":2}",
+    "expectedSignature": "v1=3300c815581e06b6b33993449a1ed3ceeb429d07408075167e2dd5a72724daed"
+  },
+  {
+    "name": "pretty-json",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\n  \"a\": 1,\n  \"b\": 2\n}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\n  \"a\": 1,\n  \"b\": 2\n}",
+    "expectedSignature": "v1=89c7b91b1d50305b5fc5cd9d9e04bdc1b693ab9e6626752c2e225a9c79b4bbff"
+  },
+  {
+    "name": "reordered-properties",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"b\":2,\"a\":1}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"b\":2,\"a\":1}",
+    "expectedSignature": "v1=ed533447953d6680715432b87e089f24bc70ec874c3e056597cebe9c6503a75b"
+  },
+  {
+    "name": "unicode-utf8",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"message\":\"Xin chào 🌏\"}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"message\":\"Xin chào 🌏\"}",
+    "expectedSignature": "v1=30cecc9866a9e225c52a48ca811c297ba7937f8b7ace1bcc2244bbf6c7b6d131"
+  },
+  {
+    "name": "escaped-characters",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"text\":\"line\\nquote\\\"slash\\\\\"}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"text\":\"line\\nquote\\\"slash\\\\\"}",
+    "expectedSignature": "v1=56e8f342f62b9ee9169054b5a920966c93e95fa2b0952b0ac6d3835437ca7526"
+  },
+  {
+    "name": "empty-object",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{}",
+    "expectedSignature": "v1=67abab445008e97b810c98fdeb6171a132fa4fbd503aaa3eb15acb2f7cd002ff"
+  },
+  {
+    "name": "trailing-newline",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"a\":1}\n",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"a\":1}\n",
+    "expectedSignature": "v1=11c6a5d37591281652278f4cb1e072448605d954d57a128833e561036954c615"
+  },
+  {
+    "name": "leading-trailing-whitespace",
+    "keyId": "conformance-v1",
+    "secret": "agentweave-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "  {\"a\":1} \t",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.  {\"a\":1} \t",
+    "expectedSignature": "v1=cfb6a754ca226bb2cfdffa3693bf8585cfd80b1a1eec7505fc52443e86f31f73"
+  }
+]

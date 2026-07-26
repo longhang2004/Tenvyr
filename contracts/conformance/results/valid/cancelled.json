@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "invocation-conformance-1",
+  "executionId": "execution-conformance-1",
+  "stepExecutionId": "step-execution-conformance-1",
+  "status": "cancelled",
+  "error": {
+    "code": "WORKER_SHUTDOWN",
+    "message": "Worker shutdown cancelled the execution",
+    "retryable": true
+  },
+  "completedAt": "2026-07-26T00:00:02.000Z"
+}

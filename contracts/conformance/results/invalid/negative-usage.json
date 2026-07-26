@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "invocation-conformance-1",
+  "executionId": "execution-conformance-1",
+  "stepExecutionId": "step-execution-conformance-1",
+  "status": "succeeded",
+  "usage": {
+    "inputTokens": -1
+  },
+  "completedAt": "2026-07-26T00:00:02.000Z"
+}

@@ -1,6 +1,6 @@
 # AgentWeave — Kafka-Native Multi-Agent Orchestration Framework
 
-**AgentWeave** is an open-source, highly observable, polyglot framework for orchestrating multiple specialized AI agents using Apache Kafka as the message event bus. 
+**AgentWeave** is an open-source, highly observable, polyglot framework for orchestrating multiple specialized AI agents using Apache Kafka as the message event bus.
 
 It enables developers to model complex workflows as declarative, condition-based Directed Acyclic Graphs (DAGs) defined in YAML. Decoupled microservice agents consume tasks from specific topics and publish results back, allowing for parallel, fault-tolerant, and polyglot execution chains.
 
@@ -47,10 +47,11 @@ It enables developers to model complex workflows as declarative, condition-based
 
 ## 💡 Core Concepts
 
-*   **Agent:** Standalone services consuming tasks from `agentweave.agent.<agent-name>.task` and producing to `agentweave.agent.<agent-name>.result`.
-*   **Pipeline:** Declarative DAG defined in YAML coordinating which agents execute, timeouts, retries, and step logic.
-*   **Orchestrator:** Reads pipeline definitions, evaluates step conditions, handles step dispatch, and manages failure states.
-*   **Execution:** A single workflow runtime run tracking step statuses (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `SKIPPED`).
+- **Agent:** Standalone services consuming tasks from `agentweave.agent.<agent-name>.task` and producing to `agentweave.agent.<agent-name>.result`.
+- **TypeScript Worker SDK:** `@agentweave/worker` hosts an asynchronous HTTP agent with typed handlers, bounded execution, idempotency, and signed callbacks.
+- **Pipeline:** Declarative DAG defined in YAML coordinating which agents execute, timeouts, retries, and step logic.
+- **Orchestrator:** Reads pipeline definitions, evaluates step conditions, handles step dispatch, and manages failure states.
+- **Execution:** A single workflow runtime run tracking step statuses (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `SKIPPED`).
 
 ---
 
@@ -68,11 +69,13 @@ This repository includes first-class integrations to optimize AI agent developer
 ## 🚀 Getting Started
 
 ### Prerequisites
-*   Node.js (v20+) & `pnpm` (v9+)
-*   Java Development Kit (JDK 17+)
-*   Docker & Docker Compose
+
+- Node.js (v20+) & `pnpm` (v9+)
+- Java Development Kit (JDK 17+)
+- Docker & Docker Compose
 
 ### Running Infrastructure
+
 1. Copy the environment variables:
    ```bash
    cp .env.example .env
@@ -84,18 +87,22 @@ This repository includes first-class integrations to optimize AI agent developer
    This launches **PostgreSQL**, **Redis**, **Kafka + Zookeeper**, and the **Kafka UI** (at `http://localhost:8090`).
 
 ### Working with Developer Tools
-*   **Install Agent Skills:** `pnpm skills:install`
-*   **Initialize CodeGraph Database:** `pnpm codegraph:init`
-*   **Compress Terminal Outputs:** `./scripts/rtk-compress.sh <command>`
+
+- **Install Agent Skills:** `pnpm skills:install`
+- **Initialize CodeGraph Database:** `pnpm codegraph:init`
+- **Compress Terminal Outputs:** `./scripts/rtk-compress.sh <command>`
 
 ---
 
 ## 📂 Monorepo Structure
 
-*   [services/gateway](file:///Users/longhang/personal_repos/AgentWeave/services/gateway): REST & Socket.io socket server.
-*   [services/orchestrator](file:///Users/longhang/personal_repos/AgentWeave/services/orchestrator): Execution Engine & DAG manager.
-*   [services/agent-runner](file:///Users/longhang/personal_repos/AgentWeave/services/agent-runner): LLM prompt template executor.
-*   [services/agent-code-reviewer](file:///Users/longhang/personal_repos/AgentWeave/services/agent-code-reviewer): Custom security and code reviewer agent.
-*   [services/agent-observability](file:///Users/longhang/personal_repos/AgentWeave/services/agent-observability): Log pattern diagnosis agent.
-*   [frontend](file:///Users/longhang/personal_repos/AgentWeave/frontend): Next.js dashboard UI.
-*   [docs](file:///Users/longhang/personal_repos/AgentWeave/docs): Markdown specifications covering all mechanics, including [Agent Rules](file:///Users/longhang/personal_repos/AgentWeave/docs/agent-rules.md).
+- [services/gateway](file:///Users/longhang/personal_repos/AgentWeave/services/gateway): REST & Socket.io socket server.
+- [services/orchestrator](file:///Users/longhang/personal_repos/AgentWeave/services/orchestrator): Execution Engine & DAG manager.
+- [services/agent-runner](file:///Users/longhang/personal_repos/AgentWeave/services/agent-runner): LLM prompt template executor.
+- [services/agent-code-reviewer](file:///Users/longhang/personal_repos/AgentWeave/services/agent-code-reviewer): Custom security and code reviewer agent.
+- [services/agent-observability](file:///Users/longhang/personal_repos/AgentWeave/services/agent-observability): Log pattern diagnosis agent.
+- [frontend](file:///Users/longhang/personal_repos/AgentWeave/frontend): Next.js dashboard UI.
+- [packages/contracts](file:///Users/longhang/personal_repos/AgentWeave/packages/contracts): Public TypeScript types and validators for the language-neutral agent protocol.
+- [packages/worker](file:///Users/longhang/personal_repos/AgentWeave/packages/worker): TypeScript HTTP Worker SDK.
+- [examples/typescript-http-worker](file:///Users/longhang/personal_repos/AgentWeave/examples/typescript-http-worker): Runnable typed Worker SDK example.
+- [docs](file:///Users/longhang/personal_repos/AgentWeave/docs): Markdown specifications covering all mechanics, including [Agent Rules](file:///Users/longhang/personal_repos/AgentWeave/docs/agent-rules.md).

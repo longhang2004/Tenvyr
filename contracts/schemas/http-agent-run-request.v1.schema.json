@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweave.dev/contracts/http-agent-run-request.v1.schema.json",
+  "title": "HttpAgentRunRequestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "invocation", "resultDelivery"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "invocation": {
+      "$ref": "https://agentweave.dev/contracts/agent-invocation.v1.schema.json"
+    },
+    "resultDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "callbackUrl", "authentication"],
+      "properties": {
+        "mode": { "const": "callback" },
+        "callbackUrl": { "type": "string", "format": "uri" },
+        "authentication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scheme", "keyId"],
+          "properties": {
+            "scheme": { "const": "hmac-sha256" },
+            "keyId": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

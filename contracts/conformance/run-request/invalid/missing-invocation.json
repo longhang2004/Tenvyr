@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1",
+  "resultDelivery": {
+    "mode": "callback",
+    "callbackUrl": "https://orchestrator.example/internal/agent-callbacks/http/echo-agent",
+    "authentication": {
+      "scheme": "hmac-sha256",
+      "keyId": "conformance-v1"
+    }
+  }
+}

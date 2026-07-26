@@ -1,7 +1,10 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { JsonValue, parseAgentInvocation, type AgentInvocationV1 } from '@agentweave/contracts';
+import { Inject, Injectable } from '@nestjs/common';
+import { AGENT_ADAPTER } from '../agent-adapters/agent-adapter';
+import { AgentAdapterError } from '../agent-adapters/agent-adapter.errors';
+import type { AgentAdapter } from '../agent-adapters/agent-adapter.types';
 import { PipelineService } from './pipeline.service';
 import { ExecutionService } from './execution.service';
-import { KafkaService } from './kafka.service';
 import { ExecutionEntity } from '../entities/execution.entity';
 import { StepExecutionEntity, StepStatus } from '../entities/step-execution.entity';
 
@@ -41,8 +44,8 @@ export class EngineService {
   constructor(
     private pipelineService: PipelineService,
     private executionService: ExecutionService,
-    @Inject(forwardRef(() => KafkaService))
-    private kafkaService: KafkaService,
+    @Inject(AGENT_ADAPTER)
+    private agentAdapter: AgentAdapter,
   ) {}
 
   async startExecution(pipelineId: string, input: unknown): Promise<ExecutionEntity> {
@@ -260,19 +263,64 @@ export class EngineService {
     this.scheduleStepTimeout(execution.id, stepConfig, stepExecution.attempt);
 
     try {
-      await this.kafkaService.sendTask(
-        stepConfig.agent,
-        execution.id,
-        stepConfig.id,
-        resolvedInput,
-        stepExecution.attempt,
-        maxAttempts,
-        stepConfig.timeout,
-      );
+      const invocation = this.createAgentInvocation(execution, stepExecution, stepConfig, resolvedInput, maxAttempts);
+      await this.agentAdapter.invoke(invocation);
     } catch (err) {
       const message = this.getErrorMessage(err);
-      await this.handleStepCompletion(execution.id, stepConfig.id, 'FAILED', null, `Kafka dispatch failed: ${message}`);
+      const adapterError = err instanceof AgentAdapterError ? err : undefined;
+      console.error('Agent invocation dispatch failed', {
+        adapter: this.agentAdapter.kind,
+        errorCode: adapterError?.code,
+        retryable: adapterError?.retryable,
+        invocationId: adapterError?.invocationId,
+        executionId: execution.id,
+        stepExecutionId: stepExecution.id,
+        agent: stepConfig.agent,
+        attempt: stepExecution.attempt,
+      });
+      await this.handleStepCompletion(
+        execution.id,
+        stepConfig.id,
+        'FAILED',
+        null,
+        `Agent dispatch failed: ${message}`,
+        stepExecution.attempt,
+      );
     }
+  }
+
+  private createAgentInvocation(
+    execution: ExecutionEntity,
+    stepExecution: StepExecutionEntity,
+    stepConfig: PipelineStepConfig,
+    input: unknown,
+    maxAttempts: number,
+  ): AgentInvocationV1 {
+    const createdAt = new Date().toISOString();
+    const invocationId = `${stepExecution.id}:${stepExecution.attempt}`;
+    const timeoutMs = this.parseDurationMs(stepConfig.timeout);
+
+    return parseAgentInvocation({
+      schemaVersion: '1',
+      invocationId,
+      executionId: execution.id,
+      stepExecutionId: stepExecution.id,
+      stepId: stepConfig.id,
+      target: { agent: stepConfig.agent },
+      input: input as JsonValue,
+      attempt: stepExecution.attempt,
+      createdAt,
+      deadlineAt: timeoutMs ? new Date(Date.parse(createdAt) + timeoutMs).toISOString() : undefined,
+      trace: {
+        traceId: execution.id,
+        correlationId: invocationId,
+      },
+      metadata: {
+        orchestration: {
+          maxAttempts,
+        },
+      },
+    });
   }
 
   private async skipStep(execution: ExecutionEntity, stepConfig: PipelineStepConfig) {
@@ -322,7 +370,11 @@ export class EngineService {
     return dependencyConfig?.onFailure === 'continue';
   }
 
-  private resolveInputTemplates(inputConfig: unknown, pipelineInput: unknown, stepExecutions: StepExecutionEntity[]): unknown {
+  private resolveInputTemplates(
+    inputConfig: unknown,
+    pipelineInput: unknown,
+    stepExecutions: StepExecutionEntity[],
+  ): unknown {
     return this.resolveTemplateValue(inputConfig, this.buildTemplateContext(pipelineInput, stepExecutions));
   }
 

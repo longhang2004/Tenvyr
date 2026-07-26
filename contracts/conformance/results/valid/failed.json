@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "invocation-conformance-1",
+  "executionId": "execution-conformance-1",
+  "stepExecutionId": "step-execution-conformance-1",
+  "status": "failed",
+  "error": {
+    "code": "CONFORMANCE_FAILURE",
+    "message": "The conformance handler failed",
+    "retryable": false,
+    "details": {
+      "case": "failed"
+    }
+  },
+  "completedAt": "2026-07-26T00:00:02.000Z"
+}
