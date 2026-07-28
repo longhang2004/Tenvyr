@@ -183,6 +183,7 @@
       "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
       "limitations": [
         "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
+        "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
         "Final release requires a successful Docker-backed smoke run on the exact merged commit"
       ]
     },

@@ -137,6 +137,11 @@ base stage before either development or production compilation inherits it.
 The Orchestrator production TypeScript build excludes test-only `*.spec.ts`
 imports; Jest still compiles those files in the test gate.
 
+The pinned Confluent 7.3 Zookeeper and Kafka images receive
+`KAFKA_OPTS=-XX:-UseContainerSupport`. Both images launch through
+`kafka-run-class`; this image-supported generic JVM option avoids the bundled
+JDK's cgroup v2 startup failure without replacing its heap or GC defaults.
+
 Known environment blockers include an unavailable Docker daemon or CLI, occupied
 loopback ports, restricted socket binding, missing external package caches, or
 an unsupported JVM. Do not report an unavailable gate as passed.

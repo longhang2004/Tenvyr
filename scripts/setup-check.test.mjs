@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const setupSource = readFileSync("scripts/setup-check.mjs", "utf8");
+const composeSource = readFileSync("docker-compose.yml", "utf8");
 const dockerIgnore = new Set(
   readFileSync(".dockerignore", "utf8").split(/\r?\n/).filter(Boolean),
 );
@@ -49,6 +50,14 @@ test("contract-dependent service images include the schema build helper", () => 
     assert.notEqual(copyIndex, -1, path);
     assert(copyIndex < source.indexOf("FROM base AS development"), path);
   }
+});
+
+test("Confluent JVM services disable incompatible cgroup container detection", () => {
+  assert.equal(
+    composeSource.match(/^\s{6}KAFKA_OPTS: "-XX:-UseContainerSupport"$/gm)
+      ?.length,
+    2,
+  );
 });
 
 test("showcase startup overrides auto-loaded env only when shell values are unset", () => {
