@@ -254,6 +254,7 @@ function assertTarball(name, archive) {
     .sort();
   const packageDirectory = join(root, "packages", name);
   const expected = [
+    "package/LICENSE",
     "package/package.json",
     "package/README.md",
     ...filesUnder(join(packageDirectory, "dist")).map(
@@ -266,6 +267,12 @@ function assertTarball(name, archive) {
     `${name} tarball content differs from the dist/README/package.json allowlist`,
   );
   const manifest = packedManifest(archive);
+  assert(
+    execFileSync("tar", ["-xOzf", archive, "package/LICENSE"]).equals(
+      readFileSync(join(root, "LICENSE")),
+    ),
+    `${name} tarball MIT license differs from the repository license`,
+  );
   assert(
     JSON.stringify(Object.keys(manifest.exports)) === JSON.stringify(["."]),
     `${name} exports must expose only the package root`,
@@ -325,8 +332,8 @@ function assertManifest(name, manifest, packed) {
     `${packed ? "packed" : "source"} ${name} must remain private`,
   );
   assert(
-    manifest.license === "UNLICENSED",
-    `${packed ? "packed" : "source"} ${name} license must remain UNLICENSED`,
+    manifest.license === "MIT",
+    `${packed ? "packed" : "source"} ${name} license must be MIT`,
   );
   assert(
     !("publishConfig" in manifest),

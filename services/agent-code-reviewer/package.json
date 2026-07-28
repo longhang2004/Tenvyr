@@ -2,6 +2,7 @@
   "name": "agent-code-reviewer",
   "version": "0.1.0",
   "description": "Tenvyr Specialized Agent: Code Reviewer",
+  "license": "MIT",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "pnpm --filter @tenvyr/contracts build",

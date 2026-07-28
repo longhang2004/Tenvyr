@@ -23,6 +23,7 @@ SDK = ROOT / "sdks" / "python-worker"
 PACKAGE = SDK / "src" / "tenvyr_worker"
 EXAMPLE = ROOT / "examples" / "python-http-worker" / "src" / "main.py"
 DIST_NAME = "tenvyr_worker-0.1.0"
+MIT_LICENSE = (ROOT / "LICENSE").read_bytes()
 
 SCHEMAS = (
     "agent-event.v1.schema.json",
@@ -71,12 +72,14 @@ PACKAGE_FILES = {
 }
 
 WHEEL_FILES = PACKAGE_FILES | {
+    f"{DIST_NAME}.dist-info/licenses/LICENSE",
     f"{DIST_NAME}.dist-info/METADATA",
     f"{DIST_NAME}.dist-info/RECORD",
     f"{DIST_NAME}.dist-info/WHEEL",
 }
 SDIST_FILES = {
     f"{DIST_NAME}/.gitignore",
+    f"{DIST_NAME}/LICENSE",
     f"{DIST_NAME}/PKG-INFO",
     f"{DIST_NAME}/pyproject.toml",
     *{f"{DIST_NAME}/src/{path}" for path in PACKAGE_FILES},
@@ -127,6 +130,11 @@ def verify_wheel(wheel: Path) -> None:
         files = {name for name in archive.namelist() if not name.endswith("/")}
         exact(files, WHEEL_FILES, "wheel")
         verify_metadata(archive.read(f"{DIST_NAME}.dist-info/METADATA"), "wheel")
+        license_path = f"{DIST_NAME}.dist-info/licenses/LICENSE"
+        if archive.read(license_path) != MIT_LICENSE:
+            raise AssertionError(
+                "wheel MIT license differs from the repository license"
+            )
         verify_schema_bytes(
             lambda path: archive.read(path), "tenvyr_worker/schema_json"
         )
@@ -137,7 +145,12 @@ def verify_sdist(sdist: Path) -> None:
     with tarfile.open(sdist, "r:gz") as archive:
         members = {member.name: member for member in archive if member.isfile()}
         exact(set(members), SDIST_FILES, "sdist")
-        verify_metadata(read_tar(archive, members[f"{DIST_NAME}/PKG-INFO"]), "sdist")
+        metadata = read_tar(archive, members[f"{DIST_NAME}/PKG-INFO"])
+        verify_metadata(metadata, "sdist")
+        if read_tar(archive, members[f"{DIST_NAME}/LICENSE"]) != MIT_LICENSE:
+            raise AssertionError(
+                "sdist MIT license differs from the repository license"
+            )
         verify_schema_bytes(
             lambda path: read_tar(archive, members[path]),
             f"{DIST_NAME}/src/tenvyr_worker/schema_json",
@@ -187,8 +200,10 @@ def verify_metadata(raw: bytes, archive_name: str) -> None:
             )
     if "Private :: Do Not Upload" not in metadata.get_all("Classifier", []):
         raise AssertionError(f"{archive_name} metadata is not private")
-    if metadata.get("License") or metadata.get("License-Expression"):
-        raise AssertionError(f"{archive_name} metadata unexpectedly declares a license")
+    if metadata.get("License-Expression") != "MIT":
+        raise AssertionError(f"{archive_name} metadata license is not MIT")
+    if metadata.get_all("License-File", []) != ["LICENSE"]:
+        raise AssertionError(f"{archive_name} does not include the MIT license file")
     runtime_requirements = {
         requirement.replace(" ", "")
         for requirement in metadata.get_all("Requires-Dist", [])

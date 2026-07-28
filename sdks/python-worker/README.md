@@ -1,8 +1,8 @@
 # `tenvyr-worker`
 
 Private Python 3.11+ runtime harness for Tenvyr HTTP agents. The distribution
-is version `0.1.0`, typed with `py.typed`, and intentionally not licensed or
-published. Do not upload it to PyPI.
+is version `0.1.0`, typed with `py.typed`, and licensed under MIT. It remains
+private and unpublished; do not upload it to PyPI.
 
 ## Install locally
 

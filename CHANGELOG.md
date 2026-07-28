@@ -38,8 +38,8 @@
   crash durability or multi-process coordination is provided.
 - Cancellation is cooperative. Provider calls remain application/runtime
   responsibilities, and Java Runner token usage may be estimated.
-- Compatibility protocol identifiers remain. Packages are private, unpublished,
-  and blocked from public release by the missing owner-approved license.
+- Compatibility protocol identifiers remain. Packages are MIT-licensed but
+  private and unpublished.
 
 ### Not included
 

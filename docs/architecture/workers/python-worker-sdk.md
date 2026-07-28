@@ -30,9 +30,9 @@ newer and is implemented independently from the TypeScript Worker. It does not
 import or execute TypeScript.
 
 The distribution is intentionally unreleased: it has the classifier
-`Private :: Do Not Upload`, declares no license, and has no publication
-configuration. Local implementation is authorized; PyPI, license, legal,
-registry, repository, and public-release decisions remain blocked.
+`Private :: Do Not Upload`, declares the MIT license expression and file, and
+has no publication configuration. PyPI, legal, registry, repository, and
+public-package release decisions remain blocked.
 
 ## Boundaries
 

@@ -51,7 +51,7 @@ It creates an external virtual environment with an empty `PYTHONPATH`, installs 
 - strict mypy use by an external consumer;
 - real Worker health/start/stop behavior and the Python example's process lifecycle;
 - absence of legacy imports/APIs and unauthorized branding;
-- private metadata, the two allowed runtime dependency families, and the absence of a license declaration.
+- private metadata, the two allowed runtime dependency families, and the MIT license expression and file.
 
 Schema drift is also available as a fast, non-mutating check:
 
@@ -61,8 +61,11 @@ python scripts/sync-python-worker-schemas.py check
 
 ## Publication boundary
 
-`@tenvyr/contracts` and `@tenvyr/worker` are marked `private` and `UNLICENSED`. `tenvyr-worker` is classified `Private :: Do Not Upload` and declares no license. npm/PyPI organization and name reservation, domain/repository decisions, legal/trademark review, license selection, and explicit owner release approval remain blockers. Do not run publish commands from this repository.
+`@tenvyr/contracts`, `@tenvyr/worker`, and `tenvyr-worker` declare MIT and ship
+the license text in their archives. They remain marked `private` or
+`Private :: Do Not Upload`. npm/PyPI organization and name reservation,
+domain/repository decisions, legal/trademark review, and explicit publication
+approval remain blockers. Do not run publish commands from this repository.
 
-The v0.1.0 release candidate changes neither boundary: no registry publication is
-part of showcase verification, and the missing owner-approved license blocks a
-final public package or repository release.
+The v0.1.0 source tag changes neither publication boundary: no registry
+publication is part of showcase verification or the source release.

@@ -117,7 +117,7 @@ interview flow.
   usage is currently estimated and labeled `usageSource=estimated`.
 - Protocol v1 retains compatibility identifiers documented in the
   [identity record](docs/product/identity.md).
-- Packages are private, unpublished, and not licensed for public release.
+- Packages are MIT-licensed but remain private and unpublished.
 
 ## Documentation
 
@@ -130,7 +130,7 @@ interview flow.
 
 ## Release status
 
-**Tenvyr v0.1.0 release candidate.** The implementation and release artifacts
-are prepared, but a final public release and tag remain blocked on the owner's
-license decision and exact merged-main verification. npm and PyPI packages
-remain private and unpublished.
+**Tenvyr v0.1.0 source release.** The owner selected the
+[MIT License](LICENSE), and the exact merged `main` commit passed the complete
+release workflow, including the Docker showcase. npm and PyPI packages remain
+private and unpublished.

@@ -206,11 +206,21 @@
     {
       "id": "identity-migration",
       "status": "implemented",
-      "sources": ["scripts/verify-product-identity.mjs"],
-      "tests": ["scripts/verify-product-identity.test.mjs"],
+      "sources": [
+        "LICENSE",
+        "scripts/verify-product-identity.mjs",
+        "packages/contracts/package.json",
+        "packages/worker/package.json",
+        "sdks/python-worker/pyproject.toml"
+      ],
+      "tests": [
+        "scripts/verify-product-identity.test.mjs",
+        "scripts/verify-package-packs.mjs",
+        "scripts/verify-python-worker-package.py"
+      ],
       "docs": ["docs/product/identity.md"],
       "limitations": [
-        "Registry, legal, license, repository, and public-release actions remain blocked"
+        "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
       ]
     },
     {
@@ -284,7 +294,7 @@
       "tests": [],
       "docs": ["docs/product/identity.md"],
       "limitations": [
-        "Blocked by registry, legal, license, repository, and explicit approval gates"
+        "Blocked by registry, legal, repository, and explicit publication approval gates"
       ]
     }
   ]

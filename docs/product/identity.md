@@ -21,15 +21,15 @@ packages are `@tenvyr/contracts`, `@tenvyr/worker`, and the Python distribution
 does not establish ownership of an npm scope, PyPI name, domain, remote repository,
 or container namespace.
 
-Public release remains blocked by registry reservation, license selection,
-trademark/legal review, repository and redirect work, and explicit publication
-approval. The Python package additionally declares `Private :: Do Not Upload` and
-has no license metadata. Nothing in this repository authorizes publication.
+The owner selected the MIT License for the repository and its package artifacts.
+Registry publication remains blocked by name reservation, trademark/legal
+review, repository and redirect work, and explicit publication approval. The
+Python package additionally declares `Private :: Do Not Upload`.
 
-The v0.1.0 showcase is therefore a release candidate, not a final public
-release. Creating or pushing its tag requires an owner-approved license and
-successful verification on the exact merged `main` commit. npm and PyPI
-packages remain private and unpublished.
+The v0.1.0 source release is authorized because the license is recorded and the
+exact merged `main` commit passed the release workflow. Its source tag does not
+authorize npm or PyPI publication; those packages remain private and
+unpublished.
 
 Protocol and deployment compatibility remain intentionally separate from product
 branding. Protocol v1 still uses the four exact `X-AgentWeave-*` HMAC headers;

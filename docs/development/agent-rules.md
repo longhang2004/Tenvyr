@@ -108,7 +108,7 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 - **Purpose:** Hosts a typed HTTP agent through `@tenvyr/worker`, using bounded local concurrency, FIFO queuing, in-memory idempotency, cooperative deadlines, and HMAC callback retry.
 - **Interfaces:** Consumers use only the package root API; the worker exposes `POST /v1/runs`, `GET /health/live`, and `GET /health/ready`; wire behavior is shared through `contracts/conformance`.
 - **Rules:** Keep the package dependent only on the public `@tenvyr/contracts` API and Node primitives. Preserve raw direct handler returns, exact callback-origin checks, bearer-before-body processing, one-shot lifecycle, serialized-once callback bytes, special JSON keys, and the guarantee that `stop()` resolves only after tracked callback work and retry sleeps settle. Canonical fingerprinting is SDK-local rather than a wire requirement. Do not add framework, Orchestrator, Kafka, database, model SDK, signal-handler, or persistent-store dependencies.
-- **Packaging:** Both packages stay private until the owner completes registry, license, legal, and release gates. Root exports are the only public imports. Run `pnpm verify:package-packs`; never publish from this repository or deep-import `dist` internals.
+- **Packaging:** Both packages are MIT-licensed and stay private until the owner completes registry, legal, and publication gates. Root exports are the only public imports. Run `pnpm verify:package-packs`; never publish from this repository or deep-import `dist` internals.
 - **Verification:** Run contracts conformance, Worker unit/integration/stress/open-handle/architecture/public-consumer suites, package pack/install smoke, the example smoke test, and the Orchestrator loopback integration spec. Port-binding tests require permission for ephemeral `127.0.0.1` listeners.
 
 ### Python Worker SDK
@@ -116,14 +116,14 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 - **Purpose:** Hosts Python 3.11+ agents through the same asynchronous HTTP contracts using `tenvyr-worker` and the root import `tenvyr_worker`.
 - **Interfaces:** Consumers import only the 12 names in `tenvyr_worker.__all__`. The concrete runtime, schema loaders, authentication, callback, and scheduling modules remain under underscore namespaces. The Worker exposes only `POST /v1/runs`, `GET /health/live`, and `GET /health/ready`.
 - **Rules:** Keep runtime dependencies limited to `aiohttp` and `jsonschema[format-nongpl]`; load the five tracked schemas only with `importlib.resources`; preserve exact-origin callback policy, finite JSON, FIFO capacity, duplicate-before-capacity behavior, serialized-once callback bytes, and one terminal result. The SDK installs no signal handlers. Threads and cancellation-suppressing coroutines may outlive Worker ownership but must never send a late callback.
-- **Packaging:** Version `0.1.0` is private, has no license, and must not be uploaded to PyPI. Wheels and sdists use explicit allowlists, include `py.typed` and exactly five schemas, and must rebuild outside the monorepo without reading `../../contracts`.
+- **Packaging:** Version `0.1.0` is MIT-licensed, private, and must not be uploaded to PyPI. Wheels and sdists use explicit allowlists, include the license text, `py.typed`, and exactly five schemas, and must rebuild outside the monorepo without reading `../../contracts`.
 - **Verification:** Run the four pytest categories, Ruff, strict mypy, `scripts/sync-python-worker-schemas.py check`, `scripts/verify-python-worker-package.py`, the example smoke, and the explicit Orchestrator loopback with `TENVYR_PYTHON_EXECUTABLE`. Never claim Python-version or loopback results that were not run.
 
 ### Product Identity and Observability Roadmap
 
 - **Purpose:** Records future OpenTelemetry, W3C propagation, provenance, privacy, cost, dashboard, instrumentation, and framework-adoption direction without making telemetry a source of execution truth.
 - **Rules:** The Tenvyr identity is approved for local repository
-  implementation, but registry, domain, license, legal, repository, and release
+  implementation, but registry, domain, legal, repository, and publication
   reservations remain owner gates. Observability remains a projection;
   provider dependencies and optional proxy work stay outside Worker core. Do
   not implement roadmap features as incidental hardening.
