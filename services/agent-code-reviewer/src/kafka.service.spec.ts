@@ -155,7 +155,18 @@ describe("KafkaService contract boundary", () => {
     send = jest.fn().mockResolvedValue(undefined);
     (boundaryService as any).producer = { send };
     (boundaryService as any).callRunner = jest.fn().mockResolvedValue({
-      data: { output: '{"score":100,"findings":[]}' },
+      data: {
+        output: '{"score":100,"findings":[]}',
+        promptTokens: 4,
+        completionTokens: 6,
+        totalTokens: 10,
+        metadata: {
+          provider: "mock",
+          model: "local-heuristic",
+          fallbackUsed: true,
+          usageSource: "estimated",
+        },
+      },
     });
   });
 
@@ -193,6 +204,26 @@ describe("KafkaService contract boundary", () => {
       executionId: "execution-1",
       stepExecutionId: "step-execution-1",
       status: "succeeded",
+      usage: { inputTokens: 4, outputTokens: 6, totalTokens: 10 },
+      metadata: {
+        provider: "mock",
+        model: "local-heuristic",
+        fallbackUsed: true,
+        usageSource: "estimated",
+      },
+      output: {
+        score: 100,
+        findings: [],
+        _tenvyr: {
+          metadata: {
+            provider: "mock",
+            model: "local-heuristic",
+            fallbackUsed: true,
+            usageSource: "estimated",
+          },
+          usage: { inputTokens: 4, outputTokens: 6, totalTokens: 10 },
+        },
+      },
     });
   });
 

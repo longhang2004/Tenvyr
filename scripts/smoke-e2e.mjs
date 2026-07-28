@@ -1,36 +1,14 @@
 #!/usr/bin/env node
-// Tenvyr smoke / end-to-end verification (Requirement 6).
-//
-// Runs against the local Docker stack and performs a true black-box check that
-// drives only the public Gateway API:
-//   1. Health-check every backend service and both frontend routes.
-//   2. If all healthy, create a sample two-step pipeline.
-//   3. Trigger an execution of that pipeline.
-//   4. Poll the execution until it reaches a terminal state or a bounded timeout.
-//
-// Exit codes (each failure mode prints a distinct, descriptive message):
-//   0  pipeline execution reached COMPLETED
-//   1  one or more health checks failed (no pipeline was created)
-//   2  pipeline creation failed
-//   3  execution trigger failed
-//   4  execution reached FAILED
-//   5  bounded timeout elapsed before a terminal state
-//   6  execution monitoring (polling) failed
-//   7  runtime prerequisite missing (no global fetch)
-//
-// Requires Node 18+ for the built-in global fetch.
 
-const EXIT_OK = 0;
+import { isDeepStrictEqual } from "node:util";
+
 const EXIT_HEALTH = 1;
-const EXIT_CREATE = 2;
+const EXIT_SEED = 2;
 const EXIT_TRIGGER = 3;
-const EXIT_FAILED = 4;
+const EXIT_EXECUTION = 4;
 const EXIT_TIMEOUT = 5;
-const EXIT_POLL = 6;
 const EXIT_PREREQ = 7;
 
-// Base URLs default to the documented local ports but may be overridden via env
-// for flexibility; defaults match the running Docker stack exactly.
 const GATEWAY = process.env.SMOKE_GATEWAY_URL || "http://localhost:3000";
 const ORCHESTRATOR =
   process.env.SMOKE_ORCHESTRATOR_URL || "http://localhost:3001";
@@ -39,358 +17,512 @@ const CODE_REVIEWER =
 const OBSERVABILITY =
   process.env.SMOKE_OBSERVABILITY_URL || "http://localhost:3003";
 const RUNNER = process.env.SMOKE_RUNNER_URL || "http://localhost:8085";
+const PYTHON_WORKER =
+  process.env.SMOKE_PYTHON_WORKER_URL || "http://localhost:8080";
 const FRONTEND = process.env.SMOKE_FRONTEND_URL || "http://localhost:4000";
 
-const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 120000;
+const POLL_INTERVAL_MS = Number(process.env.SMOKE_POLL_INTERVAL_MS || 1000);
+const POLL_TIMEOUT_MS = Number(process.env.SMOKE_POLL_TIMEOUT_MS || 120_000);
+const READINESS_TIMEOUT_MS = Number(
+  process.env.SMOKE_READINESS_TIMEOUT_MS || 180_000,
+);
 
-// Backend services expose the standard health envelope.
-const BACKEND_HEALTH_TARGETS = [
-  { name: "gateway", url: `${GATEWAY}/health` },
-  { name: "orchestrator", url: `${ORCHESTRATOR}/health` },
-  { name: "code-reviewer", url: `${CODE_REVIEWER}/health` },
-  { name: "observability", url: `${OBSERVABILITY}/health` },
-  { name: "agent-runner", url: `${RUNNER}/health` },
-];
-
-// Frontend routes are plain pages: assert HTTP 200 only.
-const FRONTEND_HEALTH_TARGETS = [
-  { name: "frontend /", url: `${FRONTEND}/` },
-  { name: "frontend /dashboard", url: `${FRONTEND}/dashboard` },
-];
-
-// Sample two-step pipeline (design C5). With placeholder credentials the Agent
-// Runner returns its Local_Fallback heuristic JSON, so both steps complete and
-// the execution reaches COMPLETED. The observe step consumes the review step's
-// findings via the {{ steps.<id>.result.<field> }} template.
-const SAMPLE_PIPELINE = {
-  name: "smoke-pipeline",
-  version: "1.0",
+const SHOWCASE_PIPELINE = {
+  name: "Tenvyr Supervised Pipeline",
+  version: "1.0.0",
+  description:
+    "Offline golden path across a Python Worker and Java-backed quality gate",
   steps: [
     {
-      id: "review",
-      agent: "code-reviewer",
+      id: "analyze-input",
+      agent: "echo-analyzer",
       input: {
-        code: "const q = 'SELECT * FROM users WHERE id=' + id;",
-        language: "typescript",
+        message: "{{ pipeline.input.message }}",
+        mode: "{{ pipeline.input.mode }}",
+      },
+      timeout: "10s",
+      retries: 1,
+      onFailure: "retry",
+      metadata: {
+        runtime: "python",
+        language: "python",
+        transport: "http",
       },
     },
     {
-      id: "observe",
-      agent: "observability",
-      dependsOn: ["review"],
+      id: "quality-gate",
+      agent: "code-reviewer",
+      dependsOn: ["analyze-input"],
       input: {
-        logs: "request completed in 1s",
-        findings: "{{ steps.review.result.findings }}",
+        code: "{{ pipeline.input.code }}",
+        language: "{{ pipeline.input.language }}",
+      },
+      timeout: "90s",
+      onFailure: "stop",
+      metadata: {
+        runtime: "typescript",
+        language: "typescript",
+        transport: "kafka",
+        runnerRuntime: "java",
       },
     },
   ],
 };
 
-function getErrorMessage(err) {
-  return err instanceof Error ? err.message : String(err);
+const RUN_INPUT = {
+  message: "Inspect the sample input before the quality gate",
+  code: "const query = 'SELECT * FROM users WHERE id=' + id;",
+  language: "typescript",
+};
+
+class SmokeFailure extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
 }
 
 function log(message) {
-  console.log(`[smoke-e2e] ${message}`);
+  console.log(`[showcase] ${message}`);
 }
 
-function fail(code, message) {
-  console.error(`[smoke-e2e] FAILURE: ${message}`);
-  process.exit(code);
+function requireCondition(condition, code, message) {
+  if (!condition) throw new SmokeFailure(code, message);
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Performs a fetch and returns a normalized result, never throwing. The caller
-// inspects the discriminated fields (networkError / jsonError / ok / status).
-async function httpRequestJson(url, options = {}) {
-  let response;
+async function request(url, options = {}) {
   try {
-    response = await fetch(url, options);
-  } catch (err) {
-    return { networkError: getErrorMessage(err) };
-  }
-
-  let raw;
-  try {
-    raw = await response.text();
-  } catch (err) {
-    return {
-      ok: response.ok,
-      status: response.status,
-      jsonError: `failed to read body: ${getErrorMessage(err)}`,
-    };
-  }
-
-  if (!raw || raw.trim().length === 0) {
-    return {
-      ok: response.ok,
-      status: response.status,
-      jsonError: "empty response body",
-      raw,
-    };
-  }
-
-  try {
-    return {
-      ok: response.ok,
-      status: response.status,
-      json: JSON.parse(raw),
-      raw,
-    };
-  } catch (err) {
-    return {
-      ok: response.ok,
-      status: response.status,
-      jsonError: getErrorMessage(err),
-      raw,
-    };
-  }
-}
-
-// Lightweight status-only fetch for the frontend routes; never throws.
-async function httpRequestStatus(url) {
-  let response;
-  try {
-    response = await fetch(url);
-  } catch (err) {
-    return { networkError: getErrorMessage(err) };
-  }
-  // Drain the body so the connection can be reused/closed cleanly.
-  await response.text().catch(() => undefined);
-  return { ok: response.ok, status: response.status };
-}
-
-// Returns null when healthy, otherwise a descriptive failure string.
-async function checkBackendHealth(target) {
-  const result = await httpRequestJson(target.url);
-  if (result.networkError) {
-    return `${target.name} (${target.url}): network error - ${result.networkError}`;
-  }
-  if (!result.ok) {
-    return `${target.name} (${target.url}): expected HTTP 2xx, got HTTP ${result.status}`;
-  }
-  if (result.jsonError) {
-    return `${target.name} (${target.url}): malformed JSON response - ${result.jsonError}`;
-  }
-  const body = result.json;
-  if (body.success !== true || !body.data || body.data.status !== "UP") {
-    return `${target.name} (${target.url}): unexpected health payload - ${JSON.stringify(body)}`;
-  }
-  return null;
-}
-
-// Returns null when the route returns HTTP 200, otherwise a failure string.
-async function checkFrontendRoute(target) {
-  const result = await httpRequestStatus(target.url);
-  if (result.networkError) {
-    return `${target.name} (${target.url}): network error - ${result.networkError}`;
-  }
-  if (result.status !== 200) {
-    return `${target.name} (${target.url}): expected HTTP 200, got HTTP ${result.status}`;
-  }
-  return null;
-}
-
-async function runHealthChecks() {
-  log("Checking service health endpoints...");
-  const failures = [];
-
-  for (const target of BACKEND_HEALTH_TARGETS) {
-    const failure = await checkBackendHealth(target);
-    if (failure) {
-      failures.push(failure);
-    } else {
-      log(`OK  ${target.name} (${target.url})`);
+    const response = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(5000),
+    });
+    const raw = await response.text();
+    let json;
+    if (raw) {
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        return {
+          ok: response.ok,
+          status: response.status,
+          raw,
+          jsonError: true,
+        };
+      }
     }
+    return { ok: response.ok, status: response.status, raw, json };
+  } catch (error) {
+    return {
+      networkError: error instanceof Error ? error.message : String(error),
+    };
   }
+}
 
-  for (const target of FRONTEND_HEALTH_TARGETS) {
-    const failure = await checkFrontendRoute(target);
-    if (failure) {
-      failures.push(failure);
-    } else {
-      log(`OK  ${target.name} (${target.url})`);
+const HEALTH_TARGETS = [
+  {
+    name: "gateway",
+    url: `${GATEWAY}/health`,
+    valid: (body) => body?.success === true && body?.data?.status === "UP",
+  },
+  {
+    name: "orchestrator",
+    url: `${ORCHESTRATOR}/health`,
+    valid: (body) => body?.success === true && body?.data?.status === "UP",
+  },
+  {
+    name: "code-reviewer",
+    url: `${CODE_REVIEWER}/health`,
+    valid: (body) => body?.success === true && body?.data?.status === "UP",
+  },
+  {
+    name: "observability",
+    url: `${OBSERVABILITY}/health`,
+    valid: (body) => body?.success === true && body?.data?.status === "UP",
+  },
+  {
+    name: "agent-runner",
+    url: `${RUNNER}/health`,
+    valid: (body) => body?.success === true && body?.data?.status === "UP",
+  },
+  {
+    name: "python-worker",
+    url: `${PYTHON_WORKER}/health/ready`,
+    valid: (body) => body?.status === "ok",
+  },
+  {
+    name: "frontend",
+    url: `${FRONTEND}/`,
+    json: false,
+    valid: () => true,
+  },
+  {
+    name: "frontend dashboard",
+    url: `${FRONTEND}/dashboard`,
+    json: false,
+    valid: () => true,
+  },
+];
+
+async function healthFailure(target) {
+  const result = await request(target.url);
+  if (result.networkError) return `${target.name}: ${result.networkError}`;
+  if (!result.ok) return `${target.name}: HTTP ${result.status}`;
+  if (target.json !== false && result.jsonError)
+    return `${target.name}: invalid JSON`;
+  if (!target.valid(result.json)) return `${target.name}: unexpected response`;
+  return undefined;
+}
+
+async function waitForHealth() {
+  log("Waiting for showcase readiness...");
+  const deadline = Date.now() + READINESS_TIMEOUT_MS;
+  let failures = [];
+  while (Date.now() < deadline) {
+    const results = await Promise.all(
+      HEALTH_TARGETS.map(async (target) => ({
+        target,
+        failure: await healthFailure(target),
+      })),
+    );
+    failures = results.filter(({ failure }) => failure);
+    if (failures.length === 0) {
+      for (const { target } of results) log(`PASS health ${target.name}`);
+      return;
     }
+    await sleep(2000);
   }
-
-  if (failures.length > 0) {
-    fail(
-      EXIT_HEALTH,
-      `Health checks failed; no pipeline was created. Failing checks:\n  - ${failures.join("\n  - ")}`,
-    );
-  }
-  log("All health checks passed.");
+  throw new SmokeFailure(
+    EXIT_HEALTH,
+    `readiness timed out:\n  - ${failures.map(({ failure }) => failure).join("\n  - ")}`,
+  );
 }
 
-async function createPipeline() {
-  log("Creating sample pipeline...");
-  const result = await httpRequestJson(`${GATEWAY}/api/pipelines`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(SAMPLE_PIPELINE),
-  });
-
-  if (result.networkError) {
-    fail(
-      EXIT_CREATE,
-      `Pipeline creation failed: network error contacting ${GATEWAY}/api/pipelines - ${result.networkError}`,
-    );
-  }
-  if (!result.ok) {
-    fail(
-      EXIT_CREATE,
-      `Pipeline creation failed: gateway returned HTTP ${result.status} - ${result.raw ?? ""}`,
-    );
-  }
-  if (result.jsonError) {
-    fail(
-      EXIT_CREATE,
-      `Pipeline creation failed: malformed JSON response - ${result.jsonError}`,
-    );
-  }
-  if (result.json.success !== true) {
-    fail(
-      EXIT_CREATE,
-      `Pipeline creation failed: ${result.json.error || JSON.stringify(result.json)}`,
-    );
-  }
-  const pipelineId = result.json.data && result.json.data.id;
-  if (!pipelineId) {
-    fail(
-      EXIT_CREATE,
-      `Pipeline creation failed: response did not include a pipeline id - ${JSON.stringify(result.json)}`,
-    );
-  }
-
-  log(`Created pipeline id=${pipelineId}`);
-  return pipelineId;
+async function gatewayApi(path, options, exitCode) {
+  const url = `${GATEWAY}${path}`;
+  const result = await request(url, options);
+  requireCondition(
+    !result.networkError,
+    exitCode,
+    `${url}: ${result.networkError}`,
+  );
+  requireCondition(result.ok, exitCode, `${url}: HTTP ${result.status}`);
+  requireCondition(!result.jsonError, exitCode, `${url}: invalid JSON`);
+  requireCondition(
+    result.json?.success === true,
+    exitCode,
+    `${url}: ${result.json?.error || result.raw}`,
+  );
+  return result.json.data;
 }
 
-async function triggerExecution(pipelineId) {
-  log(`Triggering execution for pipeline ${pipelineId}...`);
-  const result = await httpRequestJson(`${GATEWAY}/api/executions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pipelineId, input: {} }),
-  });
-
-  if (result.networkError) {
-    fail(
-      EXIT_TRIGGER,
-      `Execution trigger failed: network error contacting ${GATEWAY}/api/executions - ${result.networkError}`,
-    );
-  }
-  if (!result.ok) {
-    fail(
-      EXIT_TRIGGER,
-      `Execution trigger failed: gateway returned HTTP ${result.status} - ${result.raw ?? ""}`,
-    );
-  }
-  if (result.jsonError) {
-    fail(
-      EXIT_TRIGGER,
-      `Execution trigger failed: malformed JSON response - ${result.jsonError}`,
-    );
-  }
-  if (result.json.success !== true) {
-    fail(
-      EXIT_TRIGGER,
-      `Execution trigger failed: ${result.json.error || JSON.stringify(result.json)}`,
-    );
-  }
-  const executionId = result.json.data && result.json.data.id;
-  if (!executionId) {
-    fail(
-      EXIT_TRIGGER,
-      `Execution trigger failed: response did not include an execution id - ${JSON.stringify(result.json)}`,
-    );
+async function seedPipeline() {
+  const pipelines = await gatewayApi("/api/pipelines", undefined, EXIT_SEED);
+  requireCondition(
+    Array.isArray(pipelines),
+    EXIT_SEED,
+    "pipeline list is not an array",
+  );
+  const existing = pipelines.find(
+    (pipeline) =>
+      pipeline.name === SHOWCASE_PIPELINE.name &&
+      pipeline.version === SHOWCASE_PIPELINE.version &&
+      isDeepStrictEqual(pipeline.steps, SHOWCASE_PIPELINE.steps),
+  );
+  if (existing) {
+    log(`PASS seed reused pipeline ${existing.id}`);
+    return existing.id;
   }
 
-  log(`Started execution id=${executionId}`);
-  return executionId;
+  const created = await gatewayApi(
+    "/api/pipelines",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(SHOWCASE_PIPELINE),
+    },
+    EXIT_SEED,
+  );
+  requireCondition(created?.id, EXIT_SEED, "pipeline response omitted id");
+  log(`PASS seed created pipeline ${created.id}`);
+  return created.id;
+}
+
+async function triggerExecution(pipelineId, mode) {
+  const execution = await gatewayApi(
+    "/api/executions",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pipelineId,
+        input: { ...RUN_INPUT, mode },
+      }),
+    },
+    EXIT_TRIGGER,
+  );
+  requireCondition(
+    execution?.id,
+    EXIT_TRIGGER,
+    "execution response omitted id",
+  );
+  log(`Started ${mode} execution ${execution.id}`);
+  return execution.id;
 }
 
 async function pollExecution(executionId) {
-  log(
-    `Polling execution ${executionId} every ${POLL_INTERVAL_MS / 1000}s (timeout ${POLL_TIMEOUT_MS / 1000}s)...`,
-  );
   const deadline = Date.now() + POLL_TIMEOUT_MS;
-
   while (Date.now() < deadline) {
-    const result = await httpRequestJson(
-      `${GATEWAY}/api/executions/${executionId}`,
+    const execution = await gatewayApi(
+      `/api/executions/${executionId}`,
+      undefined,
+      EXIT_EXECUTION,
     );
-
-    if (result.networkError) {
-      fail(
-        EXIT_POLL,
-        `Execution monitoring failed: network error contacting ${GATEWAY}/api/executions/${executionId} - ${result.networkError}`,
-      );
+    if (["COMPLETED", "FAILED", "CANCELLED"].includes(execution.status)) {
+      return execution;
     }
-    if (!result.ok) {
-      fail(
-        EXIT_POLL,
-        `Execution monitoring failed: gateway returned HTTP ${result.status} - ${result.raw ?? ""}`,
-      );
-    }
-    if (result.jsonError) {
-      fail(
-        EXIT_POLL,
-        `Execution monitoring failed: malformed JSON response - ${result.jsonError}`,
-      );
-    }
-    if (result.json.success !== true || !result.json.data) {
-      fail(
-        EXIT_POLL,
-        `Execution monitoring failed: ${result.json.error || JSON.stringify(result.json)}`,
-      );
-    }
-
-    const status = result.json.data.status;
-    log(`status=${status}`);
-
-    if (status === "COMPLETED") {
-      log(`Execution ${executionId} reached COMPLETED.`);
-      log("SUCCESS: end-to-end pipeline completed.");
-      process.exit(EXIT_OK);
-    }
-    if (status === "FAILED") {
-      fail(
-        EXIT_FAILED,
-        `Execution ${executionId} reached FAILED terminal state - ${JSON.stringify(result.json.data.output ?? null)}`,
-      );
-    }
-
     await sleep(POLL_INTERVAL_MS);
   }
-
-  fail(
+  throw new SmokeFailure(
     EXIT_TIMEOUT,
-    `Execution ${executionId} did not reach a terminal state within ${POLL_TIMEOUT_MS / 1000}s timeout.`,
+    `execution ${executionId} did not finish within ${POLL_TIMEOUT_MS}ms`,
   );
+}
+
+function providerMetadata(step) {
+  return step?.output?._tenvyr?.metadata;
+}
+
+function validatePipelineMetadata(pipeline = SHOWCASE_PIPELINE) {
+  const analyze = pipeline.steps?.find((step) => step.id === "analyze-input");
+  const quality = pipeline.steps?.find((step) => step.id === "quality-gate");
+  requireCondition(
+    analyze?.metadata?.runtime === "python" &&
+      analyze.metadata.language === "python" &&
+      analyze.metadata.transport === "http",
+    EXIT_SEED,
+    "analyze-input must declare the Python HTTP hop",
+  );
+  requireCondition(
+    quality?.metadata?.runtime === "typescript" &&
+      quality.metadata.language === "typescript" &&
+      quality.metadata.transport === "kafka" &&
+      quality.metadata.runnerRuntime === "java",
+    EXIT_SEED,
+    "quality-gate must declare the TypeScript Kafka agent and Java runner hops",
+  );
+  return { analyze: analyze.metadata, quality: quality.metadata };
+}
+
+function validateExecution(
+  execution,
+  expectedAnalyzeAttempt,
+  expectedProvider = "mock",
+  expectedFailureMode = "",
+) {
+  requireCondition(
+    execution.status === "COMPLETED",
+    EXIT_EXECUTION,
+    `execution ${execution.id} ended ${execution.status}: ${JSON.stringify(execution.output)}`,
+  );
+  requireCondition(
+    Array.isArray(execution.steps) && execution.steps.length === 2,
+    EXIT_EXECUTION,
+    `execution ${execution.id} did not expose exactly two steps`,
+  );
+
+  const analyze = execution.steps.find(
+    (step) => step.stepId === "analyze-input",
+  );
+  const quality = execution.steps.find(
+    (step) => step.stepId === "quality-gate",
+  );
+  requireCondition(
+    analyze?.agent === "echo-analyzer",
+    EXIT_EXECUTION,
+    "Python step agent mismatch",
+  );
+  requireCondition(
+    analyze?.status === "COMPLETED",
+    EXIT_EXECUTION,
+    "Python step did not complete",
+  );
+  requireCondition(
+    analyze?.attempt === expectedAnalyzeAttempt,
+    EXIT_EXECUTION,
+    `Python step attempt was ${analyze?.attempt}, expected ${expectedAnalyzeAttempt}`,
+  );
+  requireCondition(
+    analyze?.maxAttempts === 2,
+    EXIT_EXECUTION,
+    "Python step maxAttempts mismatch",
+  );
+  requireCondition(
+    analyze?.output?._tenvyr?.runtime === "python",
+    EXIT_EXECUTION,
+    "Python runtime metadata missing",
+  );
+  requireCondition(
+    analyze?.output?._tenvyr?.language === "python",
+    EXIT_EXECUTION,
+    "Python language metadata missing",
+  );
+  requireCondition(
+    analyze?.output?._tenvyr?.transport === "http",
+    EXIT_EXECUTION,
+    "Python transport metadata missing",
+  );
+
+  requireCondition(
+    quality?.agent === "code-reviewer",
+    EXIT_EXECUTION,
+    "Java-backed quality gate agent mismatch",
+  );
+  requireCondition(
+    quality?.status === "COMPLETED",
+    EXIT_EXECUTION,
+    "Java-backed quality gate did not complete",
+  );
+  requireCondition(
+    quality?.attempt === 1,
+    EXIT_EXECUTION,
+    "quality gate attempt mismatch",
+  );
+
+  const provider = providerMetadata(quality);
+  requireCondition(
+    provider && typeof provider === "object",
+    EXIT_EXECUTION,
+    "Java quality-gate provider metadata is missing",
+  );
+  requireCondition(
+    typeof provider.provider === "string" && provider.provider.length > 0,
+    EXIT_EXECUTION,
+    "provider metadata is invalid",
+  );
+  requireCondition(
+    typeof provider.model === "string" && provider.model.length > 0,
+    EXIT_EXECUTION,
+    "model metadata is invalid",
+  );
+  requireCondition(
+    typeof provider.fallbackUsed === "boolean",
+    EXIT_EXECUTION,
+    "fallbackUsed metadata is invalid",
+  );
+  if (expectedProvider === "mock") {
+    requireCondition(
+      provider.provider === "mock" && provider.fallbackUsed === true,
+      EXIT_EXECUTION,
+      "default mock provider metadata must report provider=mock and fallbackUsed=true",
+    );
+  } else if (provider.provider === "mock" && expectedFailureMode === "mock") {
+    requireCondition(
+      provider.requestedProvider === expectedProvider &&
+        provider.fallbackUsed === true,
+      EXIT_EXECUTION,
+      `mock fallback metadata must identify requestedProvider=${expectedProvider}`,
+    );
+  } else {
+    requireCondition(
+      provider.provider === expectedProvider && provider.fallbackUsed === false,
+      EXIT_EXECUTION,
+      `provider metadata must report provider=${expectedProvider} and fallbackUsed=false`,
+    );
+  }
+  return { analyze, quality, provider };
+}
+
+function printUrls(executionIds = []) {
+  console.log(`Dashboard: ${FRONTEND}/dashboard`);
+  console.log(`Gateway API: ${GATEWAY}/api`);
+  console.log(`Orchestrator API: ${ORCHESTRATOR}`);
+  for (const executionId of executionIds) {
+    console.log(`Execution API: ${GATEWAY}/api/executions/${executionId}`);
+  }
+}
+
+async function runSmoke() {
+  const expectedProvider = (process.env.LLM_PROVIDER || "mock")
+    .trim()
+    .toLowerCase();
+  const expectedFailureMode = (process.env.LLM_FAILURE_MODE || "")
+    .trim()
+    .toLowerCase();
+  const hops = validatePipelineMetadata();
+  await waitForHealth();
+  const pipelineId = await seedPipeline();
+  const successId = await triggerExecution(pipelineId, "success");
+  const success = validateExecution(
+    await pollExecution(successId),
+    1,
+    expectedProvider,
+    expectedFailureMode,
+  );
+  log(
+    `PASS success: ${hops.analyze.language}/${hops.analyze.transport} -> ${hops.quality.language}/${hops.quality.transport} -> ${hops.quality.runnerRuntime} runner`,
+  );
+
+  const retryId = await triggerExecution(pipelineId, "retry-once");
+  const retry = validateExecution(
+    await pollExecution(retryId),
+    2,
+    expectedProvider,
+    expectedFailureMode,
+  );
+  log(
+    `PASS retry-once: analyze-input completed on attempt ${retry.analyze.attempt}`,
+  );
+  log(
+    `PASS provider metadata ${retry.provider.provider}/${retry.provider.model}; fallbackUsed=${retry.provider.fallbackUsed}`,
+  );
+  printUrls([successId, retryId]);
+  log("SUCCESS offline showcase smoke passed");
 }
 
 async function main() {
-  if (typeof fetch !== "function") {
-    fail(
-      EXIT_PREREQ,
-      "global fetch is unavailable; this script requires Node 18 or newer.",
-    );
+  requireCondition(
+    typeof fetch === "function",
+    EXIT_PREREQ,
+    "Node.js global fetch is unavailable",
+  );
+  const mode = process.argv[2];
+  requireCondition(
+    !mode || mode === "--health" || mode === "--seed",
+    EXIT_PREREQ,
+    `unknown option ${mode}`,
+  );
+  if (mode === "--health") {
+    await waitForHealth();
+    printUrls();
+    return;
   }
-
-  await runHealthChecks();
-  const pipelineId = await createPipeline();
-  const executionId = await triggerExecution(pipelineId);
-  await pollExecution(executionId);
+  if (mode === "--seed") {
+    await waitForHealth();
+    const pipelineId = await seedPipeline();
+    log(`Pipeline API: ${GATEWAY}/api/pipelines/${pipelineId}`);
+    printUrls();
+    return;
+  }
+  await runSmoke();
 }
 
-main().catch((err) => {
-  fail(
-    EXIT_POLL,
-    `Unexpected error during smoke verification: ${getErrorMessage(err)}`,
-  );
-});
+if (process.argv[1]?.endsWith("smoke-e2e.mjs")) {
+  main().catch((error) => {
+    const code = error instanceof SmokeFailure ? error.code : EXIT_EXECUTION;
+    console.error(
+      `[showcase] FAILURE: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exitCode = code;
+  });
+}
+
+export {
+  SHOWCASE_PIPELINE,
+  providerMetadata,
+  validateExecution,
+  validatePipelineMetadata,
+};

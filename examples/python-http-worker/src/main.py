@@ -6,7 +6,7 @@ import os
 import signal
 import sys
 from collections.abc import Mapping
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 from tenvyr_worker import (
     AgentDefinition,
@@ -21,32 +21,48 @@ from tenvyr_worker import (
 
 class EchoInput(TypedDict):
     message: str
+    mode: NotRequired[str]
 
 
 class EchoOutput(TypedDict):
     echo: str
     characters: int
+    _tenvyr: dict[str, str]
 
 
 class EchoInputParser:
     def parse(self, value: object) -> EchoInput:
         if not isinstance(value, Mapping) or not isinstance(value.get("message"), str):
             raise TypeError("message must be a string")
-        return {"message": cast(str, value["message"])}
+        mode = value.get("mode", "success")
+        if mode not in {"success", "retry-once"}:
+            raise TypeError("mode must be success or retry-once")
+        return {"message": cast(str, value["message"]), "mode": cast(str, mode)}
 
 
 def parse_output(value: object) -> EchoOutput:
     if not isinstance(value, Mapping):
         raise TypeError("output must be an object")
+    metadata = value.get("_tenvyr")
     if (
         not isinstance(value.get("echo"), str)
         or not isinstance(value.get("characters"), int)
         or isinstance(value.get("characters"), bool)
+        or not isinstance(metadata, Mapping)
+        or any(
+            not isinstance(metadata.get(field), str)
+            for field in ("runtime", "language", "transport")
+        )
     ):
         raise TypeError("output echo and characters are invalid")
     return {
         "echo": cast(str, value["echo"]),
         "characters": cast(int, value["characters"]),
+        "_tenvyr": {
+            "runtime": cast(str, metadata["runtime"]),
+            "language": cast(str, metadata["language"]),
+            "transport": cast(str, metadata["transport"]),
+        },
     }
 
 
@@ -65,6 +81,13 @@ async def execute_echo(
             retryable=False,
         )
 
+    if input_value.get("mode") == "retry-once" and context.invocation["attempt"] == 1:
+        context.fail(
+            code="SHOWCASE_RETRY_ONCE",
+            message="Deterministic first-attempt failure for the showcase",
+            retryable=True,
+        )
+
     context.raise_if_cancelled()
     await asyncio.sleep(0.01)
     context.raise_if_cancelled()
@@ -73,6 +96,11 @@ async def execute_echo(
         output={
             "echo": input_value["message"],
             "characters": len(input_value["message"]),
+            "_tenvyr": {
+                "runtime": "python",
+                "language": "python",
+                "transport": "http",
+            },
         },
         metadata={"example": True},
     )
@@ -80,7 +108,7 @@ async def execute_echo(
 
 echo_agent: AgentDefinition[EchoInput, EchoOutput] = define_agent(
     name="echo-analyzer",
-    version="1.0.0",
+    version="0.1.0",
     input_parser=EchoInputParser(),
     output_parser=parse_output,
     execute=execute_echo,

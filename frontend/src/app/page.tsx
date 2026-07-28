@@ -1,13 +1,5 @@
 import React from "react";
-import {
-  ArrowRight,
-  Cpu,
-  Layers,
-  Activity,
-  ShieldAlert,
-  FileText,
-  CheckCircle2,
-} from "lucide-react";
+import { ArrowRight, Cpu, Activity, CheckCircle2 } from "lucide-react";
 
 export default function Home() {
   return (
@@ -499,26 +491,6 @@ export default function Home() {
           &copy; {new Date().getFullYear()} Tenvyr. Framework-neutral agent
           execution control plane.
         </span>
-        <div style={{ display: "flex", gap: "1.5rem" }}>
-          <a
-            href="/docs/agent-rules.md"
-            style={{ color: "inherit", textDecoration: "none" }}
-          >
-            Agent Rules
-          </a>
-          <a
-            href="/docs/codegraph.md"
-            style={{ color: "inherit", textDecoration: "none" }}
-          >
-            CodeGraph
-          </a>
-          <a
-            href="/docs/rtk.md"
-            style={{ color: "inherit", textDecoration: "none" }}
-          >
-            RTK docs
-          </a>
-        </div>
       </footer>
 
       {/* Inline Styles for Demo Animations */}

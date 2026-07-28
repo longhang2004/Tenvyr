@@ -19,7 +19,18 @@ describe("KafkaService contract boundary", () => {
     send = jest.fn().mockResolvedValue(undefined);
     (service as any).producer = { send };
     (service as any).callRunner = jest.fn().mockResolvedValue({
-      data: { output: '{"status":"HEALTHY","analysis":"ok","latencySec":1}' },
+      data: {
+        output: '{"status":"HEALTHY","analysis":"ok","latencySec":1}',
+        promptTokens: 4,
+        completionTokens: 6,
+        totalTokens: 10,
+        metadata: {
+          provider: "mock",
+          model: "local-heuristic",
+          fallbackUsed: true,
+          usageSource: "estimated",
+        },
+      },
     });
   });
 
@@ -58,8 +69,31 @@ describe("KafkaService contract boundary", () => {
       const request = send.mock.calls[0][0];
       const result = parseAgentResult(JSON.parse(request.messages[0].value));
       expect(request.topic).toBe("agentweave.agent.observability.result");
-      expect(result.status).toBe("succeeded");
-      expect(result.executionId).toBe("execution-1");
+      expect(result).toMatchObject({
+        status: "succeeded",
+        executionId: "execution-1",
+        usage: { inputTokens: 4, outputTokens: 6, totalTokens: 10 },
+        metadata: {
+          provider: "mock",
+          model: "local-heuristic",
+          fallbackUsed: true,
+          usageSource: "estimated",
+        },
+        output: {
+          status: "HEALTHY",
+          analysis: "ok",
+          latencySec: 1,
+          _tenvyr: {
+            metadata: {
+              provider: "mock",
+              model: "local-heuristic",
+              fallbackUsed: true,
+              usageSource: "estimated",
+            },
+            usage: { inputTokens: 4, outputTokens: 6, totalTokens: 10 },
+          },
+        },
+      });
     },
   );
 

@@ -37,6 +37,7 @@ public class RunnerController {
                     analytics.put("promptTokens", runResponse.getPromptTokens());
                     analytics.put("completionTokens", runResponse.getCompletionTokens());
                     analytics.put("totalTokens", runResponse.getTotalTokens());
+                    analytics.put("metadata", runResponse.getMetadata());
                     analytics.put("timestamp", Instant.now().toString());
                     
                     if (request.getContext() != null) {

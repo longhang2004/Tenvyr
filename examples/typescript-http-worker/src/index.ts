@@ -12,7 +12,7 @@ type Environment = Record<string, string | undefined>;
 
 const echoAgent = defineAgent({
   name: "echo-analyzer",
-  version: "1.0.0",
+  version: "0.1.0",
   inputParser: {
     parse(value: unknown): EchoInput {
       if (

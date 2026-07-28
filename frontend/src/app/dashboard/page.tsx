@@ -17,16 +17,102 @@ import {
   Terminal,
   Database,
 } from "lucide-react";
+import { safeJsonPreview } from "./safe-preview.mjs";
 
 const GATEWAY_API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const GATEWAY_WS_URL = process.env.NEXT_PUBLIC_WS_URL || GATEWAY_API_URL;
 
+type PipelineStepMetadata = {
+  runtime?: unknown;
+  language?: unknown;
+  transport?: unknown;
+  runnerRuntime?: unknown;
+};
+
+type PipelineStep = {
+  id: string;
+  metadata?: PipelineStepMetadata;
+};
+
+type Pipeline = {
+  id: string;
+  name: string;
+  version: string;
+  steps?: PipelineStep[];
+};
+
+type StepExecution = {
+  id: string;
+  stepId: string;
+  agent: string;
+  status: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string | null;
+  errorCode?: string;
+  failureCode?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  startTime?: string;
+  endTime?: string;
+};
+
+type Execution = {
+  id: string;
+  pipelineId: string;
+  status: string;
+  startTime: string;
+  endTime?: string;
+  steps?: StepExecution[];
+};
+
+type ApiResponse<T> = {
+  success: boolean;
+  data: T;
+  error?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const isExecution = (value: unknown): value is Execution =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.pipelineId === "string" &&
+  typeof value.status === "string" &&
+  typeof value.startTime === "string";
+
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const displayValue = (value: unknown) =>
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean"
+    ? String(value)
+    : null;
+
+const formatDuration = (startTime?: string, endTime?: string) => {
+  if (!startTime) return null;
+
+  const start = Date.parse(startTime);
+  const end = endTime ? Date.parse(endTime) : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+
+  const duration = Math.max(0, end - start);
+  return duration < 1000
+    ? `${duration} ms`
+    : `${(duration / 1000).toFixed(1)} s`;
+};
+
 export default function Dashboard() {
-  const [pipelines, setPipelines] = useState<any[]>([]);
-  const [executions, setExecutions] = useState<any[]>([]);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [executions, setExecutions] = useState<Execution[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
-  const [selectedExecution, setSelectedExecution] = useState<any | null>(null);
+  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(
+    null,
+  );
   const [yamlInput, setYamlInput] = useState<string>(`name: code-review-pipeline
 version: "1.0"
 description: "Reviews code and checks for runtime anomalies"
@@ -61,7 +147,7 @@ steps:
   const refreshData = async () => {
     try {
       const pipesRes = await fetch(`${GATEWAY_API_URL}/api/pipelines`);
-      const pipesData = await pipesRes.json();
+      const pipesData = (await pipesRes.json()) as ApiResponse<Pipeline[]>;
       if (pipesData.success) {
         setPipelines(pipesData.data);
         if (pipesData.data.length > 0) {
@@ -70,12 +156,12 @@ steps:
       }
 
       const execsRes = await fetch(`${GATEWAY_API_URL}/api/executions`);
-      const execsData = await execsRes.json();
+      const execsData = (await execsRes.json()) as ApiResponse<Execution[]>;
       if (execsData.success) {
         setExecutions(execsData.data);
       }
-    } catch (err: any) {
-      console.error("Failed to load initial data:", err.message);
+    } catch (error: unknown) {
+      console.error("Failed to load initial data:", errorMessage(error));
     }
   };
 
@@ -89,15 +175,24 @@ steps:
       console.log("Websocket connected to Gateway: " + socketConnection.id);
     });
 
-    socketConnection.on("execution-update", (event: any) => {
+    socketConnection.on("execution-update", (event: unknown) => {
+      if (
+        !isRecord(event) ||
+        typeof event.executionId !== "string" ||
+        !isExecution(event.data)
+      ) {
+        return;
+      }
+      const executionId = event.executionId;
+      const nextExecution = event.data;
       console.log("WebSocket event execution-update:", event);
       // Reload executions list
       refreshData();
 
       // Update currently viewed execution if matches
-      setSelectedExecution((current: any) => {
-        if (current && current.id === event.executionId) {
-          return event.data;
+      setSelectedExecution((current) => {
+        if (current && current.id === executionId) {
+          return nextExecution;
         }
         return current;
       });
@@ -123,7 +218,7 @@ steps:
         const res = await fetch(
           `${GATEWAY_API_URL}/api/executions/${selectedExecution.id}`,
         );
-        const data = await res.json();
+        const data = (await res.json()) as ApiResponse<Execution>;
         if (data.success) {
           setSelectedExecution(data.data);
         }
@@ -145,15 +240,15 @@ steps:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ yamlString: yamlInput }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as ApiResponse<Pipeline>;
       if (data.success) {
         setSuccessMsg("Pipeline registered successfully!");
         refreshData();
       } else {
         setErrorMsg(data.error || "Failed to register pipeline.");
       }
-    } catch (err: any) {
-      setErrorMsg("Error registering pipeline: " + err.message);
+    } catch (error: unknown) {
+      setErrorMsg("Error registering pipeline: " + errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -172,7 +267,7 @@ steps:
       let parsedInput = {};
       try {
         parsedInput = JSON.parse(pipelineInput);
-      } catch (err) {
+      } catch {
         setErrorMsg("Invalid JSON input parameters.");
         setLoading(false);
         return;
@@ -186,7 +281,7 @@ steps:
           input: parsedInput,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as ApiResponse<Execution>;
       if (data.success) {
         setSuccessMsg("Pipeline execution triggered!");
         setSelectedExecution(data.data);
@@ -194,8 +289,8 @@ steps:
       } else {
         setErrorMsg(data.error || "Failed to start execution.");
       }
-    } catch (err: any) {
-      setErrorMsg("Error starting execution: " + err.message);
+    } catch (error: unknown) {
+      setErrorMsg("Error starting execution: " + errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -204,7 +299,7 @@ steps:
   const handleSelectExecution = async (id: string) => {
     try {
       const res = await fetch(`${GATEWAY_API_URL}/api/executions/${id}`);
-      const data = await res.json();
+      const data = (await res.json()) as ApiResponse<Execution>;
       if (data.success) {
         setSelectedExecution(data.data);
       }
@@ -265,6 +360,10 @@ steps:
         return "var(--border-color)";
     }
   };
+
+  const selectedPipeline = selectedExecution
+    ? pipelines.find((pipeline) => pipeline.id === selectedExecution.pipelineId)
+    : undefined;
 
   return (
     <div
@@ -570,6 +669,15 @@ steps:
                       </span>
                     </div>
                   )}
+                  <div>
+                    Duration:{" "}
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      {formatDuration(
+                        selectedExecution.startTime,
+                        selectedExecution.endTime,
+                      ) || "—"}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Nodes Grid (DAG Visualization) */}
@@ -583,160 +691,266 @@ steps:
                 >
                   {selectedExecution.steps &&
                   selectedExecution.steps.length > 0 ? (
-                    selectedExecution.steps.map((step: any, index: number) => (
-                      <React.Fragment key={step.id}>
-                        {index > 0 && (
-                          <div
-                            style={{
-                              width: "2px",
-                              height: "20px",
-                              backgroundColor:
-                                step.status === "RUNNING"
-                                  ? "var(--accent-blue)"
-                                  : "var(--border-color)",
-                              marginLeft: "2rem",
-                              marginTop: "-0.5rem",
-                              marginBottom: "-0.5rem",
-                              animation:
-                                step.status === "RUNNING"
-                                  ? "connectorPulse 1.5s infinite"
-                                  : "none",
-                            }}
-                          />
-                        )}
+                    selectedExecution.steps.map((step, index) => {
+                      const pipelineStep = selectedPipeline?.steps?.find(
+                        (candidate) => candidate.id === step.stepId,
+                      );
+                      const metadata = isRecord(pipelineStep?.metadata)
+                        ? pipelineStep.metadata
+                        : {};
+                      const output = isRecord(step.output) ? step.output : {};
+                      const tenvyr = isRecord(output._tenvyr)
+                        ? output._tenvyr
+                        : {};
+                      const providerMetadata = isRecord(tenvyr.metadata)
+                        ? tenvyr.metadata
+                        : tenvyr;
+                      const outputError = isRecord(output.error)
+                        ? output.error
+                        : {};
+                      const runtime =
+                        displayValue(metadata.runtime) ||
+                        displayValue(providerMetadata.runtime);
+                      const language =
+                        displayValue(metadata.language) ||
+                        displayValue(providerMetadata.language);
+                      const transport =
+                        displayValue(metadata.transport) ||
+                        displayValue(providerMetadata.transport);
+                      const runnerRuntime = displayValue(
+                        metadata.runnerRuntime,
+                      );
+                      const provider = displayValue(providerMetadata.provider);
+                      const model = displayValue(providerMetadata.model);
+                      const fallback = displayValue(
+                        providerMetadata.fallbackUsed,
+                      );
+                      const stepDuration = formatDuration(
+                        step.startTime,
+                        step.endTime,
+                      );
+                      const failureCode =
+                        displayValue(step.failureCode) ||
+                        displayValue(step.errorCode) ||
+                        displayValue(tenvyr.failureCode) ||
+                        displayValue(outputError.code) ||
+                        step.error?.match(/^([A-Z][A-Z0-9_]+):\s/)?.[1];
 
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            background: getStatusColor(step.status),
-                            border: `1px solid ${getStatusBorderColor(step.status)}`,
-                            borderRadius: "12px",
-                            padding: "1rem",
-                            transition: "all 0.3s ease",
-                          }}
-                        >
+                      return (
+                        <React.Fragment key={step.id}>
+                          {index > 0 && (
+                            <div
+                              style={{
+                                width: "2px",
+                                height: "20px",
+                                backgroundColor:
+                                  step.status === "RUNNING"
+                                    ? "var(--accent-blue)"
+                                    : "var(--border-color)",
+                                marginLeft: "2rem",
+                                marginTop: "-0.5rem",
+                                marginBottom: "-0.5rem",
+                                animation:
+                                  step.status === "RUNNING"
+                                    ? "connectorPulse 1.5s infinite"
+                                    : "none",
+                              }}
+                            />
+                          )}
+
                           <div
                             style={{
                               display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
+                              flexDirection: "column",
+                              background: getStatusColor(step.status),
+                              border: `1px solid ${getStatusBorderColor(step.status)}`,
+                              borderRadius: "12px",
+                              padding: "1rem",
+                              transition: "all 0.3s ease",
                             }}
                           >
                             <div
                               style={{
                                 display: "flex",
+                                justifyContent: "space-between",
                                 alignItems: "center",
-                                gap: "0.75rem",
                               }}
                             >
-                              {getStatusIcon(step.status)}
-                              <span
-                                style={{ fontWeight: 700, fontSize: "0.9rem" }}
-                              >
-                                {step.stepId}
-                              </span>
-                              <span
+                              <div
                                 style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "0.75rem",
+                                }}
+                              >
+                                {getStatusIcon(step.status)}
+                                <span
+                                  style={{
+                                    fontWeight: 700,
+                                    fontSize: "0.9rem",
+                                  }}
+                                >
+                                  {step.stepId}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: "0.75rem",
+                                    color: "var(--text-secondary)",
+                                  }}
+                                >
+                                  ({step.agent})
+                                </span>
+                              </div>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "0.75rem",
                                   fontSize: "0.75rem",
                                   color: "var(--text-secondary)",
                                 }}
                               >
-                                ({step.agent})
-                              </span>
+                                <span>
+                                  Attempt {step.attempt ?? "—"}
+                                  {step.maxAttempts != null
+                                    ? `/${step.maxAttempts}`
+                                    : ""}
+                                </span>
+                                {stepDuration && <span>{stepDuration}</span>}
+                              </div>
                             </div>
-                            {step.endTime && step.startTime && (
-                              <span
+
+                            {(runtime ||
+                              language ||
+                              transport ||
+                              runnerRuntime ||
+                              provider ||
+                              model ||
+                              fallback ||
+                              failureCode) && (
+                              <div
                                 style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  gap: "0.5rem",
+                                  marginTop: "0.75rem",
                                   fontSize: "0.75rem",
                                   color: "var(--text-secondary)",
                                 }}
                               >
-                                {Math.round(
-                                  new Date(step.endTime).getTime() -
-                                    new Date(step.startTime).getTime(),
+                                {runtime && <span>Runtime: {runtime}</span>}
+                                {language && <span>Language: {language}</span>}
+                                {transport && (
+                                  <span>Transport: {transport}</span>
                                 )}
-                                ms
-                              </span>
+                                {runnerRuntime && (
+                                  <span>Runner runtime: {runnerRuntime}</span>
+                                )}
+                                {provider && <span>Provider: {provider}</span>}
+                                {model && <span>Model: {model}</span>}
+                                {fallback && <span>Fallback: {fallback}</span>}
+                                {failureCode && (
+                                  <span style={{ color: "#f87171" }}>
+                                    Failure: {failureCode}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Expanded Step Info */}
+                            {step.input !== undefined &&
+                              step.input !== null && (
+                                <div
+                                  style={{
+                                    marginTop: "0.75rem",
+                                    padding: "0.5rem",
+                                    background: "rgba(0,0,0,0.2)",
+                                    borderRadius: "6px",
+                                    fontSize: "0.75rem",
+                                    fontFamily: "var(--font-code)",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      color: "var(--accent-blue)",
+                                      fontWeight: "bold",
+                                      marginBottom: "0.25rem",
+                                    }}
+                                  >
+                                    [Input Context]
+                                  </div>
+                                  <pre
+                                    style={{
+                                      margin: 0,
+                                      whiteSpace: "pre-wrap",
+                                      overflowWrap: "anywhere",
+                                    }}
+                                  >
+                                    {safeJsonPreview(step.input)}
+                                  </pre>
+                                </div>
+                              )}
+
+                            {step.output !== undefined &&
+                              step.output !== null && (
+                                <div
+                                  style={{
+                                    marginTop: "0.5rem",
+                                    padding: "0.5rem",
+                                    background: "rgba(0,0,0,0.2)",
+                                    borderRadius: "6px",
+                                    fontSize: "0.75rem",
+                                    fontFamily: "var(--font-code)",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      color: "var(--accent-green)",
+                                      fontWeight: "bold",
+                                      marginBottom: "0.25rem",
+                                    }}
+                                  >
+                                    [Agent Output]
+                                  </div>
+                                  <pre
+                                    style={{
+                                      margin: 0,
+                                      whiteSpace: "pre-wrap",
+                                      overflowWrap: "anywhere",
+                                    }}
+                                  >
+                                    {safeJsonPreview(step.output)}
+                                  </pre>
+                                </div>
+                              )}
+
+                            {step.error && (
+                              <div
+                                style={{
+                                  marginTop: "0.5rem",
+                                  padding: "0.5rem",
+                                  background: "rgba(239,68,68,0.1)",
+                                  border: "1px solid rgba(239,68,68,0.2)",
+                                  borderRadius: "6px",
+                                  fontSize: "0.75rem",
+                                  fontFamily: "var(--font-code)",
+                                  color: "#f87171",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: "bold",
+                                    marginBottom: "0.25rem",
+                                  }}
+                                >
+                                  [Error Trace]
+                                </div>
+                                <div>{step.error}</div>
+                              </div>
                             )}
                           </div>
-
-                          {/* Expanded Step Info */}
-                          {step.input && (
-                            <div
-                              style={{
-                                marginTop: "0.75rem",
-                                padding: "0.5rem",
-                                background: "rgba(0,0,0,0.2)",
-                                borderRadius: "6px",
-                                fontSize: "0.75rem",
-                                fontFamily: "var(--font-code)",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  color: "var(--accent-blue)",
-                                  fontWeight: "bold",
-                                  marginBottom: "0.25rem",
-                                }}
-                              >
-                                [Input Context]
-                              </div>
-                              <div>{JSON.stringify(step.input)}</div>
-                            </div>
-                          )}
-
-                          {step.output && (
-                            <div
-                              style={{
-                                marginTop: "0.5rem",
-                                padding: "0.5rem",
-                                background: "rgba(0,0,0,0.2)",
-                                borderRadius: "6px",
-                                fontSize: "0.75rem",
-                                fontFamily: "var(--font-code)",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  color: "var(--accent-green)",
-                                  fontWeight: "bold",
-                                  marginBottom: "0.25rem",
-                                }}
-                              >
-                                [Agent Output]
-                              </div>
-                              <div>{JSON.stringify(step.output)}</div>
-                            </div>
-                          )}
-
-                          {step.error && (
-                            <div
-                              style={{
-                                marginTop: "0.5rem",
-                                padding: "0.5rem",
-                                background: "rgba(239,68,68,0.1)",
-                                border: "1px solid rgba(239,68,68,0.2)",
-                                borderRadius: "6px",
-                                fontSize: "0.75rem",
-                                fontFamily: "var(--font-code)",
-                                color: "#f87171",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontWeight: "bold",
-                                  marginBottom: "0.25rem",
-                                }}
-                              >
-                                [Error Trace]
-                              </div>
-                              <div>{step.error}</div>
-                            </div>
-                          )}
-                        </div>
-                      </React.Fragment>
-                    ))
+                        </React.Fragment>
+                      );
+                    })
                   ) : (
                     <div
                       style={{

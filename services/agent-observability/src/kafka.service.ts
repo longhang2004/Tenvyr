@@ -140,6 +140,12 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
       });
 
       const runnerOutput = runnerData.data.output;
+      const runnerUsage = {
+        inputTokens: runnerData.data.promptTokens,
+        outputTokens: runnerData.data.completionTokens,
+        totalTokens: runnerData.data.totalTokens,
+      };
+      const runnerMetadata = runnerData.data.metadata;
 
       // 4. Try parsing the response JSON
       let resultData: any = { status: "HEALTHY", analysis: "", latencySec: 1 };
@@ -165,6 +171,14 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
         };
       }
 
+      resultData = {
+        ...resultData,
+        _tenvyr: {
+          metadata: runnerMetadata,
+          usage: runnerUsage,
+        },
+      };
+
       // 5. Publish completion result event to result Kafka topic
       const resultPayload = parseAgentResult({
         schemaVersion: "1",
@@ -173,6 +187,8 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
         stepExecutionId: invocation.stepExecutionId,
         status: "succeeded",
         output: resultData,
+        usage: runnerUsage,
+        metadata: runnerMetadata,
         startedAt,
         completedAt: new Date().toISOString(),
       });
