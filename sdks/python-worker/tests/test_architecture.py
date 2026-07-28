@@ -27,7 +27,8 @@ def test_metadata_declares_only_the_two_approved_runtime_dependency_families() -
         "jsonschema[format-nongpl]>=4.23,<5",
     ]
     assert "Private :: Do Not Upload" in metadata["classifiers"]
-    assert "license" not in metadata
+    assert metadata["license"] == "MIT"
+    assert metadata["license-files"] == ["LICENSE"]
 
 
 def test_package_does_not_import_forbidden_frameworks() -> None:

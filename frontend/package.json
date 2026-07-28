@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Tenvyr Frontend Dashboard",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev": "next dev -p 4000",
     "build": "next build",

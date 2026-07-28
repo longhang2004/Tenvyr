@@ -2,6 +2,7 @@
   "name": "orchestrator",
   "version": "0.1.0",
   "description": "Tenvyr Orchestrator Service",
+  "license": "MIT",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "pnpm --filter @tenvyr/contracts build",

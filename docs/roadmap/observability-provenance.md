@@ -301,8 +301,8 @@ does not enter core.
 ## Theme J — Public identity reservations and release gates
 
 Tenvyr is approved for local repository implementation. Public release remains
-blocked on owner-controlled registry, domain, license, legal, organization,
-and repository decisions. Risks include SEO and documentation confusion,
+blocked on owner-controlled registry, domain, legal, organization, repository,
+and publication decisions. Risks include SEO and documentation confusion,
 domain availability, user trust, trademark/legal review, and npm/PyPI scope
 collision.
 
@@ -311,7 +311,8 @@ Required owner work:
 | Step | Decision                                                                  |
 | ---- | ------------------------------------------------------------------------- |
 | 1–3  | Reserve the organization, npm, PyPI, and domain identities.               |
-| 4–6  | Complete trademark/legal review and choose the public license.            |
+| 4–5  | Complete trademark/legal review.                                          |
+| 6    | Completed: MIT License selected on 2026-07-28.                            |
 | 7–9  | Rename the external repository, configure redirects, and approve publish. |
 
 Do not publish `@tenvyr/worker` or claim public availability before these

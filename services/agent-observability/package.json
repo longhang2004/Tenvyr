@@ -2,6 +2,7 @@
   "name": "agent-observability",
   "version": "0.1.0",
   "description": "Tenvyr Specialized Agent: Observability",
+  "license": "MIT",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "pnpm --filter @tenvyr/contracts build",

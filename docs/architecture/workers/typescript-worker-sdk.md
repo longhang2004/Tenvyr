@@ -221,9 +221,10 @@ terminal `stopped` state. The SDK never installs process signal handlers.
 ## Package boundary
 
 Both `@tenvyr/contracts` and `@tenvyr/worker` are version `0.1.0` and remain
-`private: true` pending owner-controlled registry, license, legal, and release
-gates. Their CommonJS manifests expose only `"."`, ship only `dist`,
-`README.md`, and package metadata, require Node.js 22+, and do not expose
+`private: true` pending owner-controlled registry, legal, and publication
+gates. Both declare MIT and ship the license text. Their CommonJS manifests
+expose only `"."`, ship only `dist`, `README.md`, license, and package metadata,
+require Node.js 22+, and do not expose
 internal stores, schedulers, callback machinery, or HTTP helpers.
 
 Run `pnpm verify:package-packs` to build, pack, inspect both tarballs, rewrite
@@ -244,8 +245,8 @@ runtime package content.
 - The SDK does not change Orchestrator retry semantics, Kafka behavior,
   database schema, pipeline behavior, agent names, invocation IDs, Java
   execution, or the frontend.
-- The packages must not be published until the owner completes the public
-  identity, license, legal, and release gates.
+- The packages must not be published until the owner completes the registry,
+  legal, identity-reservation, and publication gates.
 
 Wire examples, deterministic HMAC vectors, and retry/status matrices are in
 [`contracts/conformance`](../../../contracts/conformance).

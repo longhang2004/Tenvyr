@@ -16,8 +16,8 @@ The SDK depends only on the public API of `@tenvyr/contracts` and Node.js
 HTTP primitives.
 
 Do not publish this package. The Tenvyr identity is approved for local
-repository implementation, but registry, domain, license, legal, and public
-release gates remain owner actions. The current manifest is pack-ready only so
+repository implementation under MIT, but registry, domain, legal, and public
+package-release gates remain owner actions. The current manifest is pack-ready only so
 release contents and external installation can be verified before publication.
 
 ## Minimal worker

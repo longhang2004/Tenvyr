@@ -3,8 +3,8 @@
 TypeScript types, validators, and compatibility helpers for the
 language-neutral Tenvyr invocation, result, and HTTP Worker protocol.
 
-The package remains private until the owner completes registry, license, legal,
-and release gates. Import only from the package root:
+The package is MIT-licensed and remains private until the owner completes
+registry, legal, and publication gates. Import only from the package root:
 
 ```typescript
 import {

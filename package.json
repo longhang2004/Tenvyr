@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Framework-neutral agent execution control plane for contracts, dispatch, supervision, policy, and durable orchestration",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
