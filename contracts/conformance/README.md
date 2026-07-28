@@ -1,6 +1,6 @@
 # HTTP Protocol Conformance
 
-These language-neutral JSON fixtures define AgentWeave HTTP protocol v1 behavior for Worker
+These language-neutral JSON fixtures define Tenvyr HTTP protocol v1 behavior for Worker
 SDK implementations.
 
 - Files under `valid/` must parse successfully.

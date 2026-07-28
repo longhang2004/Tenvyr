@@ -1,28 +1,26 @@
-import type { AgentWeaveWorkerConfig } from "../public/types";
+import type { TenvyrWorkerConfig } from "../public/types";
 
-export type ParsedWorkerConfig<TInput, TOutput> = AgentWeaveWorkerConfig<
+export type ParsedWorkerConfig<TInput, TOutput> = TenvyrWorkerConfig<
   TInput,
   TOutput
 > & {
   execution: Required<
-    NonNullable<AgentWeaveWorkerConfig<TInput, TOutput>["execution"]>
+    NonNullable<TenvyrWorkerConfig<TInput, TOutput>["execution"]>
   >;
   idempotency: Required<
-    NonNullable<AgentWeaveWorkerConfig<TInput, TOutput>["idempotency"]>
+    NonNullable<TenvyrWorkerConfig<TInput, TOutput>["idempotency"]>
   >;
   callbackDelivery: Required<
-    NonNullable<AgentWeaveWorkerConfig<TInput, TOutput>["callbackDelivery"]>
+    NonNullable<TenvyrWorkerConfig<TInput, TOutput>["callbackDelivery"]>
   >;
   callbackPolicy: Required<
-    AgentWeaveWorkerConfig<TInput, TOutput>["callbackPolicy"]
+    TenvyrWorkerConfig<TInput, TOutput>["callbackPolicy"]
   >;
-  server: Required<
-    NonNullable<AgentWeaveWorkerConfig<TInput, TOutput>["server"]>
-  >;
+  server: Required<NonNullable<TenvyrWorkerConfig<TInput, TOutput>["server"]>>;
 };
 
 export function parseWorkerConfig<TInput, TOutput>(
-  config: AgentWeaveWorkerConfig<TInput, TOutput>,
+  config: TenvyrWorkerConfig<TInput, TOutput>,
 ): ParsedWorkerConfig<TInput, TOutput> {
   if (!config || typeof config !== "object")
     throw invalid("Worker configuration is required");
@@ -203,5 +201,5 @@ function ratio(value: unknown, field: string): number {
 }
 
 function invalid(message: string): Error {
-  return new Error(`Invalid AgentWeave Worker configuration: ${message}`);
+  return new Error(`Invalid Tenvyr Worker configuration: ${message}`);
 }

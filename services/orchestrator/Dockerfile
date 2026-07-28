@@ -15,7 +15,7 @@ ENV NODE_ENV=development
 COPY contracts/ ./contracts/
 COPY packages/contracts/ ./packages/contracts/
 COPY services/orchestrator/ ./services/orchestrator/
-RUN pnpm --filter @agentweave/contracts run build
+RUN pnpm --filter @tenvyr/contracts run build
 CMD ["pnpm", "--filter", "orchestrator", "run", "start:dev"]
 
 # Build stage

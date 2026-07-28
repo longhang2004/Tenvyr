@@ -1,6 +1,9 @@
 # Agent Rules and Mechanics (docs/agent-rules.md)
 
-This file contains the definitive guide for AI agents (Codex, Cursor, Claude, Kiro, Antigravity) working in the **AgentWeave** monorepo. It establishes the "rules of engagement" to maximize execution performance, minimize API token costs, and maintain architectural consistency.
+This file contains the definitive guide for AI agents (Codex, Cursor, Claude,
+Kiro, Antigravity) working in the **Tenvyr** monorepo. It establishes the
+"rules of engagement" to maximize execution performance, minimize API token
+costs, and maintain architectural consistency.
 
 ---
 
@@ -28,7 +31,7 @@ AI agents are prone to failure modes such as "hallucination loops", "context ove
 
 ### 4. Rule-Documentation Loop (Mechanic Registration)
 
-- **Rule:** Whenever a new "mechanic" (a new agent, a new Kafka consumer, a new data store adapter, or a helper tool integration) is added to AgentWeave, the agent **MUST** update this file to document the new mechanic's rules.
+- **Rule:** Whenever a new "mechanic" (a new agent, a new Kafka consumer, a new data store adapter, or a helper tool integration) is added to Tenvyr, the agent **MUST** update this file to document the new mechanic's rules.
 
 ---
 
@@ -75,15 +78,16 @@ The following external agent-support tools are integrated into this monorepo to 
 
 - **Purpose:** The orchestrator persists pipeline definitions/executions in PostgreSQL, dispatches step tasks to Kafka topics, consumes agent result topics, and pushes execution updates to the Gateway webhook for Socket.IO broadcast.
 - **Interfaces:** Task topics follow `agentweave.agent.<agent>.task`; result topics follow `agentweave.agent.<agent>.result`; dashboard clients receive `execution-update` over the Gateway WebSocket endpoint.
+- **Compatibility:** Every retained Kafka topic, consumer group, and client ID is a legacy runtime-v1 identifier, not active Tenvyr branding. Do not rename, alias, or dual-publish it during product-identity work.
 - **Rules:** Keep `steps.<stepId>.result.<field>` template semantics stable, preserve the v1 `invocationId` and `stepExecutionId` correlation fields for retry safety, and update `ORCHESTRATOR_AGENT_NAMES` when adding Kafka-backed agents.
 - **Verification:** Build the touched NestJS services with `pnpm --filter <service> run build`; compile the Java runner with `mvn clean compile`; use a sample YAML pipeline to verify status transitions and WebSocket updates.
 
 ### Agent Invocation Contracts v1
 
 - **Purpose:** Defines the transport-independent, versioned invocation, result, and event payloads shared by the Orchestrator and Kafka-native agents.
-- **Interfaces:** Canonical draft 2020-12 schemas are in `contracts/schemas`; TypeScript consumers import types, parsers, structured validation errors, and legacy normalizers from `@agentweave/contracts`.
+- **Interfaces:** Canonical draft 2020-12 schemas are in `contracts/schemas`; TypeScript consumers import types, parsers, structured validation errors, and legacy normalizers from `@tenvyr/contracts`.
 - **Rules:** New writers emit only schema version `"1"`; Kafka readers continue to normalize legacy tasks/results; top-level extension fields are forbidden and additions belong under `metadata`; never generate random compatibility IDs or change Kafka topic/agent names while editing v1.
-- **Verification:** Run `pnpm --filter @agentweave/contracts test`, the Kafka service specs for the Orchestrator and both specialized agents, then `pnpm -r build`.
+- **Verification:** Run `pnpm --filter @tenvyr/contracts test`, the Kafka service specs for the Orchestrator and both specialized agents, then `pnpm -r build`.
 
 ### AgentAdapter Boundary
 
@@ -101,10 +105,21 @@ The following external agent-support tools are integrated into this monorepo to 
 
 ### TypeScript Worker SDK
 
-- **Purpose:** Hosts a typed HTTP agent through `@agentweave/worker`, using bounded local concurrency, FIFO queuing, in-memory idempotency, cooperative deadlines, and HMAC callback retry.
+- **Purpose:** Hosts a typed HTTP agent through `@tenvyr/worker`, using bounded local concurrency, FIFO queuing, in-memory idempotency, cooperative deadlines, and HMAC callback retry.
 - **Interfaces:** Consumers use only the package root API; the worker exposes `POST /v1/runs`, `GET /health/live`, and `GET /health/ready`; wire behavior is shared through `contracts/conformance`.
-- **Rules:** Keep the package dependent only on the public `@agentweave/contracts` API and Node primitives. Preserve raw direct handler returns, exact callback-origin checks, bearer-before-body processing, one-shot lifecycle, and serialized-once callback bytes. Do not add framework, Orchestrator, Kafka, database, model SDK, signal-handler, or persistent-store dependencies.
-- **Verification:** Run contracts conformance, Worker unit/integration/architecture/public-consumer suites, the example smoke test, and the Orchestrator loopback integration spec. Port-binding tests require permission for ephemeral `127.0.0.1` listeners.
+- **Rules:** Keep the package dependent only on the public `@tenvyr/contracts` API and Node primitives. Preserve raw direct handler returns, exact callback-origin checks, bearer-before-body processing, one-shot lifecycle, serialized-once callback bytes, special JSON keys, and the guarantee that `stop()` resolves only after tracked callback work and retry sleeps settle. Canonical fingerprinting is SDK-local rather than a wire requirement. Do not add framework, Orchestrator, Kafka, database, model SDK, signal-handler, or persistent-store dependencies.
+- **Packaging:** Both packages stay private until the owner completes registry, license, legal, and release gates. Root exports are the only public imports. Run `pnpm verify:package-packs`; never publish from this repository or deep-import `dist` internals.
+- **Verification:** Run contracts conformance, Worker unit/integration/stress/open-handle/architecture/public-consumer suites, package pack/install smoke, the example smoke test, and the Orchestrator loopback integration spec. Port-binding tests require permission for ephemeral `127.0.0.1` listeners.
+
+### Product Identity and Observability Roadmap
+
+- **Purpose:** Records future OpenTelemetry, W3C propagation, provenance, privacy, cost, dashboard, instrumentation, and framework-adoption direction without making telemetry a source of execution truth.
+- **Rules:** The Tenvyr identity is approved for local repository
+  implementation, but registry, domain, license, legal, repository, and release
+  reservations remain owner gates. Observability remains a projection;
+  provider dependencies and optional proxy work stay outside Worker core. Do
+  not implement roadmap features as incidental hardening.
+- **References:** Follow [`docs/product/product-principles.md`](product/product-principles.md) and [`docs/roadmap/observability-provenance-roadmap.md`](roadmap/observability-provenance-roadmap.md).
 
 ### Node Test Setup
 
@@ -116,7 +131,7 @@ The following external agent-support tools are integrated into this monorepo to 
 ### Docker Host-Port Override (Port_Override_Mechanism)
 
 - **Purpose:** Lets you run the full stack when host ports `5432` (Postgres), `6379` (Redis), or `9092` (Kafka) are already occupied, without editing `docker-compose.yml`.
-- **Interfaces:** Default (unchanged) startup is `docker compose up -d --build`. To disable infra host publishing, layer the override file: `docker compose -f docker-compose.yml -f docker-compose.no-host-ports.yml up -d --build`. The override file sets `ports: !reset []` on the `postgres`, `redis`, and `kafka` services, removing host publishing while the containers remain reachable to other services over the internal `agentweave-net` network.
+- **Interfaces:** Default (unchanged) startup is `docker compose up -d --build`. To disable infra host publishing, layer the override file: `docker compose -f docker-compose.yml -f docker-compose.no-host-ports.yml up -d --build`. The override file sets `ports: !reset []` on the `postgres`, `redis`, and `kafka` services, removing host publishing while the containers remain reachable to other services over the preserved internal Compose network.
 - **Rules:** Requires Docker Compose v2.24+ (for the `!reset` merge tag). Do not modify `docker-compose.yml`; the default `docker compose up -d --build` developer experience must remain unchanged.
 - **Verification:** `docker compose -f docker-compose.yml -f docker-compose.no-host-ports.yml config` shows the `postgres`, `redis`, and `kafka` services with no published host ports.
 

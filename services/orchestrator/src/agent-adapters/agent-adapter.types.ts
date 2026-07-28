@@ -1,4 +1,4 @@
-import type { AgentInvocationV1, AgentResultV1 } from '@agentweave/contracts';
+import type { AgentInvocationV1, AgentResultV1 } from "@tenvyr/contracts";
 
 export type AgentTransportMetadata = {
   adapter: string;

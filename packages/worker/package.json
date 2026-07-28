@@ -1,18 +1,35 @@
 {
-  "name": "@agentweave/worker",
+  "name": "@tenvyr/worker",
   "version": "1.0.0",
   "private": true,
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Framework-neutral TypeScript runtime for the Tenvyr HTTP Worker protocol",
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
   "scripts": {
-    "prebuild": "pnpm --filter @agentweave/contracts build",
+    "prebuild": "pnpm --filter @tenvyr/contracts build",
     "build": "tsc -p tsconfig.json",
     "pretest": "pnpm run build",
     "test": "jest",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agentweave/contracts": "workspace:*"
+    "@tenvyr/contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/jest": "29.5.14",

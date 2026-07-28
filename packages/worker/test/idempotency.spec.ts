@@ -1,4 +1,4 @@
-import type { HttpAgentRunRequestV1 } from "@agentweave/contracts";
+import type { HttpAgentRunRequestV1 } from "@tenvyr/contracts";
 import {
   canonicalJson,
   requestFingerprint,
@@ -139,5 +139,25 @@ describe("bounded idempotency store", () => {
     expect(JSON.stringify(store.get("invocation-1"))).not.toContain(
       "callback-secret",
     );
+  });
+
+  it("does not scan the full store on every lookup or below-capacity insert", () => {
+    const store = new InMemoryIdempotencyStore({
+      ttlMs: 1000,
+      maxEntries: 100,
+    });
+    const cleanup = jest.spyOn(store, "cleanup");
+    store.create({
+      invocationId: "invocation-1",
+      requestFingerprint: "fingerprint-1",
+      runId: "run-1",
+      acceptedAt: "2026-07-26T00:00:00.000Z",
+      nowMs: 0,
+    });
+
+    expect(store.lookup("invocation-1", "fingerprint-1", 1)).toMatchObject({
+      kind: "duplicate",
+    });
+    expect(cleanup).not.toHaveBeenCalled();
   });
 });

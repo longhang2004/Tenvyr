@@ -1,7 +1,7 @@
 {
-  "name": "agentweave",
+  "name": "tenvyr",
   "version": "1.0.0",
-  "description": "Open-source Multi-Agent Orchestration Framework utilizing Kafka as the event bus",
+  "description": "Framework-neutral agent execution control plane for contracts, dispatch, supervision, policy, and durable orchestration",
   "private": true,
   "scripts": {
     "dev:infra": "docker compose up -d",
@@ -13,6 +13,9 @@
     "dev:frontend": "pnpm --filter frontend run dev",
     "build:all": "pnpm -r build",
     "test:all": "pnpm -r test",
+    "test:identity": "node --test scripts/verify-product-identity.test.mjs",
+    "verify:identity": "node scripts/verify-product-identity.mjs",
+    "verify:package-packs": "node scripts/verify-package-packs.mjs",
     "format": "prettier --write \"**/*.{ts,js,json,md,yml,yaml}\"",
     "skills:install": "./scripts/install-skills.sh",
     "codegraph:init": "./scripts/codegraph-init.sh",

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AgentWeave smoke / end-to-end verification (Requirement 6).
+// Tenvyr smoke / end-to-end verification (Requirement 6).
 //
 // Runs against the local Docker stack and performs a true black-box check that
 // drives only the public Gateway API:
@@ -31,29 +31,32 @@ const EXIT_PREREQ = 7;
 
 // Base URLs default to the documented local ports but may be overridden via env
 // for flexibility; defaults match the running Docker stack exactly.
-const GATEWAY = process.env.SMOKE_GATEWAY_URL || 'http://localhost:3000';
-const ORCHESTRATOR = process.env.SMOKE_ORCHESTRATOR_URL || 'http://localhost:3001';
-const CODE_REVIEWER = process.env.SMOKE_CODE_REVIEWER_URL || 'http://localhost:3002';
-const OBSERVABILITY = process.env.SMOKE_OBSERVABILITY_URL || 'http://localhost:3003';
-const RUNNER = process.env.SMOKE_RUNNER_URL || 'http://localhost:8085';
-const FRONTEND = process.env.SMOKE_FRONTEND_URL || 'http://localhost:4000';
+const GATEWAY = process.env.SMOKE_GATEWAY_URL || "http://localhost:3000";
+const ORCHESTRATOR =
+  process.env.SMOKE_ORCHESTRATOR_URL || "http://localhost:3001";
+const CODE_REVIEWER =
+  process.env.SMOKE_CODE_REVIEWER_URL || "http://localhost:3002";
+const OBSERVABILITY =
+  process.env.SMOKE_OBSERVABILITY_URL || "http://localhost:3003";
+const RUNNER = process.env.SMOKE_RUNNER_URL || "http://localhost:8085";
+const FRONTEND = process.env.SMOKE_FRONTEND_URL || "http://localhost:4000";
 
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 120000;
 
 // Backend services expose the standard health envelope.
 const BACKEND_HEALTH_TARGETS = [
-  { name: 'gateway', url: `${GATEWAY}/health` },
-  { name: 'orchestrator', url: `${ORCHESTRATOR}/health` },
-  { name: 'code-reviewer', url: `${CODE_REVIEWER}/health` },
-  { name: 'observability', url: `${OBSERVABILITY}/health` },
-  { name: 'agent-runner', url: `${RUNNER}/health` },
+  { name: "gateway", url: `${GATEWAY}/health` },
+  { name: "orchestrator", url: `${ORCHESTRATOR}/health` },
+  { name: "code-reviewer", url: `${CODE_REVIEWER}/health` },
+  { name: "observability", url: `${OBSERVABILITY}/health` },
+  { name: "agent-runner", url: `${RUNNER}/health` },
 ];
 
 // Frontend routes are plain pages: assert HTTP 200 only.
 const FRONTEND_HEALTH_TARGETS = [
-  { name: 'frontend /', url: `${FRONTEND}/` },
-  { name: 'frontend /dashboard', url: `${FRONTEND}/dashboard` },
+  { name: "frontend /", url: `${FRONTEND}/` },
+  { name: "frontend /dashboard", url: `${FRONTEND}/dashboard` },
 ];
 
 // Sample two-step pipeline (design C5). With placeholder credentials the Agent
@@ -61,24 +64,24 @@ const FRONTEND_HEALTH_TARGETS = [
 // the execution reaches COMPLETED. The observe step consumes the review step's
 // findings via the {{ steps.<id>.result.<field> }} template.
 const SAMPLE_PIPELINE = {
-  name: 'smoke-pipeline',
-  version: '1.0',
+  name: "smoke-pipeline",
+  version: "1.0",
   steps: [
     {
-      id: 'review',
-      agent: 'code-reviewer',
+      id: "review",
+      agent: "code-reviewer",
       input: {
         code: "const q = 'SELECT * FROM users WHERE id=' + id;",
-        language: 'typescript',
+        language: "typescript",
       },
     },
     {
-      id: 'observe',
-      agent: 'observability',
-      dependsOn: ['review'],
+      id: "observe",
+      agent: "observability",
+      dependsOn: ["review"],
       input: {
-        logs: 'request completed in 1s',
-        findings: '{{ steps.review.result.findings }}',
+        logs: "request completed in 1s",
+        findings: "{{ steps.review.result.findings }}",
       },
     },
   ],
@@ -115,17 +118,36 @@ async function httpRequestJson(url, options = {}) {
   try {
     raw = await response.text();
   } catch (err) {
-    return { ok: response.ok, status: response.status, jsonError: `failed to read body: ${getErrorMessage(err)}` };
+    return {
+      ok: response.ok,
+      status: response.status,
+      jsonError: `failed to read body: ${getErrorMessage(err)}`,
+    };
   }
 
   if (!raw || raw.trim().length === 0) {
-    return { ok: response.ok, status: response.status, jsonError: 'empty response body', raw };
+    return {
+      ok: response.ok,
+      status: response.status,
+      jsonError: "empty response body",
+      raw,
+    };
   }
 
   try {
-    return { ok: response.ok, status: response.status, json: JSON.parse(raw), raw };
+    return {
+      ok: response.ok,
+      status: response.status,
+      json: JSON.parse(raw),
+      raw,
+    };
   } catch (err) {
-    return { ok: response.ok, status: response.status, jsonError: getErrorMessage(err), raw };
+    return {
+      ok: response.ok,
+      status: response.status,
+      jsonError: getErrorMessage(err),
+      raw,
+    };
   }
 }
 
@@ -155,7 +177,7 @@ async function checkBackendHealth(target) {
     return `${target.name} (${target.url}): malformed JSON response - ${result.jsonError}`;
   }
   const body = result.json;
-  if (body.success !== true || !body.data || body.data.status !== 'UP') {
+  if (body.success !== true || !body.data || body.data.status !== "UP") {
     return `${target.name} (${target.url}): unexpected health payload - ${JSON.stringify(body)}`;
   }
   return null;
@@ -174,7 +196,7 @@ async function checkFrontendRoute(target) {
 }
 
 async function runHealthChecks() {
-  log('Checking service health endpoints...');
+  log("Checking service health endpoints...");
   const failures = [];
 
   for (const target of BACKEND_HEALTH_TARGETS) {
@@ -198,35 +220,50 @@ async function runHealthChecks() {
   if (failures.length > 0) {
     fail(
       EXIT_HEALTH,
-      `Health checks failed; no pipeline was created. Failing checks:\n  - ${failures.join('\n  - ')}`,
+      `Health checks failed; no pipeline was created. Failing checks:\n  - ${failures.join("\n  - ")}`,
     );
   }
-  log('All health checks passed.');
+  log("All health checks passed.");
 }
 
 async function createPipeline() {
-  log('Creating sample pipeline...');
+  log("Creating sample pipeline...");
   const result = await httpRequestJson(`${GATEWAY}/api/pipelines`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(SAMPLE_PIPELINE),
   });
 
   if (result.networkError) {
-    fail(EXIT_CREATE, `Pipeline creation failed: network error contacting ${GATEWAY}/api/pipelines - ${result.networkError}`);
+    fail(
+      EXIT_CREATE,
+      `Pipeline creation failed: network error contacting ${GATEWAY}/api/pipelines - ${result.networkError}`,
+    );
   }
   if (!result.ok) {
-    fail(EXIT_CREATE, `Pipeline creation failed: gateway returned HTTP ${result.status} - ${result.raw ?? ''}`);
+    fail(
+      EXIT_CREATE,
+      `Pipeline creation failed: gateway returned HTTP ${result.status} - ${result.raw ?? ""}`,
+    );
   }
   if (result.jsonError) {
-    fail(EXIT_CREATE, `Pipeline creation failed: malformed JSON response - ${result.jsonError}`);
+    fail(
+      EXIT_CREATE,
+      `Pipeline creation failed: malformed JSON response - ${result.jsonError}`,
+    );
   }
   if (result.json.success !== true) {
-    fail(EXIT_CREATE, `Pipeline creation failed: ${result.json.error || JSON.stringify(result.json)}`);
+    fail(
+      EXIT_CREATE,
+      `Pipeline creation failed: ${result.json.error || JSON.stringify(result.json)}`,
+    );
   }
   const pipelineId = result.json.data && result.json.data.id;
   if (!pipelineId) {
-    fail(EXIT_CREATE, `Pipeline creation failed: response did not include a pipeline id - ${JSON.stringify(result.json)}`);
+    fail(
+      EXIT_CREATE,
+      `Pipeline creation failed: response did not include a pipeline id - ${JSON.stringify(result.json)}`,
+    );
   }
 
   log(`Created pipeline id=${pipelineId}`);
@@ -236,26 +273,41 @@ async function createPipeline() {
 async function triggerExecution(pipelineId) {
   log(`Triggering execution for pipeline ${pipelineId}...`);
   const result = await httpRequestJson(`${GATEWAY}/api/executions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipelineId, input: {} }),
   });
 
   if (result.networkError) {
-    fail(EXIT_TRIGGER, `Execution trigger failed: network error contacting ${GATEWAY}/api/executions - ${result.networkError}`);
+    fail(
+      EXIT_TRIGGER,
+      `Execution trigger failed: network error contacting ${GATEWAY}/api/executions - ${result.networkError}`,
+    );
   }
   if (!result.ok) {
-    fail(EXIT_TRIGGER, `Execution trigger failed: gateway returned HTTP ${result.status} - ${result.raw ?? ''}`);
+    fail(
+      EXIT_TRIGGER,
+      `Execution trigger failed: gateway returned HTTP ${result.status} - ${result.raw ?? ""}`,
+    );
   }
   if (result.jsonError) {
-    fail(EXIT_TRIGGER, `Execution trigger failed: malformed JSON response - ${result.jsonError}`);
+    fail(
+      EXIT_TRIGGER,
+      `Execution trigger failed: malformed JSON response - ${result.jsonError}`,
+    );
   }
   if (result.json.success !== true) {
-    fail(EXIT_TRIGGER, `Execution trigger failed: ${result.json.error || JSON.stringify(result.json)}`);
+    fail(
+      EXIT_TRIGGER,
+      `Execution trigger failed: ${result.json.error || JSON.stringify(result.json)}`,
+    );
   }
   const executionId = result.json.data && result.json.data.id;
   if (!executionId) {
-    fail(EXIT_TRIGGER, `Execution trigger failed: response did not include an execution id - ${JSON.stringify(result.json)}`);
+    fail(
+      EXIT_TRIGGER,
+      `Execution trigger failed: response did not include an execution id - ${JSON.stringify(result.json)}`,
+    );
   }
 
   log(`Started execution id=${executionId}`);
@@ -263,34 +315,50 @@ async function triggerExecution(pipelineId) {
 }
 
 async function pollExecution(executionId) {
-  log(`Polling execution ${executionId} every ${POLL_INTERVAL_MS / 1000}s (timeout ${POLL_TIMEOUT_MS / 1000}s)...`);
+  log(
+    `Polling execution ${executionId} every ${POLL_INTERVAL_MS / 1000}s (timeout ${POLL_TIMEOUT_MS / 1000}s)...`,
+  );
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const result = await httpRequestJson(`${GATEWAY}/api/executions/${executionId}`);
+    const result = await httpRequestJson(
+      `${GATEWAY}/api/executions/${executionId}`,
+    );
 
     if (result.networkError) {
-      fail(EXIT_POLL, `Execution monitoring failed: network error contacting ${GATEWAY}/api/executions/${executionId} - ${result.networkError}`);
+      fail(
+        EXIT_POLL,
+        `Execution monitoring failed: network error contacting ${GATEWAY}/api/executions/${executionId} - ${result.networkError}`,
+      );
     }
     if (!result.ok) {
-      fail(EXIT_POLL, `Execution monitoring failed: gateway returned HTTP ${result.status} - ${result.raw ?? ''}`);
+      fail(
+        EXIT_POLL,
+        `Execution monitoring failed: gateway returned HTTP ${result.status} - ${result.raw ?? ""}`,
+      );
     }
     if (result.jsonError) {
-      fail(EXIT_POLL, `Execution monitoring failed: malformed JSON response - ${result.jsonError}`);
+      fail(
+        EXIT_POLL,
+        `Execution monitoring failed: malformed JSON response - ${result.jsonError}`,
+      );
     }
     if (result.json.success !== true || !result.json.data) {
-      fail(EXIT_POLL, `Execution monitoring failed: ${result.json.error || JSON.stringify(result.json)}`);
+      fail(
+        EXIT_POLL,
+        `Execution monitoring failed: ${result.json.error || JSON.stringify(result.json)}`,
+      );
     }
 
     const status = result.json.data.status;
     log(`status=${status}`);
 
-    if (status === 'COMPLETED') {
+    if (status === "COMPLETED") {
       log(`Execution ${executionId} reached COMPLETED.`);
-      log('SUCCESS: end-to-end pipeline completed.');
+      log("SUCCESS: end-to-end pipeline completed.");
       process.exit(EXIT_OK);
     }
-    if (status === 'FAILED') {
+    if (status === "FAILED") {
       fail(
         EXIT_FAILED,
         `Execution ${executionId} reached FAILED terminal state - ${JSON.stringify(result.json.data.output ?? null)}`,
@@ -307,8 +375,11 @@ async function pollExecution(executionId) {
 }
 
 async function main() {
-  if (typeof fetch !== 'function') {
-    fail(EXIT_PREREQ, 'global fetch is unavailable; this script requires Node 18 or newer.');
+  if (typeof fetch !== "function") {
+    fail(
+      EXIT_PREREQ,
+      "global fetch is unavailable; this script requires Node 18 or newer.",
+    );
   }
 
   await runHealthChecks();
@@ -318,5 +389,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  fail(EXIT_POLL, `Unexpected error during smoke verification: ${getErrorMessage(err)}`);
+  fail(
+    EXIT_POLL,
+    `Unexpected error during smoke verification: ${getErrorMessage(err)}`,
+  );
 });

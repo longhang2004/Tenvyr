@@ -1,6 +1,6 @@
 # Agent Invocation Contracts v1
 
-This directory is the runtime-independent source of truth for AgentWeave agent messages.
+This directory is the runtime-independent source of truth for Tenvyr agent messages.
 
 - `schemas/agent-invocation.v1.schema.json` validates dispatched work.
 - `schemas/agent-result.v1.schema.json` validates terminal results.
@@ -14,7 +14,7 @@ This directory is the runtime-independent source of truth for AgentWeave agent m
 
 All schemas use JSON Schema draft 2020-12. Structured values reject unknown fields with
 `additionalProperties: false`; only `metadata` accepts extensions. The
-`@agentweave/contracts` package loads these canonical files directly, maps validator output
+`@tenvyr/contracts` package loads these canonical files directly, maps validator output
 to `ContractValidationError`, and applies the result status/error semantic rule.
 
 ## Compatibility

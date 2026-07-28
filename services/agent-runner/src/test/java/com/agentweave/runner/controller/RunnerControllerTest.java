@@ -39,7 +39,7 @@ class RunnerControllerTest {
         int completionTokens = 30;
         int totalTokens = promptTokens + completionTokens;
         RunResponse stubbed = new RunResponse(
-            "Hello! I am the AgentWeave LLM Runner.",
+            "Hello! I am the Tenvyr LLM Runner.",
             promptTokens,
             completionTokens,
             totalTokens

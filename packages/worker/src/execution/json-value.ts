@@ -1,4 +1,4 @@
-import type { JsonValue } from "@agentweave/contracts";
+import type { JsonValue } from "@tenvyr/contracts";
 
 export function asJsonValue(
   value: unknown,
@@ -14,8 +14,10 @@ export function asJsonValue(
   }
   if (typeof value !== "object")
     throw new TypeError(`${path} is not JSON-compatible`);
+  const prototype = Object.getPrototypeOf(value);
   if (
-    Object.getPrototypeOf(value) !== Object.prototype &&
+    prototype !== Object.prototype &&
+    prototype !== null &&
     !Array.isArray(value)
   ) {
     throw new TypeError(`${path} must be a plain JSON object or array`);
@@ -28,7 +30,7 @@ export function asJsonValue(
       return value.map((item, index) =>
         asJsonValue(item, `${path}[${index}]`, seen),
       );
-    const output: Record<string, JsonValue> = {};
+    const output = Object.create(null) as Record<string, JsonValue>;
     for (const [key, item] of Object.entries(value)) {
       output[key] = asJsonValue(item, `${path}.${key}`, seen);
     }

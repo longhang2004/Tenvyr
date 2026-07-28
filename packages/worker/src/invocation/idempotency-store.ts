@@ -30,11 +30,16 @@ export class InMemoryIdempotencyStore {
     acceptedAt: string;
     nowMs: number;
   }): RunRecord {
-    this.cleanup(input.nowMs);
+    const existing = this.records.get(input.invocationId);
+    if (
+      existing &&
+      isExpiredTerminal(existing, input.nowMs, this.options.ttlMs)
+    )
+      this.records.delete(input.invocationId);
+    else if (existing) throw new Error("Idempotency record already exists");
+    if (this.records.size >= this.options.maxEntries) this.cleanup(input.nowMs);
     if (this.records.size >= this.options.maxEntries)
       throw new Error("Idempotency store capacity exhausted");
-    if (this.records.has(input.invocationId))
-      throw new Error("Idempotency record already exists");
     const record: RunRecord = {
       invocationId: input.invocationId,
       requestFingerprint: input.requestFingerprint,
@@ -53,9 +58,12 @@ export class InMemoryIdempotencyStore {
     fingerprint: string,
     nowMs: number,
   ): { kind: "miss" } | { kind: "duplicate" | "conflict"; record: RunRecord } {
-    this.cleanup(nowMs);
     const record = this.records.get(invocationId);
     if (!record) return { kind: "miss" };
+    if (isExpiredTerminal(record, nowMs, this.options.ttlMs)) {
+      this.records.delete(invocationId);
+      return { kind: "miss" };
+    }
     return {
       kind:
         record.requestFingerprint === fingerprint ? "duplicate" : "conflict",
@@ -74,12 +82,20 @@ export class InMemoryIdempotencyStore {
 
   cleanup(nowMs: number): void {
     for (const [invocationId, record] of this.records) {
-      if (
-        (record.state === "delivered" || record.state === "callback_failed") &&
-        record.updatedAtMs + this.options.ttlMs <= nowMs
-      ) {
+      if (isExpiredTerminal(record, nowMs, this.options.ttlMs)) {
         this.records.delete(invocationId);
       }
     }
   }
+}
+
+function isExpiredTerminal(
+  record: RunRecord,
+  nowMs: number,
+  ttlMs: number,
+): boolean {
+  return (
+    (record.state === "delivered" || record.state === "callback_failed") &&
+    record.updatedAtMs + ttlMs <= nowMs
+  );
 }

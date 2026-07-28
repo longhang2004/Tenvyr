@@ -1,13 +1,13 @@
 export { AgentExecutionError } from "./public/errors";
-export { createAgentWeaveWorker } from "./public/create-worker";
+export { createTenvyrWorker } from "./public/create-worker";
 export { defineAgent } from "./public/define-agent";
 export type {
   AgentDefinition,
   AgentExecutionContext,
   AgentExecutionSuccess,
   AgentFailureOptions,
-  AgentWeaveWorker,
-  AgentWeaveWorkerConfig,
+  TenvyrWorker,
+  TenvyrWorkerConfig,
   WorkerAddress,
   WorkerLifecycleState,
   WorkerLogger,

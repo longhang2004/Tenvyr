@@ -1,20 +1,20 @@
 {
   "name": "orchestrator",
   "version": "1.0.0",
-  "description": "AgentWeave Orchestrator Service",
+  "description": "Tenvyr Orchestrator Service",
   "main": "dist/main.js",
   "scripts": {
-    "prebuild": "pnpm --filter @agentweave/contracts build",
+    "prebuild": "pnpm --filter @tenvyr/contracts build",
     "build": "nest build",
     "start": "nest start",
-    "prestart:dev": "pnpm --filter @agentweave/contracts build",
+    "prestart:dev": "pnpm --filter @tenvyr/contracts build",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
-    "pretest": "pnpm --filter @agentweave/contracts build && pnpm --filter @agentweave/worker build",
+    "pretest": "pnpm --filter @tenvyr/contracts build && pnpm --filter @tenvyr/worker build",
     "test": "jest"
   },
   "dependencies": {
-    "@agentweave/contracts": "workspace:*",
+    "@tenvyr/contracts": "workspace:*",
     "@nestjs/common": "^10.0.0",
     "@nestjs/core": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
@@ -33,7 +33,7 @@
     "@types/jest": "^29.5.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
-    "@agentweave/worker": "workspace:*",
+    "@tenvyr/worker": "workspace:*",
     "jest": "^29.7.0",
     "ts-jest": "^29.1.0",
     "typescript": "^5.0.0"

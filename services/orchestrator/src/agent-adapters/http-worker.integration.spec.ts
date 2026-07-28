@@ -1,9 +1,9 @@
-import type { AgentInvocationV1 } from "@agentweave/contracts";
+import type { AgentInvocationV1 } from "@tenvyr/contracts";
 import {
-  createAgentWeaveWorker,
+  createTenvyrWorker,
   defineAgent,
-  type AgentWeaveWorker,
-} from "@agentweave/worker";
+  type TenvyrWorker,
+} from "@tenvyr/worker";
 import { type INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createServer, type Server } from "http";
@@ -34,7 +34,7 @@ const invocation: AgentInvocationV1 = {
 describe("real Orchestrator to Worker loopback", () => {
   let app: INestApplication;
   let adapter: HttpAgentAdapter;
-  let worker: AgentWeaveWorker;
+  let worker: TenvyrWorker;
   let resultHandler: jest.Mock;
   let executions: number;
   const callbackHeaders: Array<Record<string, string | string[] | undefined>> =
@@ -44,7 +44,7 @@ describe("real Orchestrator to Worker loopback", () => {
     const callbackPort = await availablePort();
     const callbackOrigin = `http://127.0.0.1:${callbackPort}`;
     executions = 0;
-    worker = createAgentWeaveWorker({
+    worker = createTenvyrWorker({
       agent: defineAgent({
         name: "remote-echo-agent",
         async execute(context, input: { message: string }) {
@@ -156,9 +156,18 @@ describe("real Orchestrator to Worker loopback", () => {
     expect(callbackHeaders[0]["x-agentweave-delivery-id"]).toBe(
       callbackHeaders[1]["x-agentweave-delivery-id"],
     );
-    expect(callbackHeaders[0]["x-agentweave-signature"]).not.toBe(
-      callbackHeaders[1]["x-agentweave-signature"],
+    const timestamps = callbackHeaders.map((headers) =>
+      Number(headers["x-agentweave-timestamp"]),
     );
+    for (const timestamp of timestamps) {
+      expect(
+        Math.abs(Math.floor(Date.now() / 1000) - timestamp),
+      ).toBeLessThanOrEqual(300);
+    }
+    expect(
+      callbackHeaders[0]["x-agentweave-signature"] ===
+        callbackHeaders[1]["x-agentweave-signature"],
+    ).toBe(timestamps[0] === timestamps[1]);
   });
 });
 

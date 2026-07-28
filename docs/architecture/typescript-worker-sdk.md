@@ -2,14 +2,14 @@
 
 ## Purpose
 
-`@agentweave/worker` is the reference Node.js implementation of the
-language-neutral AgentWeave HTTP worker protocol. It receives canonical
+`@tenvyr/worker` is the reference Node.js implementation of the
+language-neutral Tenvyr HTTP worker protocol. It receives canonical
 invocations asynchronously, executes one registered agent with bounded local
 resources, constructs a canonical result, and returns it through the existing
 Orchestrator HMAC callback.
 
 The package uses Node.js HTTP primitives and imports only the public API of
-`@agentweave/contracts`. It does not depend on the Orchestrator, Kafka, NestJS,
+`@tenvyr/contracts`. It does not depend on the Orchestrator, Kafka, NestJS,
 database models, specialized agents, or the Java runner.
 
 ## Developer API
@@ -17,11 +17,11 @@ database models, specialized agents, or the Java runner.
 The root package exports:
 
 ```text
-createAgentWeaveWorker
+createTenvyrWorker
 defineAgent
 AgentExecutionError
-AgentWeaveWorker
-AgentWeaveWorkerConfig
+TenvyrWorker
+TenvyrWorkerConfig
 AgentDefinition
 AgentExecutionContext
 AgentFailureOptions
@@ -71,7 +71,9 @@ only `application/json` is accepted. A newly reserved invocation receives
 
 The `Idempotency-Key` maps to a SHA-256 fingerprint of the key plus canonical
 request JSON. Canonicalization recursively sorts object keys and preserves
-array order.
+array order. It preserves `__proto__`, `constructor`, and `prototype` at every
+nesting level and accepts ordinary and null-prototype JSON dictionaries without
+mutating them.
 
 - Same key and same fingerprint returns the original acceptance without
   executing the handler again.
@@ -82,6 +84,13 @@ array order.
 
 The store is in memory. A restart loses the queue, records, and callback
 outbox. There is no status or cancellation endpoint.
+
+Canonical request fingerprinting is SDK-local idempotency behavior, not a
+Tenvyr wire-protocol requirement. A future Python SDK must preserve the API
+behavior—semantic duplicates do not rerun and conflicts return `409`—but need
+not produce identical hash bytes until a shared cross-language
+canonicalization specification exists. The current implementation is not
+claimed to implement RFC 8785/JCS.
 
 ## Callback delivery
 
@@ -94,6 +103,10 @@ once, and reused byte-for-byte across delivery attempts. Each request signs:
 
 with HMAC-SHA256 and sends:
 
+The four header names below are stable legacy protocol-v1 wire identifiers.
+Tenvyr does not send or accept `X-Tenvyr-*` aliases. Any new prefix requires an
+explicit future protocol and compatibility design.
+
 ```text
 X-AgentWeave-Key-Id
 X-AgentWeave-Timestamp
@@ -101,15 +114,18 @@ X-AgentWeave-Delivery-Id
 X-AgentWeave-Signature: v1=<lowercase hex digest>
 ```
 
-The delivery ID stays stable across retries. Every attempt uses a fresh,
-monotonically increasing timestamp and signature. Network errors, request
-timeouts, `408`, `429`, and `5xx` retry with bounded exponential backoff and
-jitter. A bounded delta-seconds `Retry-After` is honored. Redirects are not
-followed; every `2xx` response is delivered.
+The delivery ID and serialized body stay stable across retries. Every attempt
+uses current Unix seconds; retries in the same second may therefore use the
+same timestamp and signature. Replay protection is based on delivery ID.
+Network errors, request timeouts, `408`, `429`, and `5xx` retry with bounded
+exponential backoff and jitter. A bounded delta-seconds `Retry-After` is
+honored. Redirects are not followed; every `2xx` response is delivered.
 
-Response bodies are drained up to 64 KiB. Exhaustion marks the invocation
-`callback_failed` and invokes the optional `onCallbackDeliveryFailed` hook with
-safe scalar metadata. Hook errors are isolated and never rerun the handler.
+Response bodies are read with a streaming 64 KiB bound and cancelled as soon
+as the limit is exceeded. Exhaustion is a non-retryable protocol failure,
+marks the invocation `callback_failed`, and invokes the optional
+`onCallbackDeliveryFailed` hook with safe scalar metadata. Hook errors are
+isolated and never rerun the handler.
 
 ## Security
 
@@ -145,6 +161,10 @@ Timeout and shutdown are cooperative through `AbortSignal`. Late promise
 completion is observed but cannot replace the selected result. The SDK does
 not invent usage, upload artifacts, or log handler input/output.
 
+A handler that ignores `AbortSignal` cannot be forcibly stopped by JavaScript.
+The Worker stops awaiting it, fixes the terminal outcome, observes its eventual
+settlement, and never creates a second callback from the late completion.
+
 ## Lifecycle
 
 The lifecycle is one-shot:
@@ -155,9 +175,38 @@ The lifecycle is one-shot:
 - repeated `stop()` is a no-op
 
 Shutdown first removes readiness and closes the listener. Queued invocations
-become `WORKER_SHUTDOWN` results. Active executions and callback attempts drain
-until the grace deadline; remaining work and timers are then aborted and
-cleared. The SDK never installs process signal handlers.
+are already accepted responsibility, so they are removed from the queue and
+produce one `WORKER_SHUTDOWN` cancellation callback during the grace period.
+Active executions and callback attempts may finish during grace.
+
+At the grace deadline the Worker aborts a worker-wide shutdown signal before
+aborting per-execution and per-callback controllers. This signal also governs
+callbacks created by timeout/shutdown result mapping after force shutdown has
+started. Retry sleeps and callback response streams are cancelled. A callback
+that cannot start after force shutdown is recorded with a safe structured log.
+The Worker waits for scheduler and callback work to settle; it never clears a
+live promise from tracking.
+
+After `stop()` resolves there is no active execution owned by the Worker,
+callback request, callback retry sleep, Worker timer, or listening socket.
+Repeated `stop()` shares the in-progress stop and remains idempotent after the
+terminal `stopped` state. The SDK never installs process signal handlers.
+
+## Package boundary
+
+Both `@tenvyr/contracts` and `@tenvyr/worker` remain `private: true` pending
+owner-controlled registry, license, legal, and release gates. Their CommonJS
+manifests expose only `"."`, ship only `dist`, `README.md`, and package
+metadata, require Node.js 20+, and do not expose internal stores, schedulers,
+callback machinery, or HTTP helpers.
+
+Run `pnpm verify:package-packs` to build, pack, inspect both tarballs, rewrite
+the Worker `workspace:*` dependency to the matching contracts version, install
+both tarballs outside the monorepo, compile a root-API consumer, reject an
+internal deep import, start the packed Worker, call `/health/live`, and stop it.
+The language-neutral conformance fixtures remain repository development
+content; only the JSON Schemas copied under the contracts `dist` directory are
+runtime package content.
 
 ## Limitations
 
@@ -169,6 +218,13 @@ cleared. The SDK never installs process signal handlers.
 - The SDK does not change Orchestrator retry semantics, Kafka behavior,
   database schema, pipeline behavior, agent names, invocation IDs, Java
   execution, or the frontend.
+- The packages must not be published until the owner completes the public
+  identity, license, legal, and release gates.
 
 Wire examples, deterministic HMAC vectors, and retry/status matrices are in
 [`contracts/conformance`](../../contracts/conformance).
+
+Future observability, W3C propagation, provenance, privacy, cost, dashboard,
+instrumentation, and naming direction is documented in the
+[observability and provenance roadmap](../roadmap/observability-provenance-roadmap.md).
+Those capabilities remain future roadmap work.

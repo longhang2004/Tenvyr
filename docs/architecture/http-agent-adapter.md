@@ -20,7 +20,7 @@ Content-Type: application/json
 Accept: application/json
 Authorization: Bearer <configured token>
 Idempotency-Key: <invocationId>
-User-Agent: AgentWeave-Orchestrator/1.0.0
+User-Agent: Tenvyr-Orchestrator/1.0.0
 ```
 
 `Authorization` is omitted when authentication is explicitly `none`. The
@@ -48,6 +48,10 @@ result-handler failure returns `500`.
 
 Outbound bearer tokens are resolved from operator-named environment variables.
 Inbound callbacks require:
+
+The four header names below are stable legacy protocol-v1 wire identifiers.
+Tenvyr does not send or accept `X-Tenvyr-*` aliases. Any new prefix requires an
+explicit future protocol and compatibility design.
 
 ```http
 X-AgentWeave-Key-Id: <configured key ID>
@@ -202,7 +206,7 @@ sequenceDiagram
 
 ## TypeScript reference worker
 
-`@agentweave/worker` implements the remote side of this protocol without
+`@tenvyr/worker` implements the remote side of this protocol without
 creating an Orchestrator production dependency. The Orchestrator loopback spec
 uses it only as a development dependency to verify `500 -> retry -> 204`,
 stable delivery IDs, fresh signatures, duplicate submission deduplication, and

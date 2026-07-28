@@ -16,7 +16,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 /**
  * Plain JUnit 5 unit test (no Spring context) for {@link LlmService}'s Local_Fallback behavior.
  *
- * Feature: agentweave-verification-hardening, Property 3: Placeholder or blank credentials always produce an offline Local_Fallback
+ * Feature: tenvyr-verification-hardening, Property 3: Placeholder or blank credentials always produce an offline Local_Fallback
  *
  * Validates: Requirements 3.3
  *

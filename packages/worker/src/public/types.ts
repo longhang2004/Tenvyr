@@ -2,7 +2,7 @@ import type {
   AgentInvocationV1,
   AgentResultV1,
   JsonValue,
-} from "@agentweave/contracts";
+} from "@tenvyr/contracts";
 
 export type WorkerLifecycleState =
   | "created"
@@ -74,7 +74,7 @@ export type CallbackDeliveryFailedEvent = {
   reason: string;
 };
 
-export type AgentWeaveWorkerConfig<TInput = unknown, TOutput = unknown> = {
+export type TenvyrWorkerConfig<TInput = unknown, TOutput = unknown> = {
   agent: AgentDefinition<TInput, TOutput>;
   authentication: { bearerToken: string };
   callbackAuthentication: { keys: Record<string, string> };
@@ -109,7 +109,7 @@ export type AgentWeaveWorkerConfig<TInput = unknown, TOutput = unknown> = {
   ) => void | Promise<void>;
 };
 
-export interface AgentWeaveWorker {
+export interface TenvyrWorker {
   readonly agentName: string;
   start(options?: { host?: string; port?: number }): Promise<WorkerAddress>;
   stop(options?: { graceMs?: number }): Promise<void>;

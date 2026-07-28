@@ -10,7 +10,7 @@ describe("Worker SDK architecture", () => {
     };
 
     expect(manifest.dependencies).toEqual({
-      "@agentweave/contracts": "workspace:*",
+      "@tenvyr/contracts": "workspace:*",
     });
   });
 
@@ -23,7 +23,7 @@ describe("Worker SDK architecture", () => {
     expect(source).not.toMatch(
       /services\/(?:orchestrator|gateway|agent-code-reviewer|agent-observability)|kafkajs|@nestjs|openai|anthropic|gemini/i,
     );
-    expect(source).not.toMatch(/@agentweave\/contracts\//);
+    expect(source).not.toMatch(/@tenvyr\/contracts\//);
   });
 
   it("keeps contracts independent from the Worker SDK", () => {
@@ -42,8 +42,8 @@ describe("Worker SDK architecture", () => {
       )
       .join("\n");
 
-    expect(contractsManifest).not.toContain("@agentweave/worker");
-    expect(contractSources).not.toContain("@agentweave/worker");
+    expect(contractsManifest).not.toContain("@tenvyr/worker");
+    expect(contractSources).not.toContain("@tenvyr/worker");
   });
 
   it("keeps the contracts and Worker manifest graph acyclic", () => {

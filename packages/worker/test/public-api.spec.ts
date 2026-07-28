@@ -1,23 +1,25 @@
 import {
   AgentExecutionError,
-  createAgentWeaveWorker,
+  createTenvyrWorker,
   defineAgent,
   type AgentDefinition,
   type AgentExecutionContext,
   type AgentExecutionSuccess,
   type AgentFailureOptions,
-  type AgentWeaveWorker,
-  type AgentWeaveWorkerConfig,
+  type TenvyrWorker,
+  type TenvyrWorkerConfig,
   type WorkerAddress,
   type WorkerLifecycleState,
   type WorkerLogger,
 } from "../src";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 
 describe("public API", () => {
   it("exports only the intended runtime values", () => {
     expect(Object.keys(require("../src")).sort()).toEqual([
       "AgentExecutionError",
-      "createAgentWeaveWorker",
+      "createTenvyrWorker",
       "defineAgent",
     ]);
   });
@@ -27,10 +29,11 @@ describe("public API", () => {
 
     expect(Object.keys(compiledPackage).sort()).toEqual([
       "AgentExecutionError",
-      "createAgentWeaveWorker",
+      "createTenvyrWorker",
       "defineAgent",
     ]);
-    expect(compiledPackage.createAgentWeaveWorker).toBeInstanceOf(Function);
+    expect(compiledPackage.createTenvyrWorker).toBeInstanceOf(Function);
+    expect(compiledPackage.createAgentWeaveWorker).toBeUndefined();
   });
 
   it("preserves generic input and output inference with function and Zod-like parsers", async () => {
@@ -66,8 +69,8 @@ describe("public API", () => {
       AgentExecutionContext?,
       AgentExecutionSuccess<unknown>?,
       AgentFailureOptions?,
-      AgentWeaveWorker?,
-      AgentWeaveWorkerConfig<unknown, unknown>?,
+      TenvyrWorker?,
+      TenvyrWorkerConfig<unknown, unknown>?,
       WorkerAddress?,
       WorkerLifecycleState?,
       WorkerLogger?,
@@ -75,6 +78,38 @@ describe("public API", () => {
 
     expect(typesCompile).toEqual([]);
     expect(AgentExecutionError).toBeInstanceOf(Function);
-    expect(createAgentWeaveWorker).toBeInstanceOf(Function);
+    expect(createTenvyrWorker).toBeInstanceOf(Function);
+  });
+
+  it("keeps the compiled declaration surface limited to approved root exports", () => {
+    const declaration = readFileSync(
+      resolve(__dirname, "../dist/index.d.ts"),
+      "utf8",
+    );
+
+    expect(declaration).toContain(
+      'export { AgentExecutionError } from "./public/errors";',
+    );
+    expect(declaration).toContain(
+      'export { createTenvyrWorker } from "./public/create-worker";',
+    );
+    expect(declaration).toContain(
+      'export { defineAgent } from "./public/define-agent";',
+    );
+    for (const name of [
+      "createAgentWeaveWorker",
+      "AgentWeaveWorker",
+      "AgentWeaveWorkerConfig",
+      "AgentWeaveWorkerRuntime",
+      "TenvyrWorkerRuntime",
+      "InMemoryIdempotencyStore",
+      "RunScheduler",
+      "RunRecord",
+      "deliverCallback",
+      "test clock",
+      "callback secret",
+    ]) {
+      expect(declaration).not.toContain(name);
+    }
   });
 });

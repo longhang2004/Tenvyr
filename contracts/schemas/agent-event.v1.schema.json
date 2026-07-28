@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentweave.dev/contracts/agent-event.v1.schema.json",
+  "$id": "urn:tenvyr:schema:agent-event:v1",
   "title": "AgentEventV1",
   "type": "object",
   "additionalProperties": false,

@@ -1,8 +1,8 @@
 import {
-  createAgentWeaveWorker,
+  createTenvyrWorker,
   defineAgent,
-  type AgentWeaveWorker,
-} from "@agentweave/worker";
+  type TenvyrWorker,
+} from "@tenvyr/worker";
 
 type EchoInput = {
   message: string;
@@ -59,21 +59,21 @@ const echoAgent = defineAgent({
 
 export function createExampleWorker(
   environment: Environment = process.env,
-): AgentWeaveWorker {
-  const keyId = required(environment, "AGENTWEAVE_CALLBACK_KEY_ID");
-  return createAgentWeaveWorker({
+): TenvyrWorker {
+  const keyId = required(environment, "TENVYR_CALLBACK_KEY_ID");
+  return createTenvyrWorker({
     agent: echoAgent,
     authentication: {
-      bearerToken: required(environment, "AGENTWEAVE_WORKER_TOKEN"),
+      bearerToken: required(environment, "TENVYR_WORKER_TOKEN"),
     },
     callbackAuthentication: {
       keys: {
-        [keyId]: required(environment, "AGENTWEAVE_CALLBACK_SECRET"),
+        [keyId]: required(environment, "TENVYR_CALLBACK_SECRET"),
       },
     },
     callbackPolicy: {
-      allowedOrigins: [required(environment, "AGENTWEAVE_CALLBACK_ORIGIN")],
-      allowInsecureHttp: environment.AGENTWEAVE_ALLOW_INSECURE_HTTP === "true",
+      allowedOrigins: [required(environment, "TENVYR_CALLBACK_ORIGIN")],
+      allowInsecureHttp: environment.TENVYR_ALLOW_INSECURE_HTTP === "true",
     },
   });
 }
@@ -81,11 +81,11 @@ export function createExampleWorker(
 async function main(): Promise<void> {
   const worker = createExampleWorker();
   const address = await worker.start({
-    host: process.env.AGENTWEAVE_WORKER_HOST ?? "0.0.0.0",
-    port: Number(process.env.AGENTWEAVE_WORKER_PORT ?? 8080),
+    host: process.env.TENVYR_WORKER_HOST ?? "0.0.0.0",
+    port: Number(process.env.TENVYR_WORKER_PORT ?? 8080),
   });
   console.log(
-    `AgentWeave example Worker listening on ${address.host}:${address.port}`,
+    `Tenvyr example Worker listening on ${address.host}:${address.port}`,
   );
   const stop = async () => {
     await worker.stop();
@@ -121,7 +121,7 @@ function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
 
 if (require.main === module) {
   void main().catch((error) => {
-    console.error("AgentWeave example Worker failed to start", {
+    console.error("Tenvyr example Worker failed to start", {
       errorName: error instanceof Error ? error.name : typeof error,
     });
     process.exitCode = 1;

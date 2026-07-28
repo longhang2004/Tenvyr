@@ -1,10 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentweave.dev/contracts/http-agent-run-accepted.v1.schema.json",
+  "$id": "urn:tenvyr:schema:http-agent-run-accepted:v1",
   "title": "HttpAgentRunAcceptedV1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "invocationId", "runId", "status", "acceptedAt"],
+  "required": [
+    "schemaVersion",
+    "invocationId",
+    "runId",
+    "status",
+    "acceptedAt"
+  ],
   "properties": {
     "schemaVersion": { "const": "1" },
     "invocationId": { "type": "string", "minLength": 1 },

@@ -1,4 +1,4 @@
-import type { AgentInvocationV1 } from "@agentweave/contracts";
+import type { AgentInvocationV1 } from "@tenvyr/contracts";
 import { AgentExecutionError } from "../public/errors";
 import type {
   AgentExecutionContext,
@@ -7,7 +7,7 @@ import type {
   WorkerLogger,
 } from "../public/types";
 
-const structuredSuccess = Symbol("AgentWeaveStructuredSuccess");
+const structuredSuccess = Symbol("TenvyrStructuredSuccess");
 
 type BrandedSuccess<TOutput> = AgentExecutionSuccess<TOutput> & {
   [structuredSuccess]: true;

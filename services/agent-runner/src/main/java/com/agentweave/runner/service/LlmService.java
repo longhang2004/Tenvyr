@@ -174,7 +174,7 @@ public class LlmService {
             return generateObservabilityReview(context);
         }
 
-        return "Hello! I am the AgentWeave LLM Runner. Prompt received: " + prompt;
+        return "Hello! I am the Tenvyr LLM Runner. Prompt received: " + prompt;
     }
 
     private String generateSecurityReview(Map<String, Object> context) {

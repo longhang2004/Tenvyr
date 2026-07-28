@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
 import { resolve } from "path";
-import type { AgentResultV1 } from "@agentweave/contracts";
+import type { AgentResultV1 } from "@tenvyr/contracts";
 import { createCallbackSignature } from "../src/callback/callback-signer";
 import {
   classifyCallbackResponse,
@@ -156,12 +156,30 @@ describe("callback delivery", () => {
     expect(requests[0].body.equals(requests[1].body)).toBe(true);
     expect(requests[0].body.toString("utf8")).toBe(JSON.stringify(result));
     expect(
+      Object.keys(requests[0].headers)
+        .filter((header) => header.startsWith("x-"))
+        .sort(),
+    ).toEqual(
+      [
+        "x-agentweave-delivery-id",
+        "x-agentweave-key-id",
+        "x-agentweave-signature",
+        "x-agentweave-timestamp",
+      ].sort(),
+    );
+    expect(
       requests.map((request) => request.headers["x-agentweave-delivery-id"]),
     ).toEqual(["delivery-1", "delivery-1"]);
     expect(
       requests.map((request) => request.headers["x-agentweave-timestamp"]),
     ).toEqual(["1785024000", "1785024001"]);
     for (const request of requests) {
+      expect(request.headers["user-agent"]).toBe("Tenvyr-Worker/1.0.0");
+      expect(
+        Object.keys(request.headers).some((header) =>
+          header.startsWith("x-tenvyr-"),
+        ),
+      ).toBe(false);
       const timestamp = request.headers["x-agentweave-timestamp"] as string;
       const expected = `v1=${createHmac("sha256", "callback-secret")
         .update(`${timestamp}.delivery-1.`)

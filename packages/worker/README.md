@@ -1,6 +1,6 @@
-# `@agentweave/worker`
+# `@tenvyr/worker`
 
-TypeScript SDK for implementing an asynchronous AgentWeave HTTP worker. It
+TypeScript SDK for implementing an asynchronous Tenvyr HTTP worker. It
 accepts `AgentInvocationV1` submissions, runs a typed handler, and delivers the
 terminal `AgentResultV1` to the Orchestrator through an HMAC-signed callback.
 
@@ -9,16 +9,21 @@ terminal `AgentResultV1` to the Orchestrator through an HMAC-signed callback.
 The package is currently private to this workspace:
 
 ```bash
-pnpm add @agentweave/worker@workspace:*
+pnpm add @tenvyr/worker@workspace:*
 ```
 
-The SDK depends only on the public API of `@agentweave/contracts` and Node.js
+The SDK depends only on the public API of `@tenvyr/contracts` and Node.js
 HTTP primitives.
+
+Do not publish this package. The Tenvyr identity is approved for local
+repository implementation, but registry, domain, license, legal, and public
+release gates remain owner actions. The current manifest is pack-ready only so
+release contents and external installation can be verified before publication.
 
 ## Minimal worker
 
 ```ts
-import { createAgentWeaveWorker, defineAgent } from "@agentweave/worker";
+import { createTenvyrWorker, defineAgent } from "@tenvyr/worker";
 
 const agent = defineAgent({
   name: "word-counter",
@@ -27,19 +32,19 @@ const agent = defineAgent({
   }),
 });
 
-const worker = createAgentWeaveWorker({
+const worker = createTenvyrWorker({
   agent,
   authentication: {
-    bearerToken: process.env.AGENTWEAVE_BEARER_TOKEN!,
+    bearerToken: process.env.TENVYR_BEARER_TOKEN!,
   },
   callbackAuthentication: {
     keys: {
-      [process.env.AGENTWEAVE_CALLBACK_KEY_ID!]:
-        process.env.AGENTWEAVE_CALLBACK_SECRET!,
+      [process.env.TENVYR_CALLBACK_KEY_ID!]:
+        process.env.TENVYR_CALLBACK_SECRET!,
     },
   },
   callbackPolicy: {
-    allowedOrigins: [process.env.AGENTWEAVE_CALLBACK_ORIGIN!],
+    allowedOrigins: [process.env.TENVYR_CALLBACK_ORIGIN!],
   },
 });
 
@@ -150,16 +155,21 @@ cancels the run. A handler must pass the signal to abort-aware work or check
 `context.signal.aborted` itself. Late handler completion is ignored after the
 worker has selected a terminal result.
 
+JavaScript cannot forcibly stop synchronous code or a promise that ignores the
+signal. After the grace deadline, the Worker stops awaiting that handler,
+selects `cancelled`, and prevents the handler's late completion from producing
+another result.
+
 ## Configuration
 
 Required values:
 
-| Setting                                  | Environment example          | Purpose                                    |
-| ---------------------------------------- | ---------------------------- | ------------------------------------------ |
-| `authentication.bearerToken`             | `AGENTWEAVE_BEARER_TOKEN`    | Authenticates `POST /v1/runs`              |
-| `callbackAuthentication.keys[keyId]`     | `AGENTWEAVE_CALLBACK_SECRET` | Selects and stores callback signing keys   |
-| `callbackPolicy.allowedOrigins`          | `AGENTWEAVE_CALLBACK_ORIGIN` | Exact normalized callback origin allowlist |
-| callback key ID used by the Orchestrator | `AGENTWEAVE_CALLBACK_KEY_ID` | Selects one configured signing key         |
+| Setting                                  | Environment example      | Purpose                                    |
+| ---------------------------------------- | ------------------------ | ------------------------------------------ |
+| `authentication.bearerToken`             | `TENVYR_BEARER_TOKEN`    | Authenticates `POST /v1/runs`              |
+| `callbackAuthentication.keys[keyId]`     | `TENVYR_CALLBACK_SECRET` | Selects and stores callback signing keys   |
+| `callbackPolicy.allowedOrigins`          | `TENVYR_CALLBACK_ORIGIN` | Exact normalized callback origin allowlist |
+| callback key ID used by the Orchestrator | `TENVYR_CALLBACK_KEY_ID` | Selects one configured signing key         |
 
 Defaults are concurrency `4`, queue size `100`, execution timeout `15 minutes`,
 idempotency TTL `24 hours`, `10,000` records, callback attempts `8`, callback
@@ -179,6 +189,37 @@ Callback URLs with credentials, a query, or a fragment are rejected.
 The worker returns `202` before scheduling the handler. Queue saturation,
 idempotency capacity exhaustion, or shutdown returns a bounded safe error
 without reading or logging handler input/output.
+
+## Idempotency and callback lifecycle
+
+The in-memory idempotency fingerprint is SDK-local behavior, not a wire
+protocol requirement. It sorts JSON object keys without losing special keys
+such as `__proto__`, and it includes request input, callback URL, and callback
+key ID. Semantic duplicates return the original `runId` and `acceptedAt`;
+conflicts return `409`.
+
+Accepted queued runs become cancellation callbacks when shutdown begins.
+Active work and callbacks may drain during grace. At force shutdown, one
+worker-wide signal aborts executions, callback requests, response reads, and
+retry sleeps—including callback work created after the deadline. `stop()`
+does not resolve until tracked callback work settles, and repeated calls are
+idempotent. Callback retry attempts use current Unix seconds, so two attempts
+in one second may have the same timestamp/signature while retaining one stable
+delivery ID and body.
+
+## Package verification
+
+Run:
+
+```bash
+pnpm verify:package-packs
+```
+
+The smoke script builds and packs contracts and Worker, enforces a tarball
+allowlist, verifies the exact contracts version rewrite, installs both
+tarballs in a temporary project outside the workspace, compiles a TypeScript
+consumer, blocks deep imports, starts the packed Worker, checks
+`/health/live`, and stops it without publishing.
 
 ## Production deployment
 
@@ -204,4 +245,5 @@ callback delivery state in memory, so a process restart loses that state.
 See
 [`docs/architecture/typescript-worker-sdk.md`](../../docs/architecture/typescript-worker-sdk.md)
 and [`contracts/conformance`](../../contracts/conformance) for the complete
-wire contract.
+wire contract. Future observability and provenance direction is in the
+[roadmap](../../docs/roadmap/observability-provenance-roadmap.md).

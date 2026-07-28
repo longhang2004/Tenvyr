@@ -1,13 +1,13 @@
-import type { AgentWeaveWorker, AgentWeaveWorkerConfig } from "./types";
+import type { TenvyrWorker, TenvyrWorkerConfig } from "./types";
 import { parseWorkerConfig } from "../config/worker-config.validation";
-import { AgentWeaveWorkerRuntime } from "../lifecycle/worker-lifecycle";
+import { TenvyrWorkerRuntime } from "../lifecycle/worker-lifecycle";
 import { noOpLogger, safeLogger } from "../observability/safe-logger";
 
-export function createAgentWeaveWorker<TInput = unknown, TOutput = unknown>(
-  config: AgentWeaveWorkerConfig<TInput, TOutput>,
-): AgentWeaveWorker {
+export function createTenvyrWorker<TInput = unknown, TOutput = unknown>(
+  config: TenvyrWorkerConfig<TInput, TOutput>,
+): TenvyrWorker {
   const parsed = parseWorkerConfig(config);
-  return new AgentWeaveWorkerRuntime({
+  return new TenvyrWorkerRuntime({
     ...parsed,
     logger: safeLogger(parsed.logger ?? noOpLogger),
   });

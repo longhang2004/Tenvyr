@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { AgentResultV1 } from "@agentweave/contracts";
+import type { AgentResultV1 } from "@tenvyr/contracts";
 import { safeLogger } from "../observability/safe-logger";
 import type { WorkerLogger } from "../public/types";
 import { createCallbackSignature } from "./callback-signer";
@@ -72,8 +72,6 @@ export async function deliverCallback(
   const callbackHost = new URL(input.callbackUrl).host;
   let lastStatus: number | undefined;
   let lastReason = "delivery-failed";
-  let previousTimestamp = 0;
-
   for (let attempt = 1; attempt <= input.config.maxAttempts; attempt += 1) {
     if (input.signal?.aborted) {
       return {
@@ -83,12 +81,7 @@ export async function deliverCallback(
         reason: "worker-shutdown",
       };
     }
-    const timestampSeconds = Math.max(
-      Math.floor(now() / 1000),
-      previousTimestamp + 1,
-    );
-    previousTimestamp = timestampSeconds;
-    const timestamp = String(timestampSeconds);
+    const timestamp = String(Math.floor(now() / 1000));
     const signature = createCallbackSignature(
       input.secret,
       timestamp,
@@ -117,7 +110,7 @@ export async function deliverCallback(
           "X-AgentWeave-Timestamp": timestamp,
           "X-AgentWeave-Delivery-Id": deliveryId,
           "X-AgentWeave-Signature": signature,
-          "User-Agent": "AgentWeave-Worker/1.0.0",
+          "User-Agent": "Tenvyr-Worker/1.0.0",
         },
         body: rawBody,
       });

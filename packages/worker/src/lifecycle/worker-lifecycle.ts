@@ -13,7 +13,7 @@ import {
   type AgentInvocationV1,
   type AgentResultV1,
   type HttpAgentRunRequestV1,
-} from "@agentweave/contracts";
+} from "@tenvyr/contracts";
 import { authenticateBearer } from "../auth/bearer-auth";
 import { validateCallbackUrl } from "../auth/callback-policy";
 import { deliverCallback } from "../callback/callback-delivery";
@@ -27,18 +27,15 @@ import {
   type RunRecord,
 } from "../invocation/idempotency-store";
 import { RunScheduler } from "../invocation/run-scheduler";
-import { noOpLogger } from "../observability/safe-logger";
+import { noOpLogger, safeLogger } from "../observability/safe-logger";
 import type {
-  AgentWeaveWorker,
+  TenvyrWorker,
   CallbackDeliveryFailedEvent,
   WorkerAddress,
   WorkerLifecycleState,
 } from "../public/types";
 
-export class AgentWeaveWorkerRuntime<
-  TInput,
-  TOutput,
-> implements AgentWeaveWorker {
+export class TenvyrWorkerRuntime<TInput, TOutput> implements TenvyrWorker {
   readonly agentName: string;
 
   private state: WorkerLifecycleState = "created";
@@ -49,6 +46,7 @@ export class AgentWeaveWorkerRuntime<
   private cleanupTimer?: NodeJS.Timeout;
   private readonly store: InMemoryIdempotencyStore;
   private readonly scheduler: RunScheduler;
+  private readonly shutdownController = new AbortController();
   private readonly executionControllers = new Set<AbortController>();
   private readonly callbackControllers = new Set<AbortController>();
   private readonly callbackWork = new Set<Promise<void>>();
@@ -72,7 +70,7 @@ export class AgentWeaveWorkerRuntime<
       return this.startPromise;
     if (this.state !== "created") {
       return Promise.reject(
-        new Error(`AgentWeave Worker cannot start from ${this.state} state`),
+        new Error(`Tenvyr Worker cannot start from ${this.state} state`),
       );
     }
     this.state = "starting";
@@ -434,6 +432,10 @@ export class AgentWeaveWorkerRuntime<
   ): Promise<void> {
     this.store.updateState(record, "callback_pending", Date.now());
     const controller = new AbortController();
+    const signal = AbortSignal.any([
+      controller.signal,
+      this.shutdownController.signal,
+    ]);
     this.callbackControllers.add(controller);
     try {
       const keyId = request.resultDelivery.authentication.keyId;
@@ -449,7 +451,7 @@ export class AgentWeaveWorkerRuntime<
           maxResponseBytes: this.config.callbackPolicy.maxResponseBytes,
         },
         logger: this.config.logger ?? noOpLogger,
-        signal: controller.signal,
+        signal,
       });
       this.store.updateState(
         record,
@@ -457,6 +459,17 @@ export class AgentWeaveWorkerRuntime<
         Date.now(),
       );
       if (!outcome.delivered) {
+        if (outcome.reason === "worker-shutdown") {
+          safeLogger(this.config.logger ?? noOpLogger).warn(
+            "Agent callback skipped during forced Worker shutdown",
+            {
+              agent: this.agentName,
+              invocationId: result.invocationId,
+              runId: record.runId,
+              deliveryId: outcome.deliveryId,
+            },
+          );
+        }
         await this.notifyCallbackDeliveryFailed(
           {
             agent: this.agentName,
@@ -470,7 +483,7 @@ export class AgentWeaveWorkerRuntime<
               : { httpStatus: outcome.httpStatus }),
             reason: outcome.reason,
           },
-          controller.signal,
+          signal,
         );
       }
     } finally {
@@ -540,20 +553,15 @@ export class AgentWeaveWorkerRuntime<
       remainingGraceMs,
     );
     if (!completedWithinGrace) {
+      this.shutdownController.abort();
       for (const controller of this.executionControllers) controller.abort();
       for (const controller of this.callbackControllers) controller.abort();
       this.server?.closeAllConnections?.();
-      await raceWithTimeout(
-        this.waitForDrain(cancelled),
-        Math.min(100, this.config.callbackDelivery.requestTimeoutMs),
-      );
+      await this.waitForDrain(cancelled);
     }
     await close;
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
-    this.executionControllers.clear();
-    this.callbackControllers.clear();
-    this.callbackWork.clear();
     this.state = "stopped";
   }
 

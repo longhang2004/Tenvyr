@@ -1,20 +1,28 @@
-# AgentWeave — Project Reference (CLAUDE.md)
+# Tenvyr — Project Reference (CLAUDE.md)
 
-Welcome to **AgentWeave**, a multi-agent orchestration framework utilizing Kafka as the event bus.
+Welcome to **Tenvyr**, a framework-neutral execution control plane for
+supervising agent work across HTTP and Kafka transports.
 
 ---
 
 ## 📖 Project Overview
 
-### What AgentWeave IS:
+### What Tenvyr IS:
 
-- A production-grade, highly observable, polyglot agent pipeline orchestrator.
+- An execution control plane outside agent processes that owns contracts,
+  dispatch, supervision, security and policy boundaries, and orchestration
+  state.
 - Built with Node.js/TypeScript (NestJS, Next.js 15) and Java (Spring Boot) for enterprise-scale reliability.
 - Designed around event-driven, Kafka-native patterns where agents act as decoupled microservices.
 
-### What AgentWeave IS NOT:
+### What Tenvyr IS NOT:
 
-- NOT a LangChain or CrewAI replacement.
+- NOT a replacement for LangChain, CrewAI, provider SDKs, or other agent
+  frameworks.
+- NOT an agent prompt or framework layer; supported frameworks remain behind
+  Worker and adapter boundaries.
+- NOT an observability-only product; telemetry is a projection of authoritative
+  execution state.
 - NOT a Python-centric framework.
 - NOT designed for single-process synchronous scripts.
 
@@ -29,7 +37,7 @@ Welcome to **AgentWeave**, a multi-agent orchestration framework utilizing Kafka
 - **Observability Agent:** `http://localhost:3003` (NestJS) — Log analysis + anomaly detector.
 - **Frontend Dashboard:** `http://localhost:4000` (Next.js 15) — Visual graph builder and monitor.
 
-Docker network: `agentweave-net`
+Docker network: use the preserved network declared in `docker-compose.yml`.
 
 ---
 
@@ -37,7 +45,7 @@ Docker network: `agentweave-net`
 
 - **Agent:** A standalone service that consumes tasks from an input Kafka topic, executes logic, and publishes a result event to an output topic.
 - **HTTP Agent:** An operator-configured remote agent that accepts `AgentInvocationV1` asynchronously and returns `AgentResultV1` through an HMAC-signed Orchestrator callback.
-- **TypeScript Worker SDK:** `@agentweave/worker`, the Node.js reference host for the HTTP Agent protocol, with typed parsers, bounded scheduling, in-memory idempotency, cooperative cancellation, and signed callback retry.
+- **TypeScript Worker SDK:** `@tenvyr/worker`, the Node.js reference host for the HTTP Agent protocol, with typed parsers, bounded scheduling, in-memory idempotency, cooperative cancellation, and signed callback retry.
 - **Pipeline:** A declarative workflow definition (YAML/JSON) detailing steps, agent associations, dependencies, timeouts, and fallback policies.
 - **Step:** An execution node within a pipeline corresponding to a specific agent invocation.
 - **Execution:** A single run of a pipeline with a specific input object.
@@ -47,6 +55,10 @@ Docker network: `agentweave-net`
 ---
 
 ## 🧭 Kafka Topic Patterns
+
+Every value below is a preserved legacy Kafka runtime-v1 identifier, not active
+Tenvyr branding. The same rule applies to retained Kafka consumer groups and
+client IDs in service configuration.
 
 - **Agent Task Topic:** `agentweave.agent.<agent-name>.task` (e.g. `agentweave.agent.code-reviewer.task`)
 - **Agent Result Topic:** `agentweave.agent.<agent-name>.result` (e.g. `agentweave.agent.code-reviewer.result`)
@@ -137,8 +149,8 @@ steps:
 - Start Frontend: `pnpm dev:frontend`
 - Install agent skills: `pnpm skills:install`
 - Initialize local CodeGraph: `pnpm codegraph:init`
-- Test the TypeScript Worker SDK: `pnpm --filter @agentweave/worker test`
-- Run the TypeScript Worker example smoke test: `pnpm --filter @agentweave/example-typescript-http-worker test`
+- Test the TypeScript Worker SDK: `pnpm --filter @tenvyr/worker test`
+- Run the TypeScript Worker example smoke test: `pnpm --filter @tenvyr/example-typescript-http-worker test`
 
 ---
 

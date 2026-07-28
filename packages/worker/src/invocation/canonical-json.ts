@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { HttpAgentRunRequestV1 } from "@agentweave/contracts";
+import type { HttpAgentRunRequestV1 } from "@tenvyr/contracts";
 
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string")
@@ -12,7 +12,8 @@ export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (
     typeof value === "object" &&
-    Object.getPrototypeOf(value) === Object.prototype
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
   ) {
     return `{${Object.keys(value as object)
       .sort()

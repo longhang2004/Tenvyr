@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentweave.dev/contracts/http-agent-run-request.v1.schema.json",
+  "$id": "urn:tenvyr:schema:http-agent-run-request:v1",
   "title": "HttpAgentRunRequestV1",
   "type": "object",
   "additionalProperties": false,
@@ -8,7 +8,7 @@
   "properties": {
     "schemaVersion": { "const": "1" },
     "invocation": {
-      "$ref": "https://agentweave.dev/contracts/agent-invocation.v1.schema.json"
+      "$ref": "urn:tenvyr:schema:agent-invocation:v1"
     },
     "resultDelivery": {
       "type": "object",

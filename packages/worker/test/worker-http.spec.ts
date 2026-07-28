@@ -5,12 +5,8 @@ import type {
   AgentInvocationV1,
   AgentResultV1,
   HttpAgentRunRequestV1,
-} from "@agentweave/contracts";
-import {
-  createAgentWeaveWorker,
-  defineAgent,
-  type AgentWeaveWorker,
-} from "../src";
+} from "@tenvyr/contracts";
+import { createTenvyrWorker, defineAgent, type TenvyrWorker } from "../src";
 
 type CallbackRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -33,12 +29,12 @@ const invocation = (
   ...overrides,
 });
 
-describe("AgentWeave Worker HTTP server", () => {
+describe("Tenvyr Worker HTTP server", () => {
   let callbackServer: Server;
   let callbackOrigin: string;
   let callbackRequests: CallbackRequest[];
   let callbackStatus: number;
-  let worker: AgentWeaveWorker | undefined;
+  let worker: TenvyrWorker | undefined;
 
   beforeEach(async () => {
     callbackRequests = [];
@@ -83,7 +79,7 @@ describe("AgentWeave Worker HTTP server", () => {
   ) {
     const execute =
       options.execute ?? jest.fn(async (_context, input) => input);
-    worker = createAgentWeaveWorker({
+    worker = createTenvyrWorker({
       agent: defineAgent({
         name: "echo-agent",
         execute,
@@ -788,6 +784,12 @@ describe("AgentWeave Worker HTTP server", () => {
 
   it("gracefully stops, cancels queued work, aborts active work at grace expiry, and is one-shot", async () => {
     const observedAbort = jest.fn();
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    };
     const execute = jest.fn(
       async (context) =>
         new Promise<void>(() => {
@@ -798,7 +800,8 @@ describe("AgentWeave Worker HTTP server", () => {
       execute,
       concurrency: 1,
       maxQueuedRuns: 1,
-      shutdownGraceMs: 10,
+      shutdownGraceMs: 100,
+      logger,
     }).worker;
     const baseUrl = await start(target);
     await submit(baseUrl, JSON.stringify(runRequest()));
@@ -817,14 +820,14 @@ describe("AgentWeave Worker HTTP server", () => {
     );
     await waitFor(() => execute.mock.calls.length === 1);
 
-    await target.stop({ graceMs: 10 });
+    await target.stop({ graceMs: 100 });
     await target.stop();
 
     expect(target.getState()).toBe("stopped");
     expect(observedAbort).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(1);
     await expect(target.start()).rejects.toThrow(/stopped/i);
-    await waitFor(() => callbackRequests.length === 2);
+    await waitFor(() => callbackRequests.length === 1);
     expect(
       callbackRequests
         .map(
@@ -833,7 +836,11 @@ describe("AgentWeave Worker HTTP server", () => {
         )
         .map((callbackResult) => callbackResult.status)
         .sort(),
-    ).toEqual(["cancelled", "cancelled"]);
+    ).toEqual(["cancelled"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Agent callback skipped during forced Worker shutdown",
+      expect.objectContaining({ invocationId: "invocation-1" }),
+    );
   });
 
   it("does not install process signal handlers", async () => {

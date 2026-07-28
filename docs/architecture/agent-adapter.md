@@ -50,6 +50,9 @@ Invoking the Kafka adapter before `start()` produces retryable
 publish, and subscribe operations. `KafkaAgentAdapter` owns all agent-specific
 Kafka behavior:
 
+The values below are preserved Kafka runtime-v1 compatibility identifiers, not
+active Tenvyr branding.
+
 - task topics remain `agentweave.agent.<agent>.task`;
 - the task message key remains `executionId`;
 - result topics remain `agentweave.agent.<agent>.result`;

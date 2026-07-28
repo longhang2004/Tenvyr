@@ -1,4 +1,4 @@
-import type { AgentInvocationV1 } from "@agentweave/contracts";
+import type { AgentInvocationV1 } from "@tenvyr/contracts";
 import { AgentExecutionError, defineAgent } from "../src";
 import { executeAgent } from "../src/execution/execute-run";
 import { noOpLogger } from "../src/observability/safe-logger";
@@ -69,6 +69,34 @@ describe("agent execution", () => {
       artifacts: [{ id: "artifact-1", name: "result.json" }],
       metadata: { source: "test" },
     });
+  });
+
+  it("preserves special JSON output keys without prototype mutation", async () => {
+    const output = JSON.parse(
+      '{"__proto__":{"polluted":true},"constructor":{"safe":true},"prototype":{"safe":true},"nested":{"__proto__":{"deep":true}}}',
+    );
+    const agent = defineAgent({
+      name: "echo-agent",
+      async execute() {
+        return output;
+      },
+    });
+
+    const result = await execute(agent);
+    const normalized = result.output as Record<string, unknown>;
+
+    expect(result.status).toBe("succeeded");
+    expect(Object.prototype.hasOwnProperty.call(normalized, "__proto__")).toBe(
+      true,
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        normalized.nested as object,
+        "__proto__",
+      ),
+    ).toBe(true);
+    expect(JSON.parse(JSON.stringify(normalized))).toEqual(output);
+    expect(Object.prototype).not.toHaveProperty("polluted");
   });
 
   it("runs function input and object output parsers around the handler", async () => {

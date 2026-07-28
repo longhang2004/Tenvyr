@@ -24,11 +24,11 @@ describe("TypeScript HTTP Worker example", () => {
 
   it("starts without model credentials or internet access and exposes health", async () => {
     const worker = createExampleWorker({
-      AGENTWEAVE_WORKER_TOKEN: "example-token",
-      AGENTWEAVE_CALLBACK_KEY_ID: "example-v1",
-      AGENTWEAVE_CALLBACK_SECRET: "example-secret",
-      AGENTWEAVE_CALLBACK_ORIGIN: callbackOrigin,
-      AGENTWEAVE_ALLOW_INSECURE_HTTP: "true",
+      TENVYR_WORKER_TOKEN: "example-token",
+      TENVYR_CALLBACK_KEY_ID: "example-v1",
+      TENVYR_CALLBACK_SECRET: "example-secret",
+      TENVYR_CALLBACK_ORIGIN: callbackOrigin,
+      TENVYR_ALLOW_INSECURE_HTTP: "true",
     });
     const address = await worker.start({ host: "127.0.0.1", port: 0 });
 

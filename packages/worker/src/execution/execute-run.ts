@@ -3,7 +3,7 @@ import {
   type AgentInvocationV1,
   type AgentResultV1,
   type JsonValue,
-} from "@agentweave/contracts";
+} from "@tenvyr/contracts";
 import { AgentExecutionError } from "../public/errors";
 import type {
   AgentDefinition,

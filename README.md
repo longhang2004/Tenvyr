@@ -1,8 +1,25 @@
-# AgentWeave — Kafka-Native Multi-Agent Orchestration Framework
+# Tenvyr — Framework-Neutral Agent Execution Control Plane
 
-**AgentWeave** is an open-source, highly observable, polyglot framework for orchestrating multiple specialized AI agents using Apache Kafka as the message event bus.
+**Tenvyr** is an execution control plane that runs outside agent processes. It
+owns versioned contracts, dispatch, supervision, security and policy
+boundaries, and durable orchestration across framework-neutral workers.
 
-It enables developers to model complex workflows as declarative, condition-based Directed Acyclic Graphs (DAGs) defined in YAML. Decoupled microservice agents consume tasks from specific topics and publish results back, allowing for parallel, fault-tolerant, and polyglot execution chains.
+Tenvyr is not an agent framework, prompt-chaining layer, or model-provider
+abstraction. It does not replace LangGraph, the OpenAI Agents SDK, CrewAI, or
+other agent frameworks; it interoperates with them behind Worker and adapter
+boundaries while they continue to own agent internals. It is also not an
+observability-only product. Execution state and contracts are authoritative,
+while observability is a projection that may be sampled, delayed, unavailable,
+or rebuilt without changing an execution outcome.
+
+The current implementation coordinates declarative, condition-based DAGs over
+HTTP and Kafka transports. Decoupled services can execute in parallel and in
+different languages while the control plane retains responsibility for
+routing, retries, timeouts, lifecycle, and failure state.
+
+Future roadmap work may project that authoritative state into OpenTelemetry
+and artifact-lineage views. Those projections are not execution truth and are
+not implemented by this rename.
 
 ---
 
@@ -47,11 +64,25 @@ It enables developers to model complex workflows as declarative, condition-based
 
 ## 💡 Core Concepts
 
-- **Agent:** Standalone services consuming tasks from `agentweave.agent.<agent-name>.task` and producing to `agentweave.agent.<agent-name>.result`.
-- **TypeScript Worker SDK:** `@agentweave/worker` hosts an asynchronous HTTP agent with typed handlers, bounded execution, idempotency, and signed callbacks.
+- **Agent:** Standalone services consuming tasks from the preserved legacy runtime-v1 topic `agentweave.agent.<agent-name>.task` and producing to `agentweave.agent.<agent-name>.result`. The topic namespace is a compatibility identifier, not active branding.
+- **TypeScript Worker SDK:** `@tenvyr/worker` hosts an asynchronous HTTP agent with typed handlers, bounded execution, idempotency, and signed callbacks.
 - **Pipeline:** Declarative DAG defined in YAML coordinating which agents execute, timeouts, retries, and step logic.
 - **Orchestrator:** Reads pipeline definitions, evaluates step conditions, handles step dispatch, and manages failure states.
 - **Execution:** A single workflow runtime run tracking step statuses (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `SKIPPED`).
+
+## Former internal name
+
+AgentWeave is the former internal name for Tenvyr. That name is also used by the independent
+[`arniesaha/agentweave`](https://github.com/arniesaha/agentweave) project; there
+is no affiliation, and the former name is not an active alias for Tenvyr.
+Tenvyr packages remain private and must not be published until the owner
+completes registry, domain, license, and legal reservations.
+
+See the
+[product principles](docs/product/product-principles.md) and
+[observability/provenance roadmap](docs/roadmap/observability-provenance-roadmap.md).
+The roadmap is future direction; this rename does not implement telemetry,
+provenance, dashboard, proxy, or provider instrumentation.
 
 ---
 
@@ -91,18 +122,19 @@ This repository includes first-class integrations to optimize AI agent developer
 - **Install Agent Skills:** `pnpm skills:install`
 - **Initialize CodeGraph Database:** `pnpm codegraph:init`
 - **Compress Terminal Outputs:** `./scripts/rtk-compress.sh <command>`
+- **Verify packed SDKs externally:** `pnpm verify:package-packs`
 
 ---
 
 ## 📂 Monorepo Structure
 
-- [services/gateway](file:///Users/longhang/personal_repos/AgentWeave/services/gateway): REST & Socket.io socket server.
-- [services/orchestrator](file:///Users/longhang/personal_repos/AgentWeave/services/orchestrator): Execution Engine & DAG manager.
-- [services/agent-runner](file:///Users/longhang/personal_repos/AgentWeave/services/agent-runner): LLM prompt template executor.
-- [services/agent-code-reviewer](file:///Users/longhang/personal_repos/AgentWeave/services/agent-code-reviewer): Custom security and code reviewer agent.
-- [services/agent-observability](file:///Users/longhang/personal_repos/AgentWeave/services/agent-observability): Log pattern diagnosis agent.
-- [frontend](file:///Users/longhang/personal_repos/AgentWeave/frontend): Next.js dashboard UI.
-- [packages/contracts](file:///Users/longhang/personal_repos/AgentWeave/packages/contracts): Public TypeScript types and validators for the language-neutral agent protocol.
-- [packages/worker](file:///Users/longhang/personal_repos/AgentWeave/packages/worker): TypeScript HTTP Worker SDK.
-- [examples/typescript-http-worker](file:///Users/longhang/personal_repos/AgentWeave/examples/typescript-http-worker): Runnable typed Worker SDK example.
-- [docs](file:///Users/longhang/personal_repos/AgentWeave/docs): Markdown specifications covering all mechanics, including [Agent Rules](file:///Users/longhang/personal_repos/AgentWeave/docs/agent-rules.md).
+- [services/gateway](services/gateway): REST & Socket.io socket server.
+- [services/orchestrator](services/orchestrator): Execution Engine & DAG manager.
+- [services/agent-runner](services/agent-runner): LLM prompt template executor.
+- [services/agent-code-reviewer](services/agent-code-reviewer): Custom security and code reviewer agent.
+- [services/agent-observability](services/agent-observability): Log pattern diagnosis agent.
+- [frontend](frontend): Next.js dashboard UI.
+- [packages/contracts](packages/contracts): Public TypeScript types and validators for the language-neutral agent protocol.
+- [packages/worker](packages/worker): TypeScript HTTP Worker SDK.
+- [examples/typescript-http-worker](examples/typescript-http-worker): Runnable typed Worker SDK example.
+- [docs](docs): Markdown specifications covering all mechanics, including [Agent Rules](docs/agent-rules.md).

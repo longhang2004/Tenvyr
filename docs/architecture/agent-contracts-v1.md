@@ -2,7 +2,7 @@
 
 ## Decision
 
-AgentWeave uses versioned, runtime-independent JSON contracts at Kafka boundaries. The
+Tenvyr uses versioned, runtime-independent JSON contracts at Kafka boundaries. The
 canonical draft 2020-12 schemas live in [`contracts/schemas`](../../contracts/schemas), and
 the shared TypeScript implementation lives in
 [`packages/contracts`](../../packages/contracts).
