@@ -10,9 +10,9 @@ schema identities have been renamed in this repository.
 This approval does not establish ownership or availability of an npm scope,
 domain, GitHub identity, PyPI distribution, or container namespace. External
 reservation, the public license, counsel-led trademark review, repository
-rename, publication, and public release remain unfinished owner actions. Do
-not start the Python Worker SDK until those external identity gates are
-complete.
+rename, publication, and public release remain unfinished owner actions. The
+owner has separately authorized the private local Python Worker implementation;
+that authorization does not include PyPI reservation or publication.
 
 ## Decision summary
 
@@ -507,7 +507,7 @@ introduced as an alias or silent wire rename in the branding migration.
 ## Implementation and owner actions
 
 1. **Implemented locally:** Tenvyr branding, private TypeScript packages,
-   imports, Worker API, `TENVYR_*` examples, User-Agent values, and
+   imports, both Worker SDKs, `TENVYR_*` examples, User-Agent values, and
    `urn:tenvyr:schema:*` identities. Protocol v1 and persistent deployment
    identifiers remain deliberately unchanged.
 2. **Owner action required:** complete counsel-led trademark and
@@ -517,6 +517,5 @@ introduced as an alias or silent wire rename in the branding migration.
    organization.
 4. **Owner action required:** select the public license. Packages remain
    `private: true` and `UNLICENSED`; no public release is authorized.
-5. **Owner action required:** rename the external repository and approve
-   publication before beginning the Python Worker SDK under the final
-   identity.
+5. **Owner action required:** rename the external repository and separately
+   approve any npm, PyPI, image, or other public publication.

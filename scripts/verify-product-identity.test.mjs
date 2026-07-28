@@ -272,6 +272,55 @@ test("callback tests may assert only the four exact v1 header names", () => {
   );
 });
 
+test("Python Worker wire-header allowlist requires exact constants and path", () => {
+  const path = "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py";
+  const audit = auditEntries(
+    [
+      {
+        path,
+        text: [
+          `HEADER_KEY_ID = "X-${oldName}-Key-Id"`,
+          `HEADER_TIMESTAMP = "X-${oldName}-Timestamp"`,
+          `HEADER_DELIVERY_ID = "X-${oldName}-Delivery-Id"`,
+          `HEADER_SIGNATURE = "X-${oldName}-Signature"`,
+          `# HEADER_BAD = "X-${oldName}-Key-Id"`,
+          `HEADER_BAD = "X-${oldName}-Unexpected"`,
+        ].join("\n"),
+      },
+      {
+        path: "sdks/python-worker/src/tenvyr_worker/_callback/copied.py",
+        text: `HEADER_KEY_ID = "X-${oldName}-Key-Id"`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    [
+      null,
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      null,
+      null,
+    ],
+  );
+});
+
+test("Python comments cannot satisfy required wire-header constants", () => {
+  const rule = requiredLegacyIdentifiers.find(({ id }) =>
+    id.startsWith("python-worker-sends-"),
+  );
+  assert(rule);
+  assert.deepEqual(
+    auditEntries([{ path: rule.path, text: `# ${rule.fixture}` }], [rule])
+      .missing,
+    [rule.id],
+  );
+});
+
 test("missing required identifiers fail independently of rename violations", () => {
   const required = [
     {

@@ -46,6 +46,7 @@ Docker network: use the preserved network declared in `docker-compose.yml`.
 - **Agent:** A standalone service that consumes tasks from an input Kafka topic, executes logic, and publishes a result event to an output topic.
 - **HTTP Agent:** An operator-configured remote agent that accepts `AgentInvocationV1` asynchronously and returns `AgentResultV1` through an HMAC-signed Orchestrator callback.
 - **TypeScript Worker SDK:** `@tenvyr/worker`, the Node.js reference host for the HTTP Agent protocol, with typed parsers, bounded scheduling, in-memory idempotency, cooperative cancellation, and signed callback retry.
+- **Python Worker SDK:** `tenvyr-worker` / `tenvyr_worker`, the private Python 3.11+ host for the same language-neutral protocol. It uses Python naming and seconds, keeps state process-local, and does not move framework orchestration into Worker core.
 - **Pipeline:** A declarative workflow definition (YAML/JSON) detailing steps, agent associations, dependencies, timeouts, and fallback policies.
 - **Step:** An execution node within a pipeline corresponding to a specific agent invocation.
 - **Execution:** A single run of a pipeline with a specific input object.
@@ -151,6 +152,9 @@ steps:
 - Initialize local CodeGraph: `pnpm codegraph:init`
 - Test the TypeScript Worker SDK: `pnpm --filter @tenvyr/worker test`
 - Run the TypeScript Worker example smoke test: `pnpm --filter @tenvyr/example-typescript-http-worker test`
+- Test the Python Worker SDK: `python -m pytest sdks/python-worker/tests`
+- Verify its wheel, sdist, resources, external install, typing, and example: `python scripts/verify-python-worker-package.py`
+- Run the explicit cross-language loopback: `TENVYR_PYTHON_EXECUTABLE=/path/to/python pnpm --filter orchestrator test:python-worker-loopback`
 
 ---
 

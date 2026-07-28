@@ -322,13 +322,13 @@ gates are complete.
 
 ### Phase 1 — 0–3 months
 
-| Item                                     | Exit signal                                                                              |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Python Worker SDK and shared conformance | Python matches API-level duplicate/conflict, lifecycle, callback, and security behavior. |
-| Basic Orchestrator/Worker OTel spans     | Theme A hierarchy exports through OTLP with telemetry failure isolation.                 |
-| W3C HTTP/Kafka propagation               | Theme B cross-transport fixture passes.                                                  |
-| Local Tempo/Jaeger stack                 | A developer can inspect one loopback pipeline trace locally.                             |
-| Framework examples and durable ADRs      | Initial examples pass conformance and decisions are versioned in ADRs.                   |
+| Item                                     | Exit signal                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Python Worker SDK and shared conformance | Implemented privately; the 52 shared cases and Python runtime/package gates remain CI-locked across 3.11–3.14. |
+| Basic Orchestrator/Worker OTel spans     | Theme A hierarchy exports through OTLP with telemetry failure isolation.                                       |
+| W3C HTTP/Kafka propagation               | Theme B cross-transport fixture passes.                                                                        |
+| Local Tempo/Jaeger stack                 | A developer can inspect one loopback pipeline trace locally.                                                   |
+| Framework examples and durable ADRs      | Initial examples pass conformance and decisions are versioned in ADRs.                                         |
 
 ### Phase 2 — 3–6 months
 
@@ -362,8 +362,8 @@ gates are complete.
 
 ## Current non-goals
 
-The current implementation does not include a Python SDK, OpenTelemetry
-instrumentation, W3C propagation, dashboard, provider proxy, PROV-O exporter,
+The current implementation includes a private Python Worker SDK but does not
+include OpenTelemetry instrumentation, W3C propagation, dashboard, provider proxy, PROV-O exporter,
 artifact store, policy engine, CLI Adapter, durable store, provider
 integration, auto-instrumentation, public publish, repository rename, or
 database migration.

@@ -1,0 +1,63 @@
+name: Python Worker
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  python-worker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install repositories
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e './sdks/python-worker[dev]'
+          pnpm install --frozen-lockfile
+
+      - name: Contracts and unit tests
+        run: |
+          python scripts/sync-python-worker-schemas.py check
+          python -m pytest sdks/python-worker/tests -m conformance
+          python -m pytest sdks/python-worker/tests -m 'not conformance and not stress and not lifecycle'
+
+      - name: Stress and lifecycle tests
+        run: |
+          python -m pytest sdks/python-worker/tests -m stress
+          python -m pytest sdks/python-worker/tests -m lifecycle
+
+      - name: Static checks
+        run: |
+          python -m ruff check sdks/python-worker/src sdks/python-worker/tests examples/python-http-worker scripts/sync-python-worker-schemas.py scripts/verify-python-worker-package.py
+          python -m ruff format --check sdks/python-worker/src sdks/python-worker/tests examples/python-http-worker scripts/sync-python-worker-schemas.py scripts/verify-python-worker-package.py
+          cd sdks/python-worker
+          python -m mypy
+
+      - name: Package and example verification
+        run: |
+          python scripts/verify-python-worker-package.py
+          python -m pytest examples/python-http-worker/tests
+
+      - name: Real Orchestrator to Python loopback
+        env:
+          TENVYR_PYTHON_EXECUTABLE: python
+        run: pnpm --filter orchestrator test:python-worker-loopback

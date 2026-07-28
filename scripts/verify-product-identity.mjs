@@ -254,8 +254,10 @@ const wireProtocolPaths = new Set([
   "services/orchestrator/src/agent-adapters/http-agent-callback.controller.spec.ts",
   "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
   "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts",
+  "services/orchestrator/src/agent-adapters/http-python-worker.integration.spec.ts",
   "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts",
   "packages/worker/test/callback.spec.ts",
+  "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
 ]);
 const kafkaPathRules = new Map([
   [`${legacyLower}-dev`, new Set([".env.example"])],
@@ -397,6 +399,15 @@ export const requiredLegacyIdentifiers = Object.freeze([
         "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
         header.toLowerCase(),
         controllerValues[index],
+      ),
+      requiredPattern(
+        `python-worker-sends-${header}`,
+        "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
+        new RegExp(
+          `^[\\t ]*HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]}[\\t ]*=[\\t ]*(["'])${escapeRegExp(header)}\\1[\\t ]*$`,
+          "m",
+        ),
+        `HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]} = "${header}"`,
       ),
     ];
   }),
@@ -694,10 +705,7 @@ export function classifyMatch({ path, line, match }) {
   if (isCompatibilityAssertion(normalizedPath, line, match)) {
     return "compatibility-test";
   }
-  if (
-    wireProtocolPaths.has(normalizedPath) &&
-    headerNames.some((header) => header.toLowerCase() === normalizedMatch)
-  ) {
+  if (isApprovedWireHeader(normalizedPath, line, match)) {
     return "wire-protocol-v1";
   }
   if (
@@ -852,6 +860,25 @@ function isCompatibilityAssertion(path, line, match) {
     /\.(?:includes|toBe|toContain|toEqual|toMatch)\(/.test(line) ||
     line.includes(`expect(expectedPackage).toMatch(/^com\\.${legacyLower}`)
   );
+}
+
+function isApprovedWireHeader(path, line, match) {
+  if (
+    !wireProtocolPaths.has(path) ||
+    !headerNames.some((header) => header.toLowerCase() === match.toLowerCase())
+  ) {
+    return false;
+  }
+  if (path !== "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py") {
+    return true;
+  }
+  const names = new Map([
+    [headerNames[0], "KEY_ID"],
+    [headerNames[1], "TIMESTAMP"],
+    [headerNames[2], "DELIVERY_ID"],
+    [headerNames[3], "SIGNATURE"],
+  ]);
+  return line.trim() === `HEADER_${names.get(match)} = "${match}"`;
 }
 
 function isApprovedNegativeAssertion(path, line, match) {
@@ -1138,6 +1165,9 @@ function stripComments(text, path) {
     .replace(/<!--[\s\S]*?-->/g, "");
   if (/\.(?:[cm]?[jt]sx?|java)$/.test(path)) {
     stripped = stripped.replace(/^[\t ]*\/\/.*$/gm, "");
+  }
+  if (path.endsWith(".py")) {
+    stripped = stripped.replace(/^[\t ]*#.*$/gm, "");
   }
   if (/\.(?:ya?ml|env|example)$/.test(path) || path === ".env.example") {
     stripped = stripped.replace(/^[\t ]*#.*$/gm, "");

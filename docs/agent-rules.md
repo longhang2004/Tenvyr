@@ -111,6 +111,14 @@ The following external agent-support tools are integrated into this monorepo to 
 - **Packaging:** Both packages stay private until the owner completes registry, license, legal, and release gates. Root exports are the only public imports. Run `pnpm verify:package-packs`; never publish from this repository or deep-import `dist` internals.
 - **Verification:** Run contracts conformance, Worker unit/integration/stress/open-handle/architecture/public-consumer suites, package pack/install smoke, the example smoke test, and the Orchestrator loopback integration spec. Port-binding tests require permission for ephemeral `127.0.0.1` listeners.
 
+### Python Worker SDK
+
+- **Purpose:** Hosts Python 3.11+ agents through the same asynchronous HTTP contracts using `tenvyr-worker` and the root import `tenvyr_worker`.
+- **Interfaces:** Consumers import only the 12 names in `tenvyr_worker.__all__`. The concrete runtime, schema loaders, authentication, callback, and scheduling modules remain under underscore namespaces. The Worker exposes only `POST /v1/runs`, `GET /health/live`, and `GET /health/ready`.
+- **Rules:** Keep runtime dependencies limited to `aiohttp` and `jsonschema[format-nongpl]`; load the five tracked schemas only with `importlib.resources`; preserve exact-origin callback policy, finite JSON, FIFO capacity, duplicate-before-capacity behavior, serialized-once callback bytes, and one terminal result. The SDK installs no signal handlers. Threads and cancellation-suppressing coroutines may outlive Worker ownership but must never send a late callback.
+- **Packaging:** Version `1.0.0` is private, has no license, and must not be uploaded to PyPI. Wheels and sdists use explicit allowlists, include `py.typed` and exactly five schemas, and must rebuild outside the monorepo without reading `../../contracts`.
+- **Verification:** Run the four pytest categories, Ruff, strict mypy, `scripts/sync-python-worker-schemas.py check`, `scripts/verify-python-worker-package.py`, the example smoke, and the explicit Orchestrator loopback with `TENVYR_PYTHON_EXECUTABLE`. Never claim Python-version or loopback results that were not run.
+
 ### Product Identity and Observability Roadmap
 
 - **Purpose:** Records future OpenTelemetry, W3C propagation, provenance, privacy, cost, dashboard, instrumentation, and framework-adoption direction without making telemetry a source of execution truth.

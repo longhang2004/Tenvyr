@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tenvyr-worker"
+version = "1.0.0"
+description = "Private Python runtime harness for Tenvyr HTTP workers"
+requires-python = ">=3.11"
+classifiers = [
+  "Private :: Do Not Upload",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Typing :: Typed",
+]
+dependencies = [
+  "aiohttp>=3.12,<4",
+  "jsonschema[format-nongpl]>=4.23,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "hatchling>=1.27,<2",
+  "mypy>=1.15,<2",
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.25,<2",
+  "ruff>=0.11,<1",
+]
+
+[tool.hatch.build]
+exclude = [
+  "/.gitignore",
+  "/tests",
+  "/.pytest_cache",
+  "/.mypy_cache",
+  "/.ruff_cache",
+  "/.venv",
+  "**/__pycache__",
+  "**/*.py[cod]",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenvyr_worker"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/pyproject.toml", "/src/tenvyr_worker"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+  "conformance: shared language-neutral protocol fixtures",
+  "stress: concurrency and capacity stress coverage",
+  "lifecycle: lifecycle and resource-ownership coverage",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+packages = ["tenvyr_worker"]
+warn_unreachable = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"

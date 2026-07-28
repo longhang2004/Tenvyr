@@ -9,6 +9,13 @@ build/
 .next/
 out/
 target/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
 *.class
 *.jar
 *.war
@@ -61,3 +68,7 @@ Thumbs.db
 .clauderules
 .cursorrules
 .antigravityrules
+
+# Local owner artifacts
+/AgentWeave.zip
+/scripts/compress.sh

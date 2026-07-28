@@ -11,7 +11,9 @@
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
     "pretest": "pnpm --filter @tenvyr/contracts build && pnpm --filter @tenvyr/worker build",
-    "test": "jest"
+    "test": "jest",
+    "pretest:python-worker-loopback": "pnpm --filter @tenvyr/contracts build",
+    "test:python-worker-loopback": "jest --config jest.python-worker.config.js --runInBand"
   },
   "dependencies": {
     "@tenvyr/contracts": "workspace:*",

@@ -66,6 +66,7 @@ not implemented by this rename.
 
 - **Agent:** Standalone services consuming tasks from the preserved legacy runtime-v1 topic `agentweave.agent.<agent-name>.task` and producing to `agentweave.agent.<agent-name>.result`. The topic namespace is a compatibility identifier, not active branding.
 - **TypeScript Worker SDK:** `@tenvyr/worker` hosts an asynchronous HTTP agent with typed handlers, bounded execution, idempotency, and signed callbacks.
+- **Python Worker SDK:** `tenvyr-worker` provides the same private HTTP runtime harness for Python 3.11+, with Python naming, seconds-based configuration, and cooperative thread/coroutine cancellation.
 - **Pipeline:** Declarative DAG defined in YAML coordinating which agents execute, timeouts, retries, and step logic.
 - **Orchestrator:** Reads pipeline definitions, evaluates step conditions, handles step dispatch, and manages failure states.
 - **Execution:** A single workflow runtime run tracking step statuses (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `SKIPPED`).
@@ -103,6 +104,7 @@ This repository includes first-class integrations to optimize AI agent developer
 
 - Node.js (v20+) & `pnpm` (v9+)
 - Java Development Kit (JDK 17+)
+- Python 3.11+ for the private Python Worker SDK
 - Docker & Docker Compose
 
 ### Running Infrastructure
@@ -123,6 +125,7 @@ This repository includes first-class integrations to optimize AI agent developer
 - **Initialize CodeGraph Database:** `pnpm codegraph:init`
 - **Compress Terminal Outputs:** `./scripts/rtk-compress.sh <command>`
 - **Verify packed SDKs externally:** `pnpm verify:package-packs`
+- **Verify the Python Worker package externally:** `python scripts/verify-python-worker-package.py`
 
 ---
 
@@ -137,4 +140,6 @@ This repository includes first-class integrations to optimize AI agent developer
 - [packages/contracts](packages/contracts): Public TypeScript types and validators for the language-neutral agent protocol.
 - [packages/worker](packages/worker): TypeScript HTTP Worker SDK.
 - [examples/typescript-http-worker](examples/typescript-http-worker): Runnable typed Worker SDK example.
+- [sdks/python-worker](sdks/python-worker): Private typed Python Worker SDK.
+- [examples/python-http-worker](examples/python-http-worker): Runnable framework-free Python Worker example.
 - [docs](docs): Markdown specifications covering all mechanics, including [Agent Rules](docs/agent-rules.md).

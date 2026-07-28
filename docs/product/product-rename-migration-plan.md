@@ -5,8 +5,9 @@
 - Target identity: **Tenvyr**.
 - Local repository migration: **implemented**.
 - Decision status: **Owner-approved for repository implementation**.
+- Private local Python Worker SDK: **implemented with separate owner authorization**.
 - External reservations, public license, legal clearance, repository rename,
-  publication, and Python SDK: **owner action required**.
+  and publication: **owner action required**.
 - Local package manifests were intentionally renamed to the Tenvyr identity;
   no external package-registry publication, image-registry, domain, or remote
   repository mutation was performed.
@@ -15,7 +16,7 @@
 This status report records the hard rename of public identity while preserving
 compatibility-sensitive wire and deployment identifiers. It is not
 authorization to publish packages or images, rename the remote repository,
-reserve identities, or start the Python SDK.
+reserve identities, or publish the Python SDK.
 
 ## Canonical target identity
 
@@ -26,8 +27,8 @@ reserve identities, or start the Python SDK.
 | npm scope                     | `@tenvyr`                                   | Implemented locally   |
 | TypeScript contracts package  | `@tenvyr/contracts`                         | Implemented locally   |
 | TypeScript Worker package     | `@tenvyr/worker`                            | Implemented locally   |
-| Python distribution           | `tenvyr-worker`                             | Owner action required |
-| Python import                 | `tenvyr_worker`                             | Owner action required |
+| Python distribution           | `tenvyr-worker`                             | Implemented privately |
+| Python import                 | `tenvyr_worker`                             | Implemented locally   |
 | Future TypeScript packages    | `@tenvyr/cli`, `@tenvyr/otel`               | Not implemented       |
 | Public Worker factory         | `createTenvyrWorker`                        | Implemented           |
 | Public Worker interface       | `TenvyrWorker`                              | Implemented           |
@@ -178,13 +179,14 @@ resolution of `@agentweave/worker`. Packed artifacts reject the old
 scope/API/User-Agent while allowing the protocol v1 HMAC strings. A successful
 pack/install check is not permission to publish.
 
-### 11. Python Worker SDK — owner action required
+### 11. Python Worker SDK — implemented privately; publish blocked
 
-Do not scaffold, implement, or publish the Python SDK until the owner completes
-external identity reservations, selects the license, finishes legal review,
-renames the repository, and separately authorizes Python work. At that point,
-use distribution `tenvyr-worker`, import `tenvyr_worker`, and the existing
-language-neutral conformance fixtures.
+The owner separately authorized the local private implementation. Distribution
+`tenvyr-worker`, import `tenvyr_worker`, the framework-free example, package
+verifier, 52 shared conformance cases, and explicit Orchestrator loopback are
+implemented without publication. `Private :: Do Not Upload`, absent license
+metadata, and the remaining registry/legal/repository gates continue to block
+PyPI and every public release.
 
 ## Compatibility and data-safety record
 
