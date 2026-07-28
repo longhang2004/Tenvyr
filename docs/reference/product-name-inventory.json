@@ -1,0 +1,837 @@
+[
+  {
+    "category": "product-branding",
+    "value": "AgentWeave",
+    "locations": [
+      "README.md",
+      "CLAUDE.md",
+      "contracts/README.md",
+      "contracts/conformance/README.md",
+      "docs/development/agent-rules.md",
+      "docs/development/tooling/persistent-memory.md",
+      "docs/architecture/contracts/agent-protocol-v1.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "frontend/package.json",
+      "frontend/src/app/layout.tsx",
+      "frontend/src/app/page.tsx",
+      "frontend/src/app/dashboard/page.tsx",
+      "scripts/smoke-e2e.mjs",
+      "services/gateway/package.json",
+      "services/gateway/src/app.controller.ts",
+      "services/orchestrator/src/app.controller.ts",
+      "services/agent-runner/src/main/java/com/agentweave/runner/controller/HealthController.java",
+      "services/agent-code-reviewer/src/app.controller.ts",
+      "services/agent-observability/src/app.controller.ts"
+    ],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "historical-reference",
+    "value": "AgentWeave historical and naming-collision references",
+    "locations": [
+      "README.md",
+      "docs/archive/decisions/2026-07-27-product-identity-evaluation.md",
+      "docs/archive/migrations/2026-07-28-agentweave-to-tenvyr.md",
+      "docs/archive/plans/2026-07-26-typescript-worker-sdk.md",
+      "docs/archive/specs/2026-07-26-typescript-worker-sdk-design.md"
+    ],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "preserve",
+    "status": "historical"
+  },
+  {
+    "category": "package-identity",
+    "value": "agentweave",
+    "locations": ["package.json"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "package-identity",
+    "value": "@agentweave/contracts",
+    "locations": [
+      "contracts/README.md",
+      "docs/development/agent-rules.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "docs/archive/migrations/2026-07-28-agentweave-to-tenvyr.md",
+      "docs/archive/plans/2026-07-26-typescript-worker-sdk.md",
+      "docs/archive/specs/2026-07-26-typescript-worker-sdk-design.md",
+      "packages/contracts/package.json",
+      "packages/contracts/README.md",
+      "packages/worker/README.md",
+      "packages/worker/package.json",
+      "packages/worker/src/callback/callback-delivery.ts",
+      "packages/worker/src/execution/execute-run.ts",
+      "packages/worker/src/execution/execution-context.ts",
+      "packages/worker/src/execution/json-value.ts",
+      "packages/worker/src/invocation/canonical-json.ts",
+      "packages/worker/src/lifecycle/worker-lifecycle.ts",
+      "packages/worker/src/public/types.ts",
+      "packages/worker/test/architecture.spec.ts",
+      "packages/worker/test/callback.spec.ts",
+      "packages/worker/test/execution.spec.ts",
+      "packages/worker/test/hardening.spec.ts",
+      "packages/worker/test/idempotency.spec.ts",
+      "packages/worker/test/worker-http.spec.ts",
+      "packages/worker/test/worker-stress.spec.ts",
+      "pnpm-lock.yaml",
+      "scripts/verify-package-packs.mjs",
+      "services/agent-code-reviewer/Dockerfile",
+      "services/agent-code-reviewer/package.json",
+      "services/agent-code-reviewer/src/kafka.service.spec.ts",
+      "services/agent-code-reviewer/src/kafka.service.ts",
+      "services/agent-observability/Dockerfile",
+      "services/agent-observability/package.json",
+      "services/agent-observability/src/kafka.service.spec.ts",
+      "services/agent-observability/src/kafka.service.ts",
+      "services/orchestrator/Dockerfile",
+      "services/orchestrator/package.json",
+      "services/orchestrator/src/agent-adapters/agent-adapter.router.spec.ts",
+      "services/orchestrator/src/agent-adapters/agent-adapter.types.ts",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
+      "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
+      "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts",
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+      "services/orchestrator/src/services/agent-result.service.spec.ts",
+      "services/orchestrator/src/services/agent-result.service.ts",
+      "services/orchestrator/src/services/engine.service.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "package-identity",
+    "value": "@agentweave/worker",
+    "locations": [
+      "CLAUDE.md",
+      "README.md",
+      "docs/development/agent-rules.md",
+      "docs/architecture/transports/http-agent-adapter-v1.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "docs/archive/migrations/2026-07-28-agentweave-to-tenvyr.md",
+      "docs/roadmap/observability-provenance.md",
+      "docs/archive/plans/2026-07-26-typescript-worker-sdk.md",
+      "docs/archive/specs/2026-07-26-typescript-worker-sdk-design.md",
+      "examples/typescript-http-worker/package.json",
+      "examples/typescript-http-worker/src/index.ts",
+      "packages/worker/package.json",
+      "packages/worker/README.md",
+      "packages/worker/test/architecture.spec.ts",
+      "pnpm-lock.yaml",
+      "scripts/verify-package-packs.mjs",
+      "services/orchestrator/package.json",
+      "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "package-identity",
+    "value": "@agentweave/example-typescript-http-worker",
+    "locations": [
+      "examples/typescript-http-worker/package.json",
+      "examples/typescript-http-worker/README.md",
+      "CLAUDE.md",
+      "docs/archive/migrations/2026-07-28-agentweave-to-tenvyr.md"
+    ],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "source-symbol",
+    "value": "createAgentWeaveWorker",
+    "locations": [
+      "packages/worker/src/index.ts",
+      "packages/worker/src/public/create-worker.ts",
+      "packages/worker/README.md",
+      "examples/typescript-http-worker/src/index.ts",
+      "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "source-symbol",
+    "value": "AgentWeaveWorker",
+    "locations": [
+      "packages/worker/src/index.ts",
+      "packages/worker/src/public/types.ts",
+      "packages/worker/src/lifecycle/worker-lifecycle.ts",
+      "examples/typescript-http-worker/src/index.ts",
+      "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "source-symbol",
+    "value": "AgentWeaveWorkerConfig",
+    "locations": [
+      "packages/worker/src/index.ts",
+      "packages/worker/src/public/types.ts",
+      "packages/worker/src/public/create-worker.ts",
+      "packages/worker/src/config/worker-config.validation.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "source-symbol",
+    "value": "AgentWeaveWorkerRuntime",
+    "locations": [
+      "packages/worker/src/lifecycle/worker-lifecycle.ts",
+      "packages/worker/src/public/create-worker.ts"
+    ],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "source-symbol",
+    "value": "AgentWeaveStructuredSuccess",
+    "locations": ["packages/worker/src/execution/execution-context.ts"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_WORKER_TOKEN",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/src/index.ts",
+      "examples/typescript-http-worker/test/smoke.spec.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_BEARER_TOKEN",
+    "locations": ["packages/worker/README.md"],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_CALLBACK_KEY_ID",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/src/index.ts",
+      "examples/typescript-http-worker/test/smoke.spec.ts",
+      "packages/worker/README.md"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_CALLBACK_SECRET",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/src/index.ts",
+      "examples/typescript-http-worker/test/smoke.spec.ts",
+      "packages/worker/README.md"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_CALLBACK_ORIGIN",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/src/index.ts",
+      "examples/typescript-http-worker/test/smoke.spec.ts",
+      "packages/worker/README.md"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_ALLOW_INSECURE_HTTP",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/README.md",
+      "examples/typescript-http-worker/src/index.ts",
+      "examples/typescript-http-worker/test/smoke.spec.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_WORKER_HOST",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/src/index.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "environment-variable",
+    "value": "AGENTWEAVE_WORKER_PORT",
+    "locations": [
+      "examples/typescript-http-worker/.env.example",
+      "examples/typescript-http-worker/src/index.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "wire-protocol",
+    "value": "X-AgentWeave-Key-Id",
+    "locations": [
+      "docs/architecture/transports/http-agent-adapter-v1.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "packages/worker/src/callback/callback-delivery.ts",
+      "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+    ],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "wire-protocol",
+    "value": "X-AgentWeave-Timestamp",
+    "locations": [
+      "docs/architecture/transports/http-agent-adapter-v1.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "packages/worker/src/callback/callback-delivery.ts",
+      "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+    ],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "wire-protocol",
+    "value": "X-AgentWeave-Delivery-Id",
+    "locations": [
+      "docs/architecture/transports/http-agent-adapter-v1.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "packages/worker/src/callback/callback-delivery.ts",
+      "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+    ],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "wire-protocol",
+    "value": "X-AgentWeave-Signature",
+    "locations": [
+      "docs/architecture/transports/http-agent-adapter-v1.md",
+      "docs/architecture/workers/typescript-worker-sdk.md",
+      "packages/worker/src/callback/callback-delivery.ts",
+      "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+    ],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "wire-protocol",
+    "value": "AgentWeave-Worker/1.0.0",
+    "locations": ["packages/worker/src/callback/callback-delivery.ts"],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "wire-protocol",
+    "value": "AgentWeave-Orchestrator/1.0.0",
+    "locations": [
+      "docs/architecture/transports/http-agent-adapter-v1.md",
+      "services/orchestrator/src/agent-adapters/http-agent.adapter.ts"
+    ],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave.agent.<agent>.task",
+    "locations": [
+      "README.md",
+      "CLAUDE.md",
+      "docs/development/agent-rules.md",
+      "docs/architecture/transports/adapter-model.md",
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+      "services/agent-code-reviewer/src/kafka.service.ts",
+      "services/agent-observability/src/kafka.service.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave.agent.<agent>.result",
+    "locations": [
+      "README.md",
+      "CLAUDE.md",
+      "docs/development/agent-rules.md",
+      "docs/architecture/transports/adapter-model.md",
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+      "services/agent-code-reviewer/src/kafka.service.ts",
+      "services/agent-observability/src/kafka.service.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave.orchestrator.execution",
+    "locations": ["CLAUDE.md"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave.orchestrator.cancel",
+    "locations": ["CLAUDE.md"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave.analytics.token_usage",
+    "locations": [
+      "CLAUDE.md",
+      "services/agent-runner/src/main/java/com/agentweave/runner/controller/RunnerController.java"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave-orchestrator",
+    "locations": ["services/orchestrator/src/services/kafka.service.ts"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave-dev",
+    "locations": [".env.example"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave-orchestrator-group",
+    "locations": ["services/orchestrator/src/services/kafka.service.ts"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave-reviewer-group",
+    "locations": ["services/agent-code-reviewer/src/kafka.service.ts"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave-observability-group",
+    "locations": ["services/agent-observability/src/kafka.service.ts"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "kafka-identity",
+    "value": "agentweave-runner-group",
+    "locations": ["services/agent-runner/src/main/resources/application.yml"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "database-schema",
+    "value": "agentweave",
+    "locations": [
+      ".env.example",
+      "docker-compose.yml",
+      "services/orchestrator/src/database/database.provider.ts"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "database-schema",
+    "value": "com.agentweave",
+    "locations": ["services/agent-runner/pom.xml"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "database-schema",
+    "value": "com.agentweave.runner.*",
+    "locations": [
+      "services/agent-runner/src/main/java/com/agentweave/runner/AgentRunnerApplication.java",
+      "services/agent-runner/src/main/java/com/agentweave/runner/controller/HealthController.java",
+      "services/agent-runner/src/main/java/com/agentweave/runner/controller/RunnerController.java",
+      "services/agent-runner/src/main/java/com/agentweave/runner/model/RunRequest.java",
+      "services/agent-runner/src/main/java/com/agentweave/runner/model/RunResponse.java",
+      "services/agent-runner/src/main/java/com/agentweave/runner/service/LlmService.java",
+      "services/agent-runner/src/test/java/com/agentweave/runner/controller/HealthControllerTest.java",
+      "services/agent-runner/src/test/java/com/agentweave/runner/controller/RunnerControllerTest.java"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-net",
+    "locations": [
+      "docker-compose.yml",
+      "docker-compose.showcase.yml",
+      "CLAUDE.md",
+      "docs/development/agent-rules.md"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-postgres",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-redis",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-zookeeper",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-kafka",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-kafka-ui",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-gateway",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-orchestrator",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-agent-runner",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-agent-code-reviewer",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-agent-observability",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "docker-deployment",
+    "value": "agentweave-frontend",
+    "locations": ["docker-compose.yml"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-persistent"
+  },
+  {
+    "category": "repository-path",
+    "value": "AgentWeave/",
+    "locations": [
+      "README.md",
+      "docs/development/tooling/agent-skills.md",
+      "docs/development/tooling/codegraph.md",
+      "docs/development/tooling/output-compression.md"
+    ],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "repository-path",
+    "value": "AgentWeave.zip",
+    "locations": ["AgentWeave.zip", "scripts/compress.sh"],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "preserve",
+    "status": "historical"
+  },
+  {
+    "category": "telemetry-attribute",
+    "value": "agentweave.* (conceptual future telemetry namespace)",
+    "locations": ["docs/roadmap/observability-provenance.md"],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://agentweave.dev/contracts/agent-event.v1.schema.json",
+    "locations": ["contracts/schemas/agent-event.v1.schema.json"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://agentweave.dev/contracts/agent-invocation.v1.schema.json",
+    "locations": [
+      "contracts/schemas/agent-invocation.v1.schema.json",
+      "contracts/schemas/http-agent-run-request.v1.schema.json"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://agentweave.dev/contracts/agent-result.v1.schema.json",
+    "locations": ["contracts/schemas/agent-result.v1.schema.json"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://agentweave.dev/contracts/http-agent-run-accepted.v1.schema.json",
+    "locations": ["contracts/schemas/http-agent-run-accepted.v1.schema.json"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://agentweave.dev/contracts/http-agent-run-request.v1.schema.json",
+    "locations": ["contracts/schemas/http-agent-run-request.v1.schema.json"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://agentweave.dev/",
+    "locations": ["README.md"],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "preserve",
+    "status": "historical"
+  },
+  {
+    "category": "public-url",
+    "value": "https://github.com/arniesaha/agentweave",
+    "locations": [
+      "README.md",
+      "docs/development/agent-rules.md",
+      "docs/roadmap/observability-provenance.md"
+    ],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "preserve",
+    "status": "historical"
+  },
+  {
+    "category": "public-url",
+    "value": "https://github.com/longhang2004/AgentWeave.git",
+    "locations": [
+      "packages/contracts/package.json",
+      "packages/worker/package.json"
+    ],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "public-url",
+    "value": "https://github.com/longhn-lumin/AgentWeave",
+    "locations": ["frontend/src/app/page.tsx"],
+    "publicCompatibilityImpact": "breaking",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "package-identity",
+    "value": "repository and publishConfig release metadata",
+    "locations": [
+      "packages/contracts/package.json",
+      "packages/worker/package.json"
+    ],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "deprecate",
+    "status": "removed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave-conformance-secret",
+    "locations": ["contracts/conformance/callback-signatures/vectors.json"],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave-verification-hardening",
+    "locations": [
+      "services/agent-code-reviewer/src/kafka.service.spec.ts",
+      "services/agent-runner/src/test/java/com/agentweave/runner/service/LlmServiceTest.java"
+    ],
+    "publicCompatibilityImpact": "none",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave",
+    "locations": ["services/orchestrator/src/services/engine.service.spec.ts"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave-package-smoke-",
+    "locations": ["scripts/verify-package-packs.mjs"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave-packed-consumer",
+    "locations": ["scripts/verify-package-packs.mjs"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave-${name}-${sourceManifests[name].version}.tgz",
+    "locations": ["scripts/verify-package-packs.mjs"],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "AgentWeave Worker public API assertions",
+    "locations": [
+      "packages/worker/test/public-api.spec.ts",
+      "packages/worker/test/worker-http.spec.ts",
+      "packages/worker/test/worker-stress.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts"
+    ],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "rename",
+    "status": "renamed"
+  },
+  {
+    "category": "test-fixture",
+    "value": "X-AgentWeave-* callback header assertions",
+    "locations": [
+      "packages/worker/test/callback.spec.ts",
+      "packages/worker/test/hardening.spec.ts",
+      "packages/worker/test/worker-http.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-python-worker.integration.spec.ts",
+      "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
+    ],
+    "publicCompatibilityImpact": "wire-compatible",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  },
+  {
+    "category": "test-fixture",
+    "value": "agentweave.agent.* Kafka topic fixtures",
+    "locations": [
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+      "services/orchestrator/src/services/kafka.service.spec.ts",
+      "services/agent-observability/src/kafka.service.spec.ts"
+    ],
+    "publicCompatibilityImpact": "internal",
+    "migrationRecommendation": "preserve",
+    "status": "preserved-wire-v1"
+  }
+]

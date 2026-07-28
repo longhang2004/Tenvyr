@@ -60,6 +60,9 @@ Thumbs.db
 *.sqlite
 .codegraph/
 
+# Local documentation and agent scratch artifacts
+docs/_scratch/
+
 # Skills and dynamic agent config
 .claude/
 .cursor/

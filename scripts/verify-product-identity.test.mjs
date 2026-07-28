@@ -33,7 +33,7 @@ test("active branding, package, API, User-Agent, and environment names are viola
         path: "src/consumer.ts",
         text: [
           `import { create${oldName}Worker } from "@${oldLower}/worker";`,
-          `const userAgent = "${oldName}-Worker/1.0.0";`,
+          `const userAgent = "${oldName}-Worker/0.1.0";`,
           `const token = process.env.${oldUpper}_WORKER_TOKEN;`,
         ].join("\n"),
       },
@@ -46,8 +46,8 @@ test("active branding, package, API, User-Agent, and environment names are viola
     [null, null, null, null, null],
   );
   assert.equal(
-    audit.findings.find(({ match }) => match.includes("/1.0.0"))?.match,
-    `${oldName}-Worker/1.0.0`,
+    audit.findings.find(({ match }) => match.includes("/0.1.0"))?.match,
+    `${oldName}-Worker/0.1.0`,
   );
 });
 
@@ -67,7 +67,7 @@ test("each approved legacy-reference category is explicit", () => {
         text: `container_name: ${oldLower}-postgres`,
       },
       {
-        path: "docs/product/product-identity-decision.md",
+        path: "docs/archive/decisions/2026-07-27-product-identity-evaluation.md",
         text: `${oldName} collides with existing uses of the same or a closely related name.`,
       },
       {
@@ -79,8 +79,12 @@ test("each approved legacy-reference category is explicit", () => {
         text: `expect(value).toBe("${oldLower}-postgres")`,
       },
       {
-        path: "docs/product/product-name-inventory.json",
+        path: "docs/reference/product-name-inventory.json",
         text: `{"value":"@${oldLower}/worker"}`,
+      },
+      {
+        path: ".gitignore",
+        text: `/${oldName}.zip`,
       },
     ],
     [],
@@ -92,8 +96,8 @@ test("each approved legacy-reference category is explicit", () => {
   );
 });
 
-test("README historical note allowlist is exact", () => {
-  const approved = auditEntries(
+test("README legacy identity references are violations", () => {
+  const audit = auditEntries(
     [
       {
         path: "README.md",
@@ -110,22 +114,8 @@ test("README historical note allowlist is exact", () => {
     ],
     [],
   );
-  assert(approved.findings.every(({ category }) => category === "historical"));
-
-  const active = auditEntries(
-    [
-      {
-        path: "README.md",
-        text: [
-          `${oldName} is the active product at https://${oldLower}.dev.`,
-          `Install the active arniesaha/${oldLower} distribution.`,
-        ].join("\n"),
-      },
-    ],
-    [],
-  );
-  assert(active.findings.length >= 3);
-  assert(active.findings.every(({ category }) => category === null));
+  assert(audit.findings.length >= 3);
+  assert(audit.findings.every(({ category }) => category === null));
 });
 
 test("allowlists reject near misses, wrong paths, comments, and marker text", () => {
@@ -170,7 +160,36 @@ test("allowlists reject near misses, wrong paths, comments, and marker text", ()
   assert(audit.findings.every(({ category }) => category === null));
 });
 
-test("an approved assertion does not allow nearby active legacy branding", () => {
+test("showcase network attachment is exact deployment compatibility", () => {
+  const audit = auditEntries(
+    [
+      {
+        path: "docker-compose.showcase.yml",
+        text: `      - ${oldLower}-net`,
+      },
+      {
+        path: "docker-compose.showcase.yml",
+        text: `      - ${oldLower}-net-extra`,
+      },
+      {
+        path: "docker-compose.showcase.yml",
+        text: `      # - ${oldLower}-net`,
+      },
+      {
+        path: "docker-compose.copied.yml",
+        text: `      - ${oldLower}-net`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    [null, "persistent-deployment", null, null],
+  );
+});
+
+test("approved negative assertions do not allow nearby active legacy branding", () => {
   const audit = auditEntries(
     [
       {
@@ -187,12 +206,63 @@ test("an approved assertion does not allow nearby active legacy branding", () =>
           `const activePackage = "@${oldLower}/contracts";`,
         ].join("\n"),
       },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    ["negative-test", null, "negative-test", null],
+  );
+});
+
+test("only the four exact archive records allow historical identity", () => {
+  const approvedPaths = [
+    "docs/archive/decisions/2026-07-27-product-identity-evaluation.md",
+    `docs/archive/migrations/2026-07-28-${oldLower}-to-tenvyr.md`,
+    "docs/archive/plans/2026-07-26-typescript-worker-sdk.md",
+    "docs/archive/specs/2026-07-26-typescript-worker-sdk-design.md",
+  ];
+  const audit = auditEntries(
+    [
+      ...approvedPaths.map((path) => ({ path, text: oldName })),
+      { path: "docs/archive/notes.md", text: oldName },
       {
-        path: "docs/product/product-rename-migration-plan.md",
+        path: "docs/archive/plans/2026-07-27-typescript-worker-sdk.md",
+        text: oldName,
+      },
+      {
+        path: "docs/history/2026-07-26-typescript-worker-sdk.md",
+        text: oldName,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    ["historical", "historical", null, "historical", null, "historical", null],
+  );
+});
+
+test("current wire and Kafka documentation allow only exact compatibility values", () => {
+  const audit = auditEntries(
+    [
+      {
+        path: "docs/architecture/transports/http-agent-adapter-v1.md",
+        text: [`X-${oldName}-Signature`, `X-${oldName}-Unexpected`].join("\n"),
+      },
+      {
+        path: "docs/architecture/transports/kafka-runtime-v1.md",
         text: [
-          `- Compose service keys, \`${oldLower}-*\` container names, \`${oldLower}-net\`,`,
-          `- Active deployment brand: ${oldName}.`,
+          `${oldLower}.agent.<agent>.task`,
+          `${oldLower}-reviewer-group`,
+          `${oldLower}.agent.unapproved.task`,
         ].join("\n"),
+      },
+      {
+        path: "docs/architecture/transports/copied-http.md",
+        text: `X-${oldName}-Signature`,
       },
     ],
     [],
@@ -201,14 +271,39 @@ test("an approved assertion does not allow nearby active legacy branding", () =>
   assert.deepEqual(
     audit.findings.map(({ category }) => category),
     [
-      "historical",
-      "historical",
       null,
-      "negative-test",
+      "wire-protocol-v1",
       null,
-      "negative-test",
+      "kafka-runtime-v1",
+      "kafka-runtime-v1",
       null,
     ],
+  );
+});
+
+test("documentation-verifier stale-name patterns are exact negative checks", () => {
+  const audit = auditEntries(
+    [
+      {
+        path: "scripts/verify-docs.mjs",
+        text: [
+          `/@${oldLower}\\/(?:contracts|worker|example-typescript-http-worker)\\b/gi,`,
+          `/\\bcreate${oldName}Worker\\b/g,`,
+          `/\\b${oldName}(?:Worker|WorkerConfig|WorkerRuntime|StructuredSuccess)\\b/g,`,
+          `const active = "@${oldLower}/worker";`,
+        ].join("\n"),
+      },
+      {
+        path: "scripts/copied-docs-verifier.mjs",
+        text: `/@${oldLower}\\/(?:contracts|worker)\\b/gi,`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    [null, "negative-test", "negative-test", "negative-test", null],
   );
 });
 

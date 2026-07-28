@@ -48,3 +48,15 @@ The reader has ADHD. Shape every response so it can be acted on:
 9. Cap lists at 5 items.
 10. No preamble, no recaps, no closing pleasantries.
 
+---
+
+# Documentation lifecycle
+
+- Current contracts, code, and tests take precedence over prose; use
+  `docs/README.md` as the documentation index after those executable sources.
+- Historical plans and specifications are context, not current API references.
+- Every implementation change updates current documentation and
+  `docs/reference/implementation-status.json`, then passes the configured
+  documentation and identity verifiers.
+- Accepted/in-progress plans belong in `docs/plans/active/`; completed plans move
+  to `docs/archive/`; local scratch work belongs in ignored `docs/_scratch/`.

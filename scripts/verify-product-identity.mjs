@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const legacyName = ["Agent", "Weave"].join("");
 const legacyLower = legacyName.toLowerCase();
 const legacyUpper = legacyName.toUpperCase();
-const inventoryPath = "docs/product/product-name-inventory.json";
+const inventoryPath = "docs/reference/product-name-inventory.json";
 const untrackedOwnerArtifacts = new Set([
   `${legacyName}.zip`,
   "scripts/compress.sh",
@@ -108,133 +108,69 @@ const packageNames = [
   `@${legacyLower}/example-typescript-http-worker`,
 ];
 const userAgents = [
-  `${legacyName}-Worker/1.0.0`,
-  `${legacyName}-Orchestrator/1.0.0`,
+  `${legacyName}-Worker/0.1.0`,
+  `${legacyName}-Orchestrator/0.1.0`,
 ];
+const historicalPaths = new Set([
+  "docs/archive/decisions/2026-07-27-product-identity-evaluation.md",
+  `docs/archive/migrations/2026-07-28-${legacyLower}-to-tenvyr.md`,
+  "docs/archive/plans/2026-07-26-typescript-worker-sdk.md",
+  "docs/archive/specs/2026-07-26-typescript-worker-sdk-design.md",
+]);
 const historicalReferenceLines = [
   [
-    "README.md",
-    `${legacyName} is the former internal name for Tenvyr. That name is also used by the independent`,
+    "docs/archive/README.md",
+    `- [${legacyName} to Tenvyr migration](migrations/2026-07-28-${legacyLower}-to-tenvyr.md)`,
     legacyName,
   ],
   [
-    "README.md",
-    "[`arniesaha/" +
-      legacyLower +
-      "`](https://github.com/arniesaha/" +
-      legacyLower +
-      ") project; there",
-    legacyLower,
+    "docs/archive/README.md",
+    `- [${legacyName} to Tenvyr migration](migrations/2026-07-28-${legacyLower}-to-tenvyr.md)`,
+    `${legacyLower}-to-tenvyr.md`,
   ],
   [
-    "docs/product/product-identity-decision.md",
-    `${legacyName} collides with existing uses of the same or a closely related name.`,
+    "docs/product/identity.md",
+    `branding. Protocol v1 still uses the four exact \`X-${legacyName}-*\` HMAC headers;`,
     legacyName,
   ],
   [
-    "docs/product/product-identity-decision.md",
-    `Protocol v1 continues to use the four existing \`X-${legacyName}-*\` HMAC headers.`,
-    legacyName,
+    "docs/product/identity.md",
+    `and [rename migration record](../archive/migrations/2026-07-28-${legacyLower}-to-tenvyr.md).`,
+    `${legacyLower}-to-tenvyr.md`,
   ],
+];
+const documentedJavaSourceValues = new Set(
   [
-    "docs/product/product-rename-migration-plan.md",
-    `name, the independent public ${legacyName} project, dated Worker design records,`,
-    legacyName,
-  ],
+    `${legacyLower}/runner/controller/RunnerController.java`,
+    `${legacyLower}/runner/service/LlmService.java`,
+    `${legacyLower}/runner/controller/RunnerControllerTest.java`,
+    `${legacyLower}/runner/service/LlmServiceTest.java`,
+  ].map((value) => value.toLowerCase()),
+);
+const documentedJavaSourcePaths = new Set([
+  "docs/architecture/agents-and-runners.md",
+  "docs/operations/configuration.md",
+]);
+const documentedDeploymentReferenceLines = [
   [
-    "docs/product/product-rename-migration-plan.md",
-    `or this rename audit. ${legacyName} is not an active alias.`,
-    legacyName,
-  ],
-  [
-    "docs/product/product-rename-migration-plan.md",
-    `- root package \`${legacyLower}\` to \`tenvyr\`;`,
-    legacyLower,
-  ],
-  [
-    "docs/product/product-rename-migration-plan.md",
-    `\`https://${legacyLower}.dev/contracts/...\` identities were removed without`,
-    `${legacyLower}.dev/contracts/...`,
-  ],
-  [
-    "docs/product/product-rename-migration-plan.md",
-    `- the exact four \`X-${legacyName}-*\` HMAC headers in protocol v1;`,
-    legacyName,
-  ],
-  [
-    "docs/product/product-rename-migration-plan.md",
-    `- PostgreSQL database/default \`${legacyLower}\`, schemas, tables, and data;`,
-    legacyLower,
-  ],
-  [
-    "docs/product/product-rename-migration-plan.md",
-    `- Java namespace and source tree \`com.${legacyLower}\`; and`,
+    "docs/architecture/agents-and-runners.md",
+    `namespace \`com.${legacyLower}\`.`,
     `com.${legacyLower}`,
   ],
   [
-    "docs/product/product-rename-migration-plan.md",
-    `- Compose service keys, \`${legacyLower}-*\` container names, \`${legacyLower}-net\`,`,
-    `${legacyLower}-*`,
+    "docs/operations/configuration.md",
+    `| \`POSTGRES_DB\`                        | Optional; legacy compatibility default \`${legacyLower}\`.                                               |`,
+    legacyLower,
   ],
   [
-    "docs/product/product-rename-migration-plan.md",
-    `- Compose service keys, \`${legacyLower}-*\` container names, \`${legacyLower}-net\`,`,
-    `${legacyLower}-net`,
+    "docs/operations/configuration.md",
+    `Kafka topic, consumer-group, client-ID, database, Docker network, and Java package values retaining \`${legacyLower}\` are protocol or deployment compatibility identifiers. Do not rename them as branding cleanup.`,
+    legacyLower,
   ],
   [
-    "docs/product/product-rename-migration-plan.md",
-    `resolution of \`@${legacyLower}/worker\`. Packed artifacts reject the old`,
-    `@${legacyLower}/worker`,
-  ],
-  [
-    "docs/product/product-rename-migration-plan.md",
-    `- The user-owned untracked \`${legacyName}.zip\` and \`scripts/compress.sh\` artifacts`,
-    legacyName,
-  ],
-  [
-    "docs/superpowers/plans/2026-07-26-typescript-worker-sdk.md",
-    `\`@${legacyLower}/worker\` package matching ${legacyName} HTTP protocol v1.`,
-    `@${legacyLower}/worker`,
-  ],
-  [
-    "docs/superpowers/plans/2026-07-26-typescript-worker-sdk.md",
-    `\`@${legacyLower}/worker\` package matching ${legacyName} HTTP protocol v1.`,
-    legacyName,
-  ],
-  [
-    "docs/superpowers/plans/2026-07-26-typescript-worker-sdk.md",
-    `\`@${legacyLower}/contracts\` exports cross the package boundary.`,
-    `@${legacyLower}/contracts`,
-  ],
-  [
-    "docs/superpowers/plans/2026-07-26-typescript-worker-sdk.md",
-    `2. Scaffold \`@${legacyLower}/worker\`, exact public exports, strict declarations, public consumer`,
-    `@${legacyLower}/worker`,
-  ],
-  [
-    "docs/superpowers/specs/2026-07-26-typescript-worker-sdk-design.md",
-    `\`@${legacyLower}/worker\` is a standalone Node.js runtime harness for HTTP agents. It accepts`,
-    `@${legacyLower}/worker`,
-  ],
-  [
-    "docs/superpowers/specs/2026-07-26-typescript-worker-sdk-design.md",
-    `- \`create${legacyName}Worker\``,
-    `create${legacyName}Worker`,
-  ],
-  [
-    "docs/superpowers/specs/2026-07-26-typescript-worker-sdk-design.md",
-    `- \`${legacyName}Worker\``,
-    `${legacyName}Worker`,
-  ],
-  [
-    "docs/superpowers/specs/2026-07-26-typescript-worker-sdk-design.md",
-    `- \`${legacyName}WorkerConfig\``,
-    `${legacyName}WorkerConfig`,
-  ],
-  [
-    "docs/superpowers/specs/2026-07-26-typescript-worker-sdk-design.md",
-    `The Worker depends only on \`@${legacyLower}/contracts\`. Orchestrator HTTP behavior, Kafka,`,
-    `@${legacyLower}/contracts`,
+    "docs/product/identity.md",
+    `Java namespace \`com.${legacyLower}\` also remain unchanged pending separately approved`,
+    `com.${legacyLower}`,
   ],
 ];
 const compatibilityValues = new Set([
@@ -245,8 +181,8 @@ const compatibilityValues = new Set([
   `${legacyLower}/runner/controller/RunnerController.java`,
 ]);
 const wireProtocolPaths = new Set([
-  "docs/architecture/http-agent-adapter.md",
-  "docs/architecture/typescript-worker-sdk.md",
+  "docs/architecture/transports/http-agent-adapter-v1.md",
+  "docs/architecture/workers/typescript-worker-sdk.md",
   "packages/worker/src/callback/callback-delivery.ts",
   "packages/worker/test/hardening.spec.ts",
   "packages/worker/test/worker-http.spec.ts",
@@ -263,7 +199,10 @@ const kafkaPathRules = new Map([
   [`${legacyLower}-dev`, new Set([".env.example"])],
   [
     `${legacyLower}-orchestrator`,
-    new Set(["services/orchestrator/src/services/kafka.service.ts"]),
+    new Set([
+      "docs/operations/configuration.md",
+      "services/orchestrator/src/services/kafka.service.ts",
+    ]),
   ],
   [
     `${legacyLower}-orchestrator-group`,
@@ -271,11 +210,19 @@ const kafkaPathRules = new Map([
   ],
   [
     `${legacyLower}-reviewer-group`,
-    new Set(["services/agent-code-reviewer/src/kafka.service.ts"]),
+    new Set([
+      "docs/architecture/agents-and-runners.md",
+      "docs/architecture/transports/kafka-runtime-v1.md",
+      "services/agent-code-reviewer/src/kafka.service.ts",
+    ]),
   ],
   [
     `${legacyLower}-observability-group`,
-    new Set(["services/agent-observability/src/kafka.service.ts"]),
+    new Set([
+      "docs/architecture/agents-and-runners.md",
+      "docs/architecture/transports/kafka-runtime-v1.md",
+      "services/agent-observability/src/kafka.service.ts",
+    ]),
   ],
   [
     `${legacyLower}-runner-group`,
@@ -297,6 +244,7 @@ const kafkaPathRules = new Map([
     `${legacyLower}.agent.code-reviewer.task`,
     new Set([
       "CLAUDE.md",
+      "docs/architecture/agents-and-runners.md",
       "services/agent-code-reviewer/src/kafka.service.ts",
       "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
       "services/orchestrator/src/services/kafka.service.spec.ts",
@@ -306,6 +254,7 @@ const kafkaPathRules = new Map([
     `${legacyLower}.agent.code-reviewer.result`,
     new Set([
       "CLAUDE.md",
+      "docs/architecture/agents-and-runners.md",
       "services/agent-code-reviewer/src/kafka.service.ts",
       "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
     ]),
@@ -313,6 +262,7 @@ const kafkaPathRules = new Map([
   [
     `${legacyLower}.agent.observability.task`,
     new Set([
+      "docs/architecture/agents-and-runners.md",
       "services/agent-observability/src/kafka.service.ts",
       "frontend/src/app/page.tsx",
     ]),
@@ -320,6 +270,7 @@ const kafkaPathRules = new Map([
   [
     `${legacyLower}.agent.observability.result`,
     new Set([
+      "docs/architecture/agents-and-runners.md",
       "services/agent-observability/src/kafka.service.spec.ts",
       "services/agent-observability/src/kafka.service.ts",
       "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
@@ -329,6 +280,7 @@ const kafkaPathRules = new Map([
     `${legacyLower}.analytics.token_usage`,
     new Set([
       "CLAUDE.md",
+      "docs/architecture/agents-and-runners.md",
       `${javaPackageRoot}/controller/RunnerController.java`,
     ]),
   ],
@@ -336,11 +288,19 @@ const kafkaPathRules = new Map([
   [`${legacyLower}.orchestrator.cancel`, new Set(["CLAUDE.md"])],
   [
     `${legacyLower}.agent.<agent>.task`,
-    new Set(["docs/agent-rules.md", "docs/architecture/agent-adapter.md"]),
+    new Set([
+      "docs/architecture/transports/adapter-model.md",
+      "docs/architecture/transports/kafka-runtime-v1.md",
+      "docs/development/agent-rules.md",
+    ]),
   ],
   [
     `${legacyLower}.agent.<agent>.result`,
-    new Set(["docs/agent-rules.md", "docs/architecture/agent-adapter.md"]),
+    new Set([
+      "docs/architecture/transports/adapter-model.md",
+      "docs/architecture/transports/kafka-runtime-v1.md",
+      "docs/development/agent-rules.md",
+    ]),
   ],
   [
     `${legacyLower}.agent.<agent-name>.task`,
@@ -376,6 +336,7 @@ export const allowedCategories = Object.freeze([
   "negative-test",
   "compatibility-test",
   "identity-inventory",
+  "owner-artifact",
 ]);
 
 export const requiredLegacyIdentifiers = Object.freeze([
@@ -699,6 +660,13 @@ export function classifyMatch({ path, line, match }) {
   const normalizedMatch = match.toLowerCase();
 
   if (normalizedPath === inventoryPath) return "identity-inventory";
+  if (
+    normalizedPath === ".gitignore" &&
+    line.trim() === `/${legacyName}.zip` &&
+    match === legacyName
+  ) {
+    return "owner-artifact";
+  }
   if (isHistoricalReference(normalizedPath, line, match)) {
     return "historical";
   }
@@ -882,6 +850,23 @@ function isApprovedWireHeader(path, line, match) {
 }
 
 function isApprovedNegativeAssertion(path, line, match) {
+  if (path === "scripts/verify-docs.mjs") {
+    const approvedLines = [
+      [
+        `/@${legacyLower}\\/(?:contracts|worker|example-typescript-http-worker)\\b/gi,`,
+        legacyLower,
+      ],
+      [`/\\bcreate${legacyName}Worker\\b/g,`, `bcreate${legacyName}Worker`],
+      [
+        `/\\b${legacyName}(?:Worker|WorkerConfig|WorkerRuntime|StructuredSuccess)\\b/g,`,
+        `b${legacyName}`,
+      ],
+    ];
+    return approvedLines.some(
+      ([approvedLine, approvedMatch]) =>
+        approvedLine === line.trim() && approvedMatch === match,
+    );
+  }
   if (path === "packages/worker/test/public-api.spec.ts") {
     const approvedLines = [
       [
@@ -940,6 +925,31 @@ function isApprovedNegativeAssertion(path, line, match) {
         approvedLine === line.trim() && approvedMatch === match,
     );
   }
+  if (path === "scripts/verify-docs.test.mjs") {
+    const approvedLines = [
+      [`historical_product_name: ${legacyName}`, legacyName],
+      [
+        `"See the [numeric policy](json-interoperability.md). The legacy \`X-${legacyName}-Signature\` header remains wire-compatible.",`,
+        `X-${legacyName}-Signature`,
+      ],
+      [
+        `historical("Completed plan", "${legacyName} was the historical product name."),`,
+        legacyName,
+      ],
+      [
+        `"Install \`@${legacyLower}/worker\` with \`create${legacyName}Worker\`.",`,
+        `@${legacyLower}/worker`,
+      ],
+      [
+        `"Install \`@${legacyLower}/worker\` with \`create${legacyName}Worker\`.",`,
+        `create${legacyName}Worker`,
+      ],
+    ];
+    return approvedLines.some(
+      ([approvedLine, approvedMatch]) =>
+        approvedLine === line.trim() && approvedMatch === match,
+    );
+  }
   return (
     /schema-identity\.(?:spec|test)\.[cm]?[jt]s$/.test(path) &&
     match.startsWith(`${legacyLower}.dev`) &&
@@ -948,6 +958,7 @@ function isApprovedNegativeAssertion(path, line, match) {
 }
 
 function isHistoricalReference(path, line, match) {
+  if (historicalPaths.has(path)) return true;
   if (
     historicalReferenceLines.some(
       ([approvedPath, approvedLine, approvedMatch]) =>
@@ -962,6 +973,22 @@ function isHistoricalReference(path, line, match) {
 }
 
 function isPersistentIdentifier(path, line, match) {
+  if (
+    documentedJavaSourcePaths.has(path) &&
+    documentedJavaSourceValues.has(match)
+  ) {
+    return true;
+  }
+  if (
+    documentedDeploymentReferenceLines.some(
+      ([approvedPath, approvedLine, approvedMatch]) =>
+        path === approvedPath &&
+        line.trim() === approvedLine &&
+        match === approvedMatch,
+    )
+  ) {
+    return true;
+  }
   if (
     (path === "services/agent-runner/pom.xml" ||
       path.startsWith(`${javaPackageRoot}/`) ||
@@ -990,6 +1017,12 @@ function isPersistentIdentifier(path, line, match) {
     return (
       dockerIdentifiers.has(match) && trimmed === `container_name: ${match}`
     );
+  }
+  if (
+    path === "docker-compose.showcase.yml" &&
+    match === `${legacyLower}-net`
+  ) {
+    return line.trim() === `- ${legacyLower}-net`;
   }
   if (match === legacyLower) {
     if (path === ".env.example") {

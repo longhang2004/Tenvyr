@@ -1,0 +1,283 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "contracts-v1",
+      "status": "implemented",
+      "sources": ["contracts/schemas", "packages/contracts/src"],
+      "tests": ["packages/contracts/test", "contracts/conformance"],
+      "docs": [
+        "docs/architecture/contracts/agent-protocol-v1.md",
+        "docs/architecture/contracts/json-interoperability.md"
+      ],
+      "limitations": [
+        "Protocol evolution beyond schemaVersion 1 is not implemented"
+      ]
+    },
+    {
+      "id": "kafka-agent-adapter",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+        "services/orchestrator/src/services/kafka.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+        "services/orchestrator/src/services/kafka.service.spec.ts"
+      ],
+      "docs": ["docs/architecture/transports/kafka-runtime-v1.md"],
+      "limitations": [
+        "Kafka v1 topics and consumer identities remain compatibility identifiers"
+      ]
+    },
+    {
+      "id": "http-agent-adapter",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/agent-adapters/http-agent.adapter.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
+        "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/transports/http-agent-adapter-v1.md"],
+      "limitations": [
+        "Callback replay protection and dispatch state are process-local"
+      ]
+    },
+    {
+      "id": "typescript-worker-sdk",
+      "status": "implemented",
+      "sources": ["packages/worker/src"],
+      "tests": ["packages/worker/test"],
+      "docs": ["docs/architecture/workers/typescript-worker-sdk.md"],
+      "limitations": [
+        "Queue, idempotency, and callback state are process-local"
+      ]
+    },
+    {
+      "id": "python-worker-sdk",
+      "status": "implemented",
+      "sources": ["sdks/python-worker/src/tenvyr_worker"],
+      "tests": ["sdks/python-worker/tests"],
+      "docs": ["docs/architecture/workers/python-worker-sdk.md"],
+      "limitations": [
+        "Queue, idempotency, and callback state are process-local",
+        "Thread cancellation is cooperative"
+      ]
+    },
+    {
+      "id": "json-numeric-interoperability",
+      "status": "implemented",
+      "sources": [
+        "packages/contracts/src/validation.ts",
+        "sdks/python-worker/src/tenvyr_worker/_protocol/json_value.py"
+      ],
+      "tests": [
+        "packages/contracts/test/json-numbers.spec.ts",
+        "sdks/python-worker/tests/test_schema_protocol.py"
+      ],
+      "docs": ["docs/architecture/contracts/json-interoperability.md"],
+      "limitations": [
+        "Exact cross-language decimal equality is not guaranteed for non-integer floats"
+      ]
+    },
+    {
+      "id": "gateway",
+      "status": "implemented",
+      "sources": ["services/gateway/src"],
+      "tests": ["services/gateway/src/app.controller.spec.ts"],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Thin HTTP and WebSocket relay; no production agent-memory API"
+      ]
+    },
+    {
+      "id": "orchestrator-pipeline-engine",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/services",
+        "services/orchestrator/src/entities"
+      ],
+      "tests": [
+        "services/orchestrator/src/services/engine.service.spec.ts",
+        "services/orchestrator/src/services/agent-result.service.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Durable callback outbox and remote cancellation are not implemented"
+      ]
+    },
+    {
+      "id": "java-agent-runner",
+      "status": "implemented",
+      "sources": ["services/agent-runner/src/main/java"],
+      "tests": ["services/agent-runner/src/test/java"],
+      "docs": [
+        "docs/architecture/agents-and-runners.md",
+        "docs/showcase/using-model-providers.md"
+      ],
+      "limitations": [
+        "Provider HTTP is unit-tested with mocks; live APIs are not called in CI",
+        "Token usage is estimated and labeled usageSource=estimated"
+      ]
+    },
+    {
+      "id": "code-reviewer-agent",
+      "status": "implemented",
+      "sources": ["services/agent-code-reviewer/src"],
+      "tests": [
+        "services/agent-code-reviewer/src/app.controller.spec.ts",
+        "services/agent-code-reviewer/src/kafka.service.spec.ts"
+      ],
+      "docs": ["docs/architecture/agents-and-runners.md"],
+      "limitations": [
+        "Kafka-specialized service; not a general framework integration"
+      ]
+    },
+    {
+      "id": "observability-agent",
+      "status": "implemented",
+      "sources": ["services/agent-observability/src"],
+      "tests": [
+        "services/agent-observability/src/app.controller.spec.ts",
+        "services/agent-observability/src/kafka.service.spec.ts"
+      ],
+      "docs": ["docs/architecture/agents-and-runners.md"],
+      "limitations": [
+        "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
+      ]
+    },
+    {
+      "id": "frontend-dashboard",
+      "status": "implemented",
+      "sources": ["frontend/src/app"],
+      "tests": ["frontend/src/app/dashboard/safe-preview.test.mjs"],
+      "docs": ["docs/architecture/overview.md", "docs/showcase/demo-guide.md"],
+      "limitations": [
+        "Safe-preview logic has a focused test; end-to-end UI behavior is exercised through showcase smoke URLs"
+      ]
+    },
+    {
+      "id": "setup-readiness-check",
+      "status": "implemented",
+      "sources": ["scripts/setup-check.mjs"],
+      "tests": ["scripts/setup-check.mjs"],
+      "docs": ["docs/operations/local-development.md"],
+      "limitations": [
+        "Reports machine state and actions but does not install or reconfigure prerequisites"
+      ]
+    },
+    {
+      "id": "offline-showcase",
+      "status": "implemented",
+      "sources": ["docker-compose.showcase.yml", "scripts/smoke-e2e.mjs"],
+      "tests": ["scripts/smoke-e2e.test.mjs"],
+      "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
+      "limitations": [
+        "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
+        "Final release requires a successful Docker-backed smoke run on the exact merged commit"
+      ]
+    },
+    {
+      "id": "package-verification",
+      "status": "implemented",
+      "sources": [
+        "scripts/verify-package-packs.mjs",
+        "scripts/verify-python-worker-package.py"
+      ],
+      "tests": [
+        "scripts/verify-package-packs.mjs",
+        "scripts/verify-python-worker-package.py"
+      ],
+      "docs": ["docs/operations/package-verification.md"],
+      "limitations": [
+        "Verification is local/private and does not authorize publication"
+      ]
+    },
+    {
+      "id": "identity-migration",
+      "status": "implemented",
+      "sources": ["scripts/verify-product-identity.mjs"],
+      "tests": ["scripts/verify-product-identity.test.mjs"],
+      "docs": ["docs/product/identity.md"],
+      "limitations": [
+        "Registry, legal, license, repository, and public-release actions remain blocked"
+      ]
+    },
+    {
+      "id": "opentelemetry",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/observability-provenance.md"],
+      "limitations": [
+        "No production OpenTelemetry SDK or collector integration"
+      ]
+    },
+    {
+      "id": "w3c-context-propagation",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/observability-provenance.md"],
+      "limitations": [
+        "Trace context is not propagated as W3C traceparent/tracestate"
+      ]
+    },
+    {
+      "id": "artifact-store",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/observability-provenance.md"],
+      "limitations": ["No artifact persistence or lineage store"]
+    },
+    {
+      "id": "policy-engine",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/observability-provenance.md"],
+      "limitations": ["No runtime policy engine"]
+    },
+    {
+      "id": "cli-adapter",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/README.md"],
+      "limitations": ["No CLI transport adapter"]
+    },
+    {
+      "id": "framework-integrations",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/README.md"],
+      "limitations": [
+        "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
+      ]
+    },
+    {
+      "id": "durable-worker-outbox",
+      "status": "planned",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/roadmap/README.md"],
+      "limitations": [
+        "Worker callback and idempotency records are lost on process restart"
+      ]
+    },
+    {
+      "id": "public-package-release",
+      "status": "blocked",
+      "sources": [],
+      "tests": [],
+      "docs": ["docs/product/identity.md"],
+      "limitations": [
+        "Blocked by registry, legal, license, repository, and explicit approval gates"
+      ]
+    }
+  ]
+}
