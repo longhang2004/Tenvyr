@@ -90,7 +90,7 @@ try {
     JSON.stringify(
       {
         name: "tenvyr-packed-consumer",
-        version: "1.0.0",
+        version: "0.1.0",
         private: true,
         dependencies: {
           "@tenvyr/contracts": `file:${archives.contracts}`,

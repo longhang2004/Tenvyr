@@ -1,6 +1,6 @@
 {
   "name": "@tenvyr/worker",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Framework-neutral TypeScript runtime for the Tenvyr HTTP Worker protocol",
   "license": "UNLICENSED",
@@ -18,7 +18,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "sideEffects": false,
   "scripts": {

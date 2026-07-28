@@ -148,7 +148,7 @@ export class HttpAgentAdapter implements AgentAdapter {
         "Content-Type": "application/json",
         Accept: "application/json",
         "Idempotency-Key": payload.invocationId,
-        "User-Agent": "Tenvyr-Orchestrator/1.0.0",
+        "User-Agent": "Tenvyr-Orchestrator/0.1.0",
       };
       if (configuration.outboundAuthentication.type === "bearer") {
         headers.Authorization = `Bearer ${configuration.outboundAuthentication.token}`;

@@ -10,7 +10,7 @@
     </parent>
     <groupId>com.agentweave</groupId>
     <artifactId>agent-runner</artifactId>
-    <version>1.0.0</version>
+    <version>0.1.0</version>
     <name>agent-runner</name>
     <description>Tenvyr Core Agent Runner Service</description>
     <properties>

@@ -39,7 +39,7 @@ HEADER_KEY_ID = "X-AgentWeave-Key-Id"
 HEADER_TIMESTAMP = "X-AgentWeave-Timestamp"
 HEADER_DELIVERY_ID = "X-AgentWeave-Delivery-Id"
 HEADER_SIGNATURE = "X-AgentWeave-Signature"
-USER_AGENT = "Tenvyr-Worker/1.0.0"
+USER_AGENT = "Tenvyr-Worker/0.1.0"
 
 _Sleep = Callable[[float], Awaitable[None]]
 

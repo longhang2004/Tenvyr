@@ -137,7 +137,7 @@ describe("HttpAgentAdapter", () => {
         Accept: "application/json",
         Authorization: "Bearer bearer-secret",
         "Idempotency-Key": invocation.invocationId,
-        "User-Agent": "Tenvyr-Orchestrator/1.0.0",
+        "User-Agent": "Tenvyr-Orchestrator/0.1.0",
       });
       expect(
         Object.keys(init.headers as Record<string, string>).some((header) =>

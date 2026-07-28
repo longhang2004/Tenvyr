@@ -1,0 +1,198 @@
+name: Release CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LLM_PROVIDER: mock
+  LLM_FAILURE_MODE: mock
+
+jobs:
+  repository-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Reject tracked secrets and build artifacts
+        shell: bash
+        run: |
+          forbidden="$(git ls-files '*.env' '*.key' '*.pem' '*.tgz' '*.whl' '*.tar.gz' '*.zip')"
+          if [ -n "$forbidden" ]; then
+            echo "Tracked secret or build artifact paths are forbidden:"
+            echo "$forbidden"
+            exit 1
+          fi
+          if git ls-files scripts/compress.sh | grep -q .; then
+            echo "Owner artifact scripts/compress.sh must remain untracked"
+            exit 1
+          fi
+          if git grep -qE -- '-----BEGIN( [A-Z]+)? PRIVATE KEY-----'; then
+            echo "Tracked private-key material is forbidden"
+            exit 1
+          fi
+
+      - name: Repository verifiers
+        run: |
+          pnpm test:identity
+          pnpm verify:identity
+          pnpm test:docs
+          pnpm verify:docs
+          pnpm verify:package-packs
+
+      - name: TypeScript tests and builds
+        run: |
+          pnpm -r test
+          pnpm --filter @tenvyr/worker test -- --detectOpenHandles
+          node --test scripts/smoke-e2e.test.mjs
+          pnpm build:all
+
+      - name: Frontend quality
+        run: |
+          pnpm --filter frontend lint
+          pnpm --filter frontend typecheck
+          pnpm --filter frontend test:safe-preview
+
+      - name: Diff hygiene for pull requests
+        if: github.event_name == 'pull_request'
+        run: git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.sha }}"
+
+      - name: Diff hygiene for pushes
+        if: github.event_name == 'push'
+        run: git diff --check "${{ github.event.before }}..${{ github.sha }}"
+
+  python-worker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Python Worker
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e './sdks/python-worker[dev]'
+
+      - name: Cross-version contract and unit tests
+        run: |
+          python scripts/sync-python-worker-schemas.py check
+          python -m pytest sdks/python-worker/tests -m conformance
+          python -m pytest sdks/python-worker/tests -m 'not conformance and not stress and not lifecycle'
+
+      - name: Stress and lifecycle tests
+        if: matrix.python-version == '3.11'
+        run: |
+          python -m pytest sdks/python-worker/tests -m stress
+          python -m pytest sdks/python-worker/tests -m lifecycle
+
+      - name: Static checks
+        if: matrix.python-version == '3.11'
+        run: |
+          python -m ruff check sdks/python-worker/src sdks/python-worker/tests examples/python-http-worker scripts/sync-python-worker-schemas.py scripts/verify-python-worker-package.py
+          python -m ruff format --check sdks/python-worker/src sdks/python-worker/tests examples/python-http-worker scripts/sync-python-worker-schemas.py scripts/verify-python-worker-package.py
+          cd sdks/python-worker
+          python -m mypy
+
+      - name: Package and example verification
+        if: matrix.python-version == '3.11'
+        run: |
+          python scripts/verify-python-worker-package.py
+          python -m pytest examples/python-http-worker/tests
+
+      - uses: pnpm/action-setup@v4
+        if: matrix.python-version == '3.11'
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        if: matrix.python-version == '3.11'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace for loopback
+        if: matrix.python-version == '3.11'
+        run: pnpm install --frozen-lockfile
+
+      - name: Real Orchestrator to Python loopback
+        if: matrix.python-version == '3.11'
+        env:
+          TENVYR_PYTHON_EXECUTABLE: python
+        run: pnpm --filter orchestrator test:python-worker-loopback
+
+  java-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Java Runner tests
+        run: mvn -B -f services/agent-runner/pom.xml test
+
+  docker-showcase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate showcase Compose configuration
+        run: docker compose -p tenvyr-showcase -f docker-compose.yml -f docker-compose.showcase.yml config
+
+      - name: Start showcase
+        run: pnpm showcase:up
+
+      - name: Run offline showcase smoke
+        run: pnpm showcase:smoke
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose -p tenvyr-showcase -f docker-compose.yml -f docker-compose.showcase.yml logs --no-color
+
+      - name: Stop showcase
+        if: always()
+        run: pnpm showcase:down

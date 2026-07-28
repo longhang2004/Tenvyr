@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tenvyr-worker"
-version = "1.0.0"
+version = "0.1.0"
 description = "Private Python runtime harness for Tenvyr HTTP workers"
 requires-python = ">=3.11"
 classifiers = [

@@ -1,6 +1,6 @@
 # Base node image
-FROM node:20-alpine AS base
-RUN npm install -g pnpm
+FROM node:22-alpine AS base
+RUN npm install -g pnpm@9.0.0
 WORKDIR /usr/src/app
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
@@ -26,10 +26,10 @@ COPY services/orchestrator/ ./services/orchestrator/
 RUN pnpm --filter orchestrator run build
 
 # Production stage
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 ENV NODE_ENV=production
 WORKDIR /usr/src/app
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9.0.0
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/contracts/package.json ./packages/contracts/
 COPY services/orchestrator/package.json ./services/orchestrator/
