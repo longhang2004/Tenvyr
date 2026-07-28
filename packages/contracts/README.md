@@ -17,3 +17,6 @@ Repository conformance fixtures remain under `contracts/conformance`; they are
 development inputs for language SDKs and are not runtime package content. The
 five JSON Schemas are copied into `dist/schema-json` during build because the
 runtime validators require them.
+
+See the current [agent protocol](../../docs/architecture/contracts/agent-protocol-v1.md)
+and [JSON interoperability policy](../../docs/architecture/contracts/json-interoperability.md).

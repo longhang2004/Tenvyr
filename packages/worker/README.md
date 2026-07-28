@@ -243,7 +243,7 @@ callback delivery state in memory, so a process restart loses that state.
   configuration, and the Orchestrator callback response.
 
 See
-[`docs/architecture/typescript-worker-sdk.md`](../../docs/architecture/typescript-worker-sdk.md)
+[`docs/architecture/workers/typescript-worker-sdk.md`](../../docs/architecture/workers/typescript-worker-sdk.md)
 and [`contracts/conformance`](../../contracts/conformance) for the complete
 wire contract. Future observability and provenance direction is in the
-[roadmap](../../docs/roadmap/observability-provenance-roadmap.md).
+[roadmap](../../docs/roadmap/observability-provenance.md).

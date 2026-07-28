@@ -13,7 +13,6 @@ import tempfile
 import textwrap
 import threading
 import urllib.request
-import venv
 import zipfile
 from collections.abc import Callable, Iterable
 from email.parser import BytesParser
@@ -23,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SDK = ROOT / "sdks" / "python-worker"
 PACKAGE = SDK / "src" / "tenvyr_worker"
 EXAMPLE = ROOT / "examples" / "python-http-worker" / "src" / "main.py"
-DIST_NAME = "tenvyr_worker-1.0.0"
+DIST_NAME = "tenvyr_worker-0.1.0"
 
 SCHEMAS = (
     "agent-event.v1.schema.json",
@@ -178,7 +177,7 @@ def verify_metadata(raw: bytes, archive_name: str) -> None:
     metadata = BytesParser().parsebytes(raw)
     expected = {
         "Name": "tenvyr-worker",
-        "Version": "1.0.0",
+        "Version": "0.1.0",
         "Requires-Python": ">=3.11",
     }
     for field, value in expected.items():
@@ -230,7 +229,10 @@ def verify_branding(files: dict[str, bytes], archive_name: str) -> None:
 
 def verify_external_install(wheel: Path, temporary: Path) -> None:
     environment_dir = temporary / "external-venv"
-    venv.EnvBuilder(with_pip=True).create(environment_dir)
+    run(
+        [sys.executable, "-m", "venv", str(environment_dir)],
+        cwd=temporary,
+    )
     python = environment_dir / (
         "Scripts/python.exe" if os.name == "nt" else "bin/python"
     )

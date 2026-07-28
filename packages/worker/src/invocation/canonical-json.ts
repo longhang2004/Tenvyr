@@ -7,6 +7,8 @@ export function canonicalJson(value: unknown): string {
   if (typeof value === "number") {
     if (!Number.isFinite(value))
       throw new TypeError("Canonical JSON requires finite numbers");
+    if (Number.isInteger(value) && !Number.isSafeInteger(value))
+      throw new TypeError("Canonical JSON requires safe integers");
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;

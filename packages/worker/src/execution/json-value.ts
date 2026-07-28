@@ -10,6 +10,8 @@ export function asJsonValue(
   if (typeof value === "number") {
     if (!Number.isFinite(value))
       throw new TypeError(`${path} must be a finite JSON number`);
+    if (Number.isInteger(value) && !Number.isSafeInteger(value))
+      throw new TypeError(`${path} must be a safe JSON integer`);
     return value;
   }
   if (typeof value !== "object")

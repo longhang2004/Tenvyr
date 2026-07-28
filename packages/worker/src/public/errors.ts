@@ -11,9 +11,20 @@ export class AgentExecutionError extends Error {
       throw new TypeError("Agent failure message must be a non-empty string");
     if (typeof failure.retryable !== "boolean")
       throw new TypeError("Agent failure retryable must be boolean");
-    if (failure.details !== undefined) asJsonValue(failure.details);
-    super(failure.message);
+    let safeFailure = failure;
+    if (failure.details !== undefined) {
+      try {
+        asJsonValue(failure.details);
+      } catch {
+        safeFailure = {
+          code: "AGENT_OUTPUT_INVALID",
+          message: "Agent output validation failed",
+          retryable: false,
+        };
+      }
+    }
+    super(safeFailure.message);
     this.name = "AgentExecutionError";
-    this.failure = failure;
+    this.failure = safeFailure;
   }
 }

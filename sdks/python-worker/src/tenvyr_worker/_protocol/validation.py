@@ -4,12 +4,13 @@ import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from functools import cache, lru_cache
+from typing import cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 from referencing import Registry, Resource
 
-from .json_value import JsonValue, to_json_value
+from .json_value import JsonCompatibilityError, JsonValue, to_json_value
 from .schemas import load_schemas
 
 
@@ -27,8 +28,7 @@ class ContractValidationError(ValueError):
 
 
 def loads_json(value: str | bytes | bytearray) -> JsonValue:
-    parsed = json.loads(value, parse_constant=_reject_constant)
-    return to_json_value(parsed)
+    return cast(JsonValue, json.loads(value, parse_constant=_reject_constant))
 
 
 def parse_agent_invocation(value: object) -> dict[str, JsonValue]:
@@ -68,7 +68,12 @@ def parse_http_agent_run_accepted(
 
 
 def _parse(schema_id: str, value: object) -> dict[str, JsonValue]:
-    converted = to_json_value(value)
+    try:
+        converted = to_json_value(value)
+    except JsonCompatibilityError as error:
+        raise ContractValidationError(
+            (ValidationIssue(error.path, error.message, error.keyword),)
+        ) from None
     errors = sorted(_validator(schema_id).iter_errors(converted), key=_error_key)
     if errors:
         raise ContractValidationError(tuple(_issues(errors)))

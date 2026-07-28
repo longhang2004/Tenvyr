@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -139,6 +140,95 @@ async def test_input_output_and_unexpected_failures_are_safe() -> None:
     assert invalid_result["error"]["code"] == "AGENT_OUTPUT_INVALID"
     assert thrown_result["error"]["code"] == "AGENT_EXECUTION_FAILED"
     assert "TOP_SECRET" not in json.dumps([input_result, invalid_result, thrown_result])
+
+
+@pytest.mark.asyncio
+async def test_every_unsafe_handler_value_maps_to_output_invalid() -> None:
+    unsafe = 9_007_199_254_740_992
+
+    def structured(field: str):
+        def handler(context, _input):
+            options = {
+                "output": {"safe": True},
+                field: (
+                    [
+                        {
+                            "id": "artifact-1",
+                            "name": "result",
+                            "metadata": {"unsafe": unsafe},
+                        }
+                    ]
+                    if field == "artifacts"
+                    else {"unsafe": unsafe}
+                ),
+            }
+            return context.success(**options)
+
+        return handler
+
+    def explicit_failure(context, _input):
+        context.fail(
+            code="DOMAIN_FAILURE",
+            message="Domain failure",
+            retryable=False,
+            details={"unsafe": unsafe},
+        )
+
+    mutated_failure = AgentFailureOptions(
+        code="DOMAIN_FAILURE",
+        message="Domain failure",
+        retryable=False,
+        details={"safe": True},
+    )
+    object.__setattr__(mutated_failure, "details", {"unsafe": unsafe})
+
+    def direct_failure(_context, _input):
+        raise AgentExecutionError(mutated_failure)
+
+    agents = (
+        define_agent(
+            name="echo-agent",
+            execute=lambda _context, _input: {"unsafe": unsafe},
+        ),
+        define_agent(name="echo-agent", execute=structured("output")),
+        define_agent(name="echo-agent", execute=structured("usage")),
+        define_agent(name="echo-agent", execute=structured("metadata")),
+        define_agent(name="echo-agent", execute=structured("artifacts")),
+        define_agent(
+            name="echo-agent",
+            execute=lambda _context, _input: "parsed",
+            output_parser=lambda _value: {"unsafe": unsafe},
+        ),
+        define_agent(name="echo-agent", execute=explicit_failure),
+        define_agent(name="echo-agent", execute=direct_failure),
+    )
+
+    for agent in agents:
+        result = await _execute(agent)
+        assert result["status"] == "failed"
+        assert result["error"] == {
+            "code": "AGENT_OUTPUT_INVALID",
+            "message": "Agent output validation failed",
+            "retryable": False,
+        }
+
+
+@pytest.mark.asyncio
+async def test_input_parser_domain_objects_remain_supported() -> None:
+    @dataclass(frozen=True)
+    class DomainInput:
+        message: str
+
+    def parse_input(value: object) -> DomainInput:
+        return DomainInput(cast(dict[str, str], value)["message"])
+
+    agent = define_agent(
+        name="echo-agent",
+        input_parser=parse_input,
+        execute=lambda _context, value: {"message": value.message.upper()},
+    )
+
+    assert (await _execute(agent))["output"] == {"message": "HELLO"}
 
 
 @pytest.mark.asyncio

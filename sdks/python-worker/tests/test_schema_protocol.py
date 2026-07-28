@@ -44,6 +44,10 @@ def _fixture(path: str) -> object:
     return json.loads((CONFORMANCE / path).read_text(encoding="utf-8"))
 
 
+def _fixture_bytes(path: str) -> bytes:
+    return (CONFORMANCE / path).read_bytes()
+
+
 def test_packaged_schema_allowlist_is_exact_and_byte_equal() -> None:
     assert SCHEMA_FILENAMES == EXPECTED_SCHEMAS
     packaged = resources.files("tenvyr_worker").joinpath("schema_json")
@@ -193,6 +197,93 @@ def test_json_loading_rejects_non_finite_constants(constant: str) -> None:
 def test_json_value_rejects_non_finite_numbers(value: float) -> None:
     with pytest.raises(TypeError, match="finite"):
         to_json_value(value)
+
+
+def test_json_value_preserves_booleans_and_safe_integer_boundaries() -> None:
+    value = {
+        "boolean": True,
+        "maximum": 9_007_199_254_740_991,
+        "minimum": -9_007_199_254_740_991,
+        "fractions": [1.25, -0.5, 1e-7],
+    }
+
+    assert to_json_value(value) == value
+    assert type(to_json_value(value)["boolean"]) is bool  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "value",
+    (9_007_199_254_740_992, -9_007_199_254_740_992),
+)
+def test_json_value_rejects_unsafe_integers_recursively(value: int) -> None:
+    with pytest.raises(
+        TypeError, match=r"\$\.outer\[0\]\.unsafe.*interoperable safe range"
+    ):
+        to_json_value({"outer": [{"unsafe": value}]})
+
+
+@pytest.mark.parametrize(
+    "value",
+    (9_007_199_254_740_992.0, -9_007_199_254_740_992.0),
+)
+def test_json_value_rejects_unsafe_integral_floats(value: float) -> None:
+    with pytest.raises(
+        TypeError, match=r"\$\.outer\[0\]\.unsafe.*interoperable safe range"
+    ):
+        to_json_value({"outer": [{"unsafe": value}]})
+
+
+def test_json_loading_is_syntax_only_for_unsafe_integer_literals() -> None:
+    assert loads_json(b'{"value":9007199254740992}') == {"value": 9_007_199_254_740_992}
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "json-numbers/valid/safe-integer-boundaries.json",
+        "json-numbers/valid/finite-floats.json",
+        "json-numbers/valid/booleans.json",
+    ),
+)
+def test_shared_valid_json_number_documents(path: str) -> None:
+    parsed = loads_json(_fixture_bytes(path))
+    assert parse_http_agent_run_request(parsed) == parsed
+
+
+@pytest.mark.parametrize(
+    ("path", "parser"),
+    (
+        (
+            "json-numbers/invalid/integer-above-safe-max.json",
+            parse_http_agent_run_request,
+        ),
+        (
+            "json-numbers/invalid/integer-below-safe-min.json",
+            parse_http_agent_run_request,
+        ),
+        (
+            "json-numbers/invalid/nested-unsafe-integer.json",
+            parse_http_agent_run_request,
+        ),
+        (
+            "json-numbers/invalid/unsafe-integer-in-output.json",
+            parse_agent_result,
+        ),
+        (
+            "json-numbers/invalid/unsafe-integer-in-metadata.json",
+            parse_agent_result,
+        ),
+    ),
+)
+def test_shared_invalid_json_number_documents(path: str, parser: object) -> None:
+    parsed = loads_json(_fixture_bytes(path))
+    with pytest.raises(ContractValidationError) as caught:
+        parser(parsed)  # type: ignore[operator]
+
+    issue = caught.value.issues[0]
+    assert issue.path.startswith("$")
+    assert issue.message == "integer must be within the interoperable safe range"
+    assert issue.keyword == "safeInteger"
 
 
 @pytest.mark.parametrize(

@@ -28,6 +28,7 @@ from tenvyr_worker._callback.delivery import (
     HEADER_TIMESTAMP,
     USER_AGENT,
 )
+from tenvyr_worker._callback.retry import retry_after_delay_seconds
 
 
 @dataclass(frozen=True)
@@ -283,6 +284,30 @@ def test_retry_after_is_numeric_limited_for_every_retryable_response(
         assert delays == [expected_delay]
 
     asyncio.run(run())
+
+
+def test_shared_retry_after_cases() -> None:
+    path = (
+        Path(__file__).parents[3]
+        / "contracts"
+        / "conformance"
+        / "protocol"
+        / "retry-after-cases.json"
+    )
+    cases = json.loads(path.read_text(encoding="utf-8"))
+
+    for case in cases:
+        actual = retry_after_delay_seconds(
+            case["value"], status=503, maximum=case["maximumSeconds"]
+        )
+        expected = case["expected"]
+        assert actual == (
+            expected["seconds"] if expected["kind"] == "header-delay" else None
+        ), case["name"]
+
+
+def test_retry_after_is_ignored_for_non_retryable_status() -> None:
+    assert retry_after_delay_seconds("5", status=400, maximum=30.0) is None
 
 
 def test_redirect_and_streamed_oversize_are_not_retried() -> None:

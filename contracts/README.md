@@ -50,6 +50,9 @@ The conformance README also defines the expected invocation ID for the
 `invocation-mismatch.json` acceptance body. Correlation is a protocol check
 performed after JSON Schema validation, so the body remains schema-valid.
 
+The cross-language numeric policy and exact safe-integer boundary are documented
+in [`docs/architecture/contracts/json-interoperability.md`](../docs/architecture/contracts/json-interoperability.md).
+
 ### Legacy result mapping
 
 | Legacy field               | AgentResultV1                                                                                       |

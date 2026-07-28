@@ -126,7 +126,11 @@ export async function executeAgent<TInput, TOutput>({
   }
   if (outcome.kind === "threw") {
     if (outcome.error instanceof AgentExecutionError) {
-      return failedResult(invocation, startedAt, now, outcome.error.failure);
+      try {
+        return failedResult(invocation, startedAt, now, outcome.error.failure);
+      } catch {
+        return invalidOutputResult(invocation, startedAt, now);
+      }
     }
     scopedLogger.error("Agent execution failed", {
       errorName:
@@ -169,12 +173,20 @@ export async function executeAgent<TInput, TOutput>({
     };
     return parseAgentResult(result);
   } catch {
-    return failedResult(invocation, startedAt, now, {
-      code: "AGENT_OUTPUT_INVALID",
-      message: "Agent output validation failed",
-      retryable: false,
-    });
+    return invalidOutputResult(invocation, startedAt, now);
   }
+}
+
+function invalidOutputResult(
+  invocation: AgentInvocationV1,
+  startedAt: string,
+  now: () => number,
+): AgentResultV1 {
+  return failedResult(invocation, startedAt, now, {
+    code: "AGENT_OUTPUT_INVALID",
+    message: "Agent output validation failed",
+    retryable: false,
+  });
 }
 
 function parseWith<T>(

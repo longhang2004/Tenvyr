@@ -9,8 +9,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from .._protocol.json_value import JsonValue, to_json_value
-from .._protocol.validation import parse_agent_result
+from .._protocol.json_value import JsonCompatibilityError, JsonValue, to_json_value
+from .._protocol.validation import ContractValidationError, parse_agent_result
 from .._public.agent import AgentDefinition, parse_value
 from .._public.context import AgentExecutionContext, AgentExecutionSuccess
 from .._public.errors import AgentExecutionError, AgentFailureOptions
@@ -137,8 +137,13 @@ async def execute_agent(
 
         try:
             returned = handler_task.result()
+        except JsonCompatibilityError:
+            return _invalid_output_result(invocation, started_at, now)
         except AgentExecutionError as error:
-            return _failed_result(invocation, started_at, now, error.failure)
+            try:
+                return _failed_result(invocation, started_at, now, error.failure)
+            except (ContractValidationError, JsonCompatibilityError):
+                return _invalid_output_result(invocation, started_at, now)
         except asyncio.CancelledError:
             scoped_logger.error("Agent execution failed")
             return _failed_result(
@@ -230,16 +235,24 @@ def _successful_result(
                 result["metadata"] = to_json_value(dict(success.metadata))
         return parse_agent_result(result)
     except Exception:
-        return _failed_result(
-            invocation,
-            started_at,
-            now,
-            AgentFailureOptions(
-                code="AGENT_OUTPUT_INVALID",
-                message="Agent output validation failed",
-                retryable=False,
-            ),
-        )
+        return _invalid_output_result(invocation, started_at, now)
+
+
+def _invalid_output_result(
+    invocation: Mapping[str, object],
+    started_at: str,
+    now: Callable[[], float],
+) -> dict[str, JsonValue]:
+    return _failed_result(
+        invocation,
+        started_at,
+        now,
+        AgentFailureOptions(
+            code="AGENT_OUTPUT_INVALID",
+            message="Agent output validation failed",
+            retryable=False,
+        ),
+    )
 
 
 def _failed_result(

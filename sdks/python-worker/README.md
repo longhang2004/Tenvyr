@@ -1,7 +1,7 @@
 # `tenvyr-worker`
 
 Private Python 3.11+ runtime harness for Tenvyr HTTP agents. The distribution
-is version `1.0.0`, typed with `py.typed`, and intentionally not licensed or
+is version `0.1.0`, typed with `py.typed`, and intentionally not licensed or
 published. Do not upload it to PyPI.
 
 ## Install locally
@@ -61,4 +61,4 @@ python scripts/verify-python-worker-package.py
 ```
 
 See [CONFORMANCE.md](CONFORMANCE.md) and the
-[architecture document](../../docs/architecture/python-worker-sdk.md).
+[architecture document](../../docs/architecture/workers/python-worker-sdk.md).

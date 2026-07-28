@@ -186,6 +186,97 @@ describe("agent execution", () => {
     }
   });
 
+  it("maps unsafe numbers from every result source to AGENT_OUTPUT_INVALID", async () => {
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    const cases = [
+      defineAgent({ name: "echo-agent", execute: async () => ({ unsafe }) }),
+      defineAgent({
+        name: "echo-agent",
+        execute: async (context) => context.success({ output: { unsafe } }),
+      }),
+      defineAgent({
+        name: "echo-agent",
+        execute: async (context) => context.success({ metadata: { unsafe } }),
+      }),
+      defineAgent({
+        name: "echo-agent",
+        execute: async (context) =>
+          context.success({ usage: { totalTokens: unsafe } }),
+      }),
+      defineAgent({
+        name: "echo-agent",
+        execute: async (context) =>
+          context.success({
+            artifacts: [
+              { id: "artifact-1", name: "unsafe.json", metadata: { unsafe } },
+            ],
+          }),
+      }),
+      defineAgent({
+        name: "echo-agent",
+        outputParser: (() => ({ unsafe })) as never,
+        execute: async () => "parsed",
+      }),
+    ];
+
+    for (const agent of cases) {
+      await expect(execute(agent as never)).resolves.toMatchObject({
+        status: "failed",
+        error: { code: "AGENT_OUTPUT_INVALID", retryable: false },
+      });
+    }
+  });
+
+  it("maps unsafe explicit failure details to one static terminal error", async () => {
+    const agent = defineAgent({
+      name: "echo-agent",
+      execute: async (context) =>
+        context.fail({
+          code: "UNSAFE_DETAILS",
+          message: "Unsafe failure details",
+          retryable: false,
+          details: { unsafe: Number.MAX_SAFE_INTEGER + 1 },
+        }),
+    });
+
+    const result = await execute(agent);
+
+    expect(result.error).toEqual({
+      code: "AGENT_OUTPUT_INVALID",
+      message: "Agent output validation failed",
+      retryable: false,
+    });
+    expect(result.error).not.toHaveProperty("details");
+  });
+
+  it("preserves input-parser domain objects", async () => {
+    class ParsedInput {
+      constructor(readonly value: number) {}
+    }
+    const agent = defineAgent({
+      name: "echo-agent",
+      inputParser: () => new ParsedInput(1.25),
+      execute: async (_context, input) => input.value,
+    });
+
+    await expect(execute(agent)).resolves.toMatchObject({
+      status: "succeeded",
+      output: 1.25,
+    });
+  });
+
+  it("accepts finite non-integer output", async () => {
+    const agent = defineAgent({
+      name: "echo-agent",
+      execute: async () => 0.125,
+    });
+
+    await expect(execute(agent)).resolves.toMatchObject({
+      status: "succeeded",
+      output: 0.125,
+    });
+  });
+
   it("maps context.fail and direct AgentExecutionError to structured failures", async () => {
     const viaContext = defineAgent({
       name: "echo-agent",

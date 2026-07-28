@@ -8,6 +8,8 @@ import math
 from collections.abc import Callable, Mapping
 from typing import TypeAlias
 
+from .._protocol.json_value import MAX_SAFE_INTEGER
+
 _JsonValue: TypeAlias = (
     bool | int | float | str | list["_JsonValue"] | dict[str, "_JsonValue"] | None
 )
@@ -40,10 +42,14 @@ def _normalize(value: object, ancestors: set[int]) -> _JsonValue:
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, int):
+        if abs(value) > MAX_SAFE_INTEGER:
+            raise TypeError("Canonical JSON requires interoperable safe integers")
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
             raise TypeError("Canonical JSON requires finite numbers")
+        if value.is_integer() and abs(value) > MAX_SAFE_INTEGER:
+            raise TypeError("Canonical JSON requires interoperable safe integers")
         # Match JSON's mathematical value for negative zero and avoid a
         # fingerprint split.
         return 0 if value == 0 else value

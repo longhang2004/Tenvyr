@@ -11,6 +11,7 @@ import pytest
 from aiohttp import ClientSession, web
 
 from tenvyr_worker import TenvyrWorkerConfig, create_tenvyr_worker, define_agent
+from tenvyr_worker._runtime import worker as worker_module
 
 
 def _request(invocation_id: str = "invocation-1") -> dict[str, object]:
@@ -371,4 +372,46 @@ async def test_unexpected_enqueue_failure_rolls_back_idempotency_record() -> Non
             assert (await response.json())["error"]["code"] == "INTERNAL_ERROR"
         assert worker._store.get("invocation-1") is None  # type: ignore[attr-defined]
         assert received == []
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_unsafe_integer_is_rejected_before_fingerprint_or_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed = False
+
+    async def execute(_context: object, value: object) -> object:
+        nonlocal executed
+        executed = True
+        return value
+
+    def forbidden_fingerprint(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("unsafe request reached fingerprint creation")
+
+    async with _callback_server() as (origin, received):
+        worker = create_tenvyr_worker(
+            _config(
+                origin,
+                agent=define_agent(name="echo-agent", execute=execute),
+            )
+        )
+        address = await worker.start(port=0)
+        request = _request()
+        request["invocation"]["input"] = {"unsafe": 9_007_199_254_740_992}  # type: ignore[index]
+        request["resultDelivery"]["callbackUrl"] = f"{origin}/results"  # type: ignore[index]
+        monkeypatch.setattr(worker_module, "request_fingerprint", forbidden_fingerprint)
+
+        async with ClientSession() as client:
+            response = await client.post(
+                f"http://{address.host}:{address.port}/v1/runs",
+                data=json.dumps(request, separators=(",", ":")).encode(),
+                headers=_headers(),
+            )
+            assert response.status == 400
+            assert (await response.json())["error"]["code"] == "INVALID_REQUEST"
+
+        assert not executed
+        assert received == []
+        assert worker._store.get("invocation-1") is None  # type: ignore[attr-defined]
         await worker.stop()

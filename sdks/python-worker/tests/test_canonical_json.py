@@ -54,3 +54,17 @@ def test_request_fingerprint_is_order_independent_and_bytes() -> None:
     assert len(baseline) == 32
     assert request_fingerprint(second, "invocation-1") == baseline
     assert request_fingerprint(second, "different") != baseline
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        9_007_199_254_740_992,
+        -9_007_199_254_740_992,
+        9_007_199_254_740_992.0,
+        -9_007_199_254_740_992.0,
+    ),
+)
+def test_fingerprint_rejects_unsafe_integral_numbers(value: int | float) -> None:
+    with pytest.raises(TypeError, match="safe integer"):
+        request_fingerprint({"nested": {"value": value}}, "invocation-1")

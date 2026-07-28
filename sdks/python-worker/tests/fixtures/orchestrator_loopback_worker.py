@@ -6,7 +6,7 @@ import os
 import signal
 import sys
 from collections.abc import Mapping
-from typing import TypedDict, cast
+from typing import cast
 
 from tenvyr_worker import (
     AgentDefinition,
@@ -17,25 +17,25 @@ from tenvyr_worker import (
     define_agent,
 )
 
-
-class LoopbackInput(TypedDict):
-    message: str
-
-
-class LoopbackOutput(TypedDict):
-    echo: str
+LoopbackInput = dict[str, object]
+LoopbackOutput = dict[str, object]
 
 
 def parse_input(value: object) -> LoopbackInput:
-    if not isinstance(value, Mapping) or not isinstance(value.get("message"), str):
+    if not isinstance(value, Mapping):
+        raise TypeError("input must be an object")
+    mode = value.get("mode", "echo")
+    if not isinstance(mode, str):
+        raise TypeError("mode must be a string")
+    if mode == "echo" and not isinstance(value.get("message"), str):
         raise TypeError("message must be a string")
-    return {"message": cast(str, value["message"])}
+    return dict(value)
 
 
 def parse_output(value: object) -> LoopbackOutput:
-    if not isinstance(value, Mapping) or not isinstance(value.get("echo"), str):
-        raise TypeError("echo must be a string")
-    return {"echo": cast(str, value["echo"])}
+    if not isinstance(value, Mapping):
+        raise TypeError("output must be an object")
+    return dict(value)
 
 
 executions = 0
@@ -47,7 +47,17 @@ async def execute(
     global executions
     executions += 1
     context.raise_if_cancelled()
-    return context.success(output={"echo": input_value["message"]})
+    mode = input_value.get("mode", "echo")
+    if mode == "safe-boundaries":
+        return context.success(
+            output={
+                "maximum": 9_007_199_254_740_991,
+                "minimum": -9_007_199_254_740_991,
+            }
+        )
+    if mode == "unsafe-output":
+        return context.success(output={"unsafe": 9_007_199_254_740_993})
+    return context.success(output={"echo": cast(str, input_value["message"])})
 
 
 async def main() -> None:

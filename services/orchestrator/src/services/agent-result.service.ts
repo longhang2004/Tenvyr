@@ -62,7 +62,9 @@ export class AgentResultService {
       stepExecution.stepId,
       result.status === "succeeded" ? "COMPLETED" : "FAILED",
       result.output,
-      result.error?.message,
+      result.error
+        ? `${result.error.code}: ${result.error.message}`
+        : undefined,
       legacyAttempt ?? stepExecution.attempt,
     );
   }

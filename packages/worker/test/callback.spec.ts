@@ -174,7 +174,7 @@ describe("callback delivery", () => {
       requests.map((request) => request.headers["x-agentweave-timestamp"]),
     ).toEqual(["1785024000", "1785024001"]);
     for (const request of requests) {
-      expect(request.headers["user-agent"]).toBe("Tenvyr-Worker/1.0.0");
+      expect(request.headers["user-agent"]).toBe("Tenvyr-Worker/0.1.0");
       expect(
         Object.keys(request.headers).some((header) =>
           header.startsWith("x-tenvyr-"),

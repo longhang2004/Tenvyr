@@ -11,12 +11,16 @@ tests; fixtures are not copied into the wheel or sdist.
 | HMAC signature vectors     |     8 |             0 |      8 |
 | Callback HTTP status cases |    15 |             0 |     15 |
 | Retry classification cases |    12 |             0 |     12 |
-| **Total**                  |       |               | **52** |
+| Retry-After cases          |     5 |             8 |     13 |
+| JSON number documents      |     3 |             5 |      8 |
+| **Total**                  |       |               | **73** |
 
 The conformance tests also prove five packaged schemas are byte-identical to
 the canonical files, all schema URNs resolve from an offline registry, format
 checking is enabled, non-finite JSON is rejected, issue paths remain readable
-for special keys, and validators do not mutate inputs.
+for special keys, validators do not mutate inputs, and integral values outside
+the JavaScript safe-integer range are rejected before fingerprinting or callback
+serialization.
 
 Additional Python-only tests cover the exact root API, frozen and secret-safe
 configuration, bearer and origin policy, FIFO scheduling, process-local

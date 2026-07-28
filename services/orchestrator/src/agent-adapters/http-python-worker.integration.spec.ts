@@ -40,6 +40,8 @@ describe("real Orchestrator to Python Worker loopback", () => {
   let workerProcess: ChildProcess;
   let resultHandler: jest.Mock;
   let processOutput: ProcessOutput;
+  let workerSubmitUrl: string;
+  let callbackOrigin: string;
   const callbackHeaders: Array<Record<string, string | string[] | undefined>> =
     [];
 
@@ -99,7 +101,7 @@ describe("real Orchestrator to Python Worker loopback", () => {
     );
     await app.listen(0, "127.0.0.1");
     const callbackPort = (app.getHttpServer().address() as AddressInfo).port;
-    const callbackOrigin = `http://127.0.0.1:${callbackPort}`;
+    callbackOrigin = `http://127.0.0.1:${callbackPort}`;
     parsedConfig.callbackBaseUrl = callbackOrigin;
 
     const fixture = resolve(
@@ -129,7 +131,8 @@ describe("real Orchestrator to Python Worker loopback", () => {
     if (!workerConfig || workerConfig.kind !== "http") {
       throw new Error("Python Worker HTTP configuration is unavailable");
     }
-    workerConfig.submitUrl = `http://${ready.host}:${ready.port}/v1/runs`;
+    workerSubmitUrl = `http://${ready.host}:${ready.port}/v1/runs`;
+    workerConfig.submitUrl = workerSubmitUrl;
 
     adapter = module.get(HttpAgentAdapter);
     resultHandler = jest.fn().mockResolvedValue(undefined);
@@ -142,7 +145,7 @@ describe("real Orchestrator to Python Worker loopback", () => {
     if (workerProcess && workerProcess.exitCode === null) {
       workerProcess.kill("SIGTERM");
       const stopped = await processOutput.waitFor("tenvyr.worker.stopped");
-      expect(stopped.executions).toBe(1);
+      expect(stopped.executions).toBe(4);
       await expect(processExit(workerProcess)).resolves.toBe(0);
     }
   });
@@ -180,7 +183,102 @@ describe("real Orchestrator to Python Worker loopback", () => {
       /^v1=[a-f0-9]{64}$/,
     );
   });
+
+  it("preserves safe integer boundaries and rejects unsafe Python output", async () => {
+    const safeInvocation = withInput("safe-boundaries:1", {
+      mode: "safe-boundaries",
+    });
+    await adapter.invoke(safeInvocation);
+    await waitFor(() => resultFor(safeInvocation.invocationId) !== undefined);
+    expect(resultFor(safeInvocation.invocationId)).toEqual(
+      expect.objectContaining({
+        status: "succeeded",
+        output: {
+          maximum: 9007199254740991,
+          minimum: -9007199254740991,
+        },
+      }),
+    );
+
+    const unsafeOutputInvocation = withInput("unsafe-output:1", {
+      mode: "unsafe-output",
+    });
+    await adapter.invoke(unsafeOutputInvocation);
+    await waitFor(
+      () => resultFor(unsafeOutputInvocation.invocationId) !== undefined,
+    );
+    expect(resultFor(unsafeOutputInvocation.invocationId)).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: {
+          code: "AGENT_OUTPUT_INVALID",
+          message: "Agent output validation failed",
+          retryable: false,
+        },
+      }),
+    );
+  });
+
+  it("rejects raw unsafe input before reserving its invocation ID", async () => {
+    const invocationId = "raw-unsafe-python-worker-loopback:1";
+    const rawBody =
+      `{"schemaVersion":"1","invocation":{"schemaVersion":"1",` +
+      `"invocationId":"${invocationId}","executionId":"raw-unsafe-execution",` +
+      `"stepExecutionId":"raw-unsafe-step","stepId":"remote-echo",` +
+      `"target":{"agent":"remote-echo-agent"},` +
+      `"input":{"unsafe":9007199254740993},"attempt":1,` +
+      `"createdAt":"2026-07-28T00:00:00.000Z",` +
+      `"trace":{"traceId":"raw-unsafe-execution","correlationId":"${invocationId}"}},` +
+      `"resultDelivery":{"mode":"callback",` +
+      `"callbackUrl":"${callbackOrigin}/internal/agent-callbacks/http/remote-echo-agent",` +
+      `"authentication":{"scheme":"hmac-sha256","keyId":"loopback-v1"}}}`;
+    const response = await fetch(workerSubmitUrl, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer loopback-worker-token",
+        "Content-Type": "application/json",
+        "Idempotency-Key": invocationId,
+      },
+      body: rawBody,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+
+    const validInvocation = withInput(invocationId, { message: "still runs" });
+    await adapter.invoke(validInvocation);
+    await waitFor(() => resultFor(invocationId) !== undefined);
+    expect(resultFor(invocationId)).toEqual(
+      expect.objectContaining({
+        status: "succeeded",
+        output: { echo: "still runs" },
+      }),
+    );
+  });
+
+  function resultFor(invocationId: string): unknown {
+    const call = resultHandler.mock.calls.find(
+      ([value]) => value.result.invocationId === invocationId,
+    );
+    return call?.[0].result;
+  }
 });
+
+function withInput(
+  invocationId: string,
+  input: AgentInvocationV1["input"],
+): AgentInvocationV1 {
+  return {
+    ...invocation,
+    invocationId,
+    executionId: `${invocationId}:execution`,
+    stepExecutionId: `${invocationId}:step`,
+    input,
+    trace: { traceId: invocationId, correlationId: invocationId },
+  };
+}
 
 class ProcessOutput {
   private buffer = "";

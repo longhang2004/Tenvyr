@@ -76,7 +76,7 @@ describe("AgentResultService", () => {
         "review",
         "FAILED",
         undefined,
-        "runner unavailable",
+        "AGENT_FAILED: runner unavailable",
         1,
       );
     },
@@ -174,7 +174,7 @@ describe("AgentResultService", () => {
         "review",
         expected,
         status === "succeeded" ? { score: 100 } : undefined,
-        status === "succeeded" ? undefined : "runner unavailable",
+        status === "succeeded" ? undefined : "AGENT_FAILED: runner unavailable",
         1,
       );
     },

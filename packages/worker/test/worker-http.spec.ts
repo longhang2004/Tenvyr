@@ -1,6 +1,8 @@
 import { createHmac } from "crypto";
+import { readFileSync } from "fs";
 import { createServer, type Server } from "http";
 import { connect, type AddressInfo, type Socket } from "net";
+import { resolve } from "path";
 import type {
   AgentInvocationV1,
   AgentResultV1,
@@ -320,6 +322,52 @@ describe("Tenvyr Worker HTTP server", () => {
 
     expect(response.status).toBe(status);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects literal unsafe inbound bytes without leaving a phantom idempotency record", async () => {
+    const { worker: target, execute } = makeWorker();
+    const baseUrl = await start(target);
+    const fixture = readFileSync(
+      resolve(
+        __dirname,
+        "../../../contracts/conformance/json-numbers/invalid/integer-above-safe-max.json",
+      ),
+      "utf8",
+    );
+    expect(fixture).toContain("9007199254740993");
+    const rawBody = fixture.replace(
+      "https://orchestrator.example/internal/agent-callbacks/http/echo-agent",
+      `${callbackOrigin}/callback`,
+    );
+
+    const rejected = await submit(baseUrl, rawBody, {
+      "Idempotency-Key": "invocation-json-number-1",
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+    expect(execute).not.toHaveBeenCalled();
+
+    const valid = runRequest(
+      invocation({
+        invocationId: "invocation-json-number-1",
+        executionId: "execution-json-number-1",
+        stepExecutionId: "step-execution-json-number-1",
+        input: { safe: Number.MAX_SAFE_INTEGER },
+        trace: {
+          traceId: "trace-json-number-1",
+          correlationId: "invocation-json-number-1",
+        },
+      }),
+    );
+    const accepted = await submit(baseUrl, JSON.stringify(valid), {
+      "Idempotency-Key": "invocation-json-number-1",
+    });
+
+    expect(accepted.status).toBe(202);
+    await waitFor(() => execute.mock.calls.length === 1);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("rejects oversized bodies with 413", async () => {

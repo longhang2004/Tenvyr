@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Literal
 
@@ -24,13 +25,24 @@ def retry_after_delay_seconds(
     status: int,
     maximum: float,
 ) -> float | None:
-    if (
-        classify_callback_response(status) != "retry"
-        or value is None
-        or _DELTA_SECONDS.fullmatch(value) is None
-    ):
+    if classify_callback_response(status) != "retry":
         return None
-    return min(maximum, float(int(value)))
+    return _parse_retry_after_delta(value, maximum)
+
+
+def _parse_retry_after_delta(value: str | None, maximum: float) -> float | None:
+    """Parse ASCII delta-seconds without converting an unbounded integer."""
+
+    if value is None or _DELTA_SECONDS.fullmatch(value) is None:
+        return None
+
+    digits = value.lstrip("0") or "0"
+    maximum_digits = str(math.floor(maximum))
+    if len(digits) > len(maximum_digits) or (
+        len(digits) == len(maximum_digits) and digits > maximum_digits
+    ):
+        return maximum
+    return min(maximum, float(int(digits)))
 
 
 def backoff_delay_seconds(

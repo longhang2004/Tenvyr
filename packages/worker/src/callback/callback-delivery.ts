@@ -2,7 +2,9 @@ import { randomUUID } from "crypto";
 import type { AgentResultV1 } from "@tenvyr/contracts";
 import { safeLogger } from "../observability/safe-logger";
 import type { WorkerLogger } from "../public/types";
+import { asJsonValue } from "../execution/json-value";
 import { createCallbackSignature } from "./callback-signer";
+import { parseRetryAfterDeltaSeconds } from "./retry-after";
 
 export type CallbackDeliveryConfig = {
   maxAttempts: number;
@@ -68,7 +70,10 @@ export async function deliverCallback(
   const fetchRequest = dependencies.fetch ?? fetch;
   const logger = safeLogger(input.logger);
   const deliveryId = id();
-  const rawBody = Buffer.from(JSON.stringify(input.result), "utf8");
+  const rawBody = Buffer.from(
+    JSON.stringify(asJsonValue(input.result)),
+    "utf8",
+  );
   const callbackHost = new URL(input.callbackUrl).host;
   let lastStatus: number | undefined;
   let lastReason = "delivery-failed";
@@ -110,7 +115,7 @@ export async function deliverCallback(
           "X-AgentWeave-Timestamp": timestamp,
           "X-AgentWeave-Delivery-Id": deliveryId,
           "X-AgentWeave-Signature": signature,
-          "User-Agent": "Tenvyr-Worker/1.0.0",
+          "User-Agent": "Tenvyr-Worker/0.1.0",
         },
         body: rawBody,
       });
@@ -175,11 +180,14 @@ export async function deliverCallback(
           httpStatus: response.status,
         };
       }
-      const retryAfter = retryAfterDelay(
+      const retryAfterSeconds = parseRetryAfterDeltaSeconds(
         response.headers.get("retry-after"),
-        input.config.maxDelayMs,
+        input.config.maxDelayMs / 1000,
       );
-      const delay = retryAfter ?? backoffDelay(input.config, attempt, random());
+      const delay =
+        retryAfterSeconds === undefined
+          ? backoffDelay(input.config, attempt, random())
+          : retryAfterSeconds * 1000;
       await sleep(delay, input.signal);
     } catch {
       if (input.signal?.aborted) {
@@ -238,14 +246,6 @@ function backoffDelay(
   );
   const factor = 1 + (random * 2 - 1) * config.jitterRatio;
   return Math.max(0, Math.min(config.maxDelayMs, Math.round(base * factor)));
-}
-
-function retryAfterDelay(
-  value: string | null,
-  maximum: number,
-): number | undefined {
-  if (value === null || !/^\d+$/.test(value)) return undefined;
-  return Math.min(maximum, Number(value) * 1000);
 }
 
 async function readLimitedResponse(

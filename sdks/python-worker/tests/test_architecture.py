@@ -20,7 +20,7 @@ def test_metadata_declares_only_the_two_approved_runtime_dependency_families() -
     }
     metadata = project["project"]
     assert metadata["name"] == "tenvyr-worker"
-    assert metadata["version"] == "1.0.0"
+    assert metadata["version"] == "0.1.0"
     assert metadata["requires-python"] == ">=3.11"
     assert metadata["dependencies"] == [
         "aiohttp>=3.12,<4",
@@ -94,9 +94,9 @@ def test_schema_loader_is_resource_only_and_deprecated_resolver_is_absent() -> N
 
 def test_parity_ledger_has_machine_readable_per_feature_entries() -> None:
     ledger = json.loads(
-        (REPO_ROOT / "docs" / "architecture" / "worker-sdk-parity.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            REPO_ROOT / "docs" / "architecture" / "workers" / "worker-sdk-parity.json"
+        ).read_text(encoding="utf-8")
     )
     required_keys = {
         "feature",
@@ -108,7 +108,7 @@ def test_parity_ledger_has_machine_readable_per_feature_entries() -> None:
     }
     assert ledger["features"]
     assert all(set(entry) == required_keys for entry in ledger["features"])
-    assert ledger["sharedConformanceCaseCount"] == 52
+    assert ledger["sharedConformanceCaseCount"] == 73
 
 
 def test_internal_import_graph_is_acyclic() -> None:

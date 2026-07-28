@@ -116,6 +116,55 @@ describe("Worker hardening regressions", () => {
     );
   });
 
+  it("rejects unsafe integers before canonical fingerprint bytes are created", () => {
+    expect(() =>
+      canonicalJson({ unsafe: Number.MAX_SAFE_INTEGER + 1 }),
+    ).toThrow(/safe integer/);
+    expect(() =>
+      requestFingerprint(
+        request({ nested: [Number.MIN_SAFE_INTEGER - 1] }),
+        "invocation-1",
+      ),
+    ).toThrow(/safe integer/);
+  });
+
+  it("rejects unsafe callback result bytes before signing or transmission", async () => {
+    const fetchRequest = jest.fn();
+    const unsafeResult = {
+      schemaVersion: "1",
+      invocationId: "invocation-1",
+      executionId: "execution-1",
+      stepExecutionId: "step-execution-1",
+      status: "succeeded",
+      output: { unsafe: Number.MAX_SAFE_INTEGER + 1 },
+      completedAt: "2026-07-26T00:00:01.000Z",
+    } as AgentResultV1;
+
+    await expect(
+      deliverCallback(
+        {
+          agent: "echo-agent",
+          runId: "run-1",
+          result: unsafeResult,
+          callbackUrl: "https://orchestrator.example/callback",
+          keyId: "callback-v1",
+          secret: "callback-secret",
+          config: {
+            maxAttempts: 1,
+            initialDelayMs: 1,
+            maxDelayMs: 1,
+            jitterRatio: 0,
+            requestTimeoutMs: 1000,
+            maxResponseBytes: 32,
+          },
+          logger: noOpLogger,
+        },
+        { fetch: fetchRequest },
+      ),
+    ).rejects.toThrow(/safe JSON integer/);
+    expect(fetchRequest).not.toHaveBeenCalled();
+  });
+
   it("uses current Unix seconds for every retry while keeping delivery ID and body stable", async () => {
     const sent: RequestInit[] = [];
     const result: AgentResultV1 = {
