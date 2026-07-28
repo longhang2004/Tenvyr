@@ -1,0 +1,40 @@
+services:
+  orchestrator:
+    depends_on:
+      python-worker:
+        condition: service_healthy
+    environment:
+      AGENT_TRANSPORT_CONFIG: >-
+        {"echo-analyzer":{"kind":"http","submitUrl":"http://python-worker:8080/v1/runs","outboundAuthentication":{"type":"bearer","tokenEnv":"SHOWCASE_WORKER_TOKEN"},"callbackAuthentication":{"keyId":"showcase-v1","secretEnv":"SHOWCASE_CALLBACK_SECRET"},"requestTimeoutMs":5000,"maxResponseBytes":65536}}
+      HTTP_AGENT_CALLBACK_BASE_URL: http://orchestrator:3001
+      HTTP_AGENT_ALLOW_INSECURE: "true"
+      SHOWCASE_WORKER_TOKEN: ${SHOWCASE_WORKER_TOKEN:-tenvyr-local-worker}
+      SHOWCASE_CALLBACK_SECRET: ${SHOWCASE_CALLBACK_SECRET:-tenvyr-local-callback}
+
+  python-worker:
+    build:
+      context: .
+      dockerfile: examples/python-http-worker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      TENVYR_WORKER_TOKEN: ${SHOWCASE_WORKER_TOKEN:-tenvyr-local-worker}
+      TENVYR_CALLBACK_KEY_ID: showcase-v1
+      TENVYR_CALLBACK_SECRET: ${SHOWCASE_CALLBACK_SECRET:-tenvyr-local-callback}
+      TENVYR_CALLBACK_ORIGIN: http://orchestrator:3001
+      TENVYR_ALLOW_INSECURE_HTTP: "true"
+      TENVYR_WORKER_HOST: 0.0.0.0
+      TENVYR_WORKER_PORT: 8080
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2).read()
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    networks:
+      - agentweave-net

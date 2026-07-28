@@ -1,0 +1,17 @@
+[
+  { "status": 200, "outcome": "delivered" },
+  { "status": 202, "outcome": "delivered" },
+  { "status": 204, "outcome": "delivered" },
+  { "status": 299, "outcome": "delivered" },
+  { "status": 302, "outcome": "do-not-retry" },
+  { "status": 400, "outcome": "do-not-retry" },
+  { "status": 401, "outcome": "do-not-retry" },
+  { "status": 403, "outcome": "do-not-retry" },
+  { "status": 404, "outcome": "do-not-retry" },
+  { "status": 408, "outcome": "retry" },
+  { "status": 409, "outcome": "do-not-retry" },
+  { "status": 429, "outcome": "retry" },
+  { "status": 500, "outcome": "retry" },
+  { "status": 503, "outcome": "retry" },
+  { "status": 599, "outcome": "retry" }
+]

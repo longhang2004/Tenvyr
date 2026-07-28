@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1",
+  "invocation": {
+    "schemaVersion": "1",
+    "invocationId": "invocation-json-number-1",
+    "executionId": "execution-json-number-1",
+    "stepExecutionId": "step-execution-json-number-1",
+    "stepId": "echo",
+    "target": {
+      "agent": "echo-agent"
+    },
+    "input": {
+      "enabled": true,
+      "disabled": false
+    },
+    "attempt": 1,
+    "createdAt": "2026-07-26T00:00:00.000Z",
+    "trace": {
+      "traceId": "trace-json-number-1",
+      "correlationId": "invocation-json-number-1"
+    }
+  },
+  "resultDelivery": {
+    "mode": "callback",
+    "callbackUrl": "https://orchestrator.example/internal/agent-callbacks/http/echo-agent",
+    "authentication": {
+      "scheme": "hmac-sha256",
+      "keyId": "conformance-v1"
+    }
+  }
+}

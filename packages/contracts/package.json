@@ -1,0 +1,50 @@
+{
+  "name": "@tenvyr/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Language-neutral Tenvyr invocation, result, and HTTP protocol contracts",
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../../scripts/copy-contract-schemas.mjs",
+    "test": "jest"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "2.1.1"
+  },
+  "devDependencies": {
+    "@types/jest": "29.5.14",
+    "@types/node": "20.19.41",
+    "jest": "29.7.0",
+    "ts-jest": "29.4.11",
+    "typescript": "5.9.3"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "rootDir": ".",
+    "testRegex": "test/.*\\.spec\\.ts$",
+    "moduleFileExtensions": [
+      "ts",
+      "js",
+      "json"
+    ]
+  }
+}

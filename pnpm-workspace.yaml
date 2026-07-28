@@ -1,5 +1,7 @@
 packages:
-  - 'services/*'
-  - 'frontend'
-  - 'sdk'
-  - 'e2e'
+  - "packages/*"
+  - "examples/*"
+  - "services/*"
+  - "frontend"
+  - "sdk"
+  - "e2e"

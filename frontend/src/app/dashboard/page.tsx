@@ -15,17 +15,104 @@ import {
   HelpCircle,
   AlertTriangle,
   Terminal,
-  Database
+  Database,
 } from "lucide-react";
+import { safeJsonPreview } from "./safe-preview.mjs";
 
-const GATEWAY_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+const GATEWAY_API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const GATEWAY_WS_URL = process.env.NEXT_PUBLIC_WS_URL || GATEWAY_API_URL;
 
+type PipelineStepMetadata = {
+  runtime?: unknown;
+  language?: unknown;
+  transport?: unknown;
+  runnerRuntime?: unknown;
+};
+
+type PipelineStep = {
+  id: string;
+  metadata?: PipelineStepMetadata;
+};
+
+type Pipeline = {
+  id: string;
+  name: string;
+  version: string;
+  steps?: PipelineStep[];
+};
+
+type StepExecution = {
+  id: string;
+  stepId: string;
+  agent: string;
+  status: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string | null;
+  errorCode?: string;
+  failureCode?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  startTime?: string;
+  endTime?: string;
+};
+
+type Execution = {
+  id: string;
+  pipelineId: string;
+  status: string;
+  startTime: string;
+  endTime?: string;
+  steps?: StepExecution[];
+};
+
+type ApiResponse<T> = {
+  success: boolean;
+  data: T;
+  error?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const isExecution = (value: unknown): value is Execution =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.pipelineId === "string" &&
+  typeof value.status === "string" &&
+  typeof value.startTime === "string";
+
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const displayValue = (value: unknown) =>
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean"
+    ? String(value)
+    : null;
+
+const formatDuration = (startTime?: string, endTime?: string) => {
+  if (!startTime) return null;
+
+  const start = Date.parse(startTime);
+  const end = endTime ? Date.parse(endTime) : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+
+  const duration = Math.max(0, end - start);
+  return duration < 1000
+    ? `${duration} ms`
+    : `${(duration / 1000).toFixed(1)} s`;
+};
+
 export default function Dashboard() {
-  const [pipelines, setPipelines] = useState<any[]>([]);
-  const [executions, setExecutions] = useState<any[]>([]);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [executions, setExecutions] = useState<Execution[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
-  const [selectedExecution, setSelectedExecution] = useState<any | null>(null);
+  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(
+    null,
+  );
   const [yamlInput, setYamlInput] = useState<string>(`name: code-review-pipeline
 version: "1.0"
 description: "Reviews code and checks for runtime anomalies"
@@ -60,7 +147,7 @@ steps:
   const refreshData = async () => {
     try {
       const pipesRes = await fetch(`${GATEWAY_API_URL}/api/pipelines`);
-      const pipesData = await pipesRes.json();
+      const pipesData = (await pipesRes.json()) as ApiResponse<Pipeline[]>;
       if (pipesData.success) {
         setPipelines(pipesData.data);
         if (pipesData.data.length > 0) {
@@ -69,12 +156,12 @@ steps:
       }
 
       const execsRes = await fetch(`${GATEWAY_API_URL}/api/executions`);
-      const execsData = await execsRes.json();
+      const execsData = (await execsRes.json()) as ApiResponse<Execution[]>;
       if (execsData.success) {
         setExecutions(execsData.data);
       }
-    } catch (err: any) {
-      console.error("Failed to load initial data:", err.message);
+    } catch (error: unknown) {
+      console.error("Failed to load initial data:", errorMessage(error));
     }
   };
 
@@ -88,15 +175,24 @@ steps:
       console.log("Websocket connected to Gateway: " + socketConnection.id);
     });
 
-    socketConnection.on("execution-update", (event: any) => {
+    socketConnection.on("execution-update", (event: unknown) => {
+      if (
+        !isRecord(event) ||
+        typeof event.executionId !== "string" ||
+        !isExecution(event.data)
+      ) {
+        return;
+      }
+      const executionId = event.executionId;
+      const nextExecution = event.data;
       console.log("WebSocket event execution-update:", event);
       // Reload executions list
       refreshData();
-      
+
       // Update currently viewed execution if matches
-      setSelectedExecution((current: any) => {
-        if (current && current.id === event.executionId) {
-          return event.data;
+      setSelectedExecution((current) => {
+        if (current && current.id === executionId) {
+          return nextExecution;
         }
         return current;
       });
@@ -109,14 +205,20 @@ steps:
 
   // Poll selected execution if running to handle websocket fallback
   useEffect(() => {
-    if (!selectedExecution || (selectedExecution.status !== "RUNNING" && selectedExecution.status !== "PENDING")) {
+    if (
+      !selectedExecution ||
+      (selectedExecution.status !== "RUNNING" &&
+        selectedExecution.status !== "PENDING")
+    ) {
       return;
     }
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${GATEWAY_API_URL}/api/executions/${selectedExecution.id}`);
-        const data = await res.json();
+        const res = await fetch(
+          `${GATEWAY_API_URL}/api/executions/${selectedExecution.id}`,
+        );
+        const data = (await res.json()) as ApiResponse<Execution>;
         if (data.success) {
           setSelectedExecution(data.data);
         }
@@ -138,15 +240,15 @@ steps:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ yamlString: yamlInput }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as ApiResponse<Pipeline>;
       if (data.success) {
         setSuccessMsg("Pipeline registered successfully!");
         refreshData();
       } else {
         setErrorMsg(data.error || "Failed to register pipeline.");
       }
-    } catch (err: any) {
-      setErrorMsg("Error registering pipeline: " + err.message);
+    } catch (error: unknown) {
+      setErrorMsg("Error registering pipeline: " + errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -165,7 +267,7 @@ steps:
       let parsedInput = {};
       try {
         parsedInput = JSON.parse(pipelineInput);
-      } catch (err) {
+      } catch {
         setErrorMsg("Invalid JSON input parameters.");
         setLoading(false);
         return;
@@ -179,7 +281,7 @@ steps:
           input: parsedInput,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as ApiResponse<Execution>;
       if (data.success) {
         setSuccessMsg("Pipeline execution triggered!");
         setSelectedExecution(data.data);
@@ -187,8 +289,8 @@ steps:
       } else {
         setErrorMsg(data.error || "Failed to start execution.");
       }
-    } catch (err: any) {
-      setErrorMsg("Error starting execution: " + err.message);
+    } catch (error: unknown) {
+      setErrorMsg("Error starting execution: " + errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -197,7 +299,7 @@ steps:
   const handleSelectExecution = async (id: string) => {
     try {
       const res = await fetch(`${GATEWAY_API_URL}/api/executions/${id}`);
-      const data = await res.json();
+      const data = (await res.json()) as ApiResponse<Execution>;
       if (data.success) {
         setSelectedExecution(data.data);
       }
@@ -213,7 +315,13 @@ steps:
       case "FAILED":
         return <XCircle size={18} color="var(--accent-red)" />;
       case "RUNNING":
-        return <Activity size={18} color="var(--accent-blue)" className="pulse-spin" />;
+        return (
+          <Activity
+            size={18}
+            color="var(--accent-blue)"
+            className="pulse-spin"
+          />
+        );
       case "SKIPPED":
         return <AlertTriangle size={18} color="var(--text-secondary)" />;
       case "PENDING":
@@ -253,39 +361,81 @@ steps:
     }
   };
 
+  const selectedPipeline = selectedExecution
+    ? pipelines.find((pipeline) => pipeline.id === selectedExecution.pipelineId)
+    : undefined;
+
   return (
-    <div className="container" style={{ padding: "2rem", minHeight: "100vh", display: "flex", flexDirection: "column", gap: "2rem" }}>
+    <div
+      className="container"
+      style={{
+        padding: "2rem",
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        gap: "2rem",
+      }}
+    >
       {/* Header */}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "1rem" }}>
+      <header
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          borderBottom: "1px solid var(--border-color)",
+          paddingBottom: "1rem",
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div style={{
-            background: "linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%)",
-            padding: "0.5rem",
-            borderRadius: "8px",
-            display: "flex",
-            alignItems: "center"
-          }}>
+          <div
+            style={{
+              background:
+                "linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%)",
+              padding: "0.5rem",
+              borderRadius: "8px",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
             <Cpu size={20} color="#fff" />
           </div>
-          <span style={{ fontWeight: 800, fontSize: "1.25rem" }}>AgentWeave Control Center</span>
+          <span style={{ fontWeight: 800, fontSize: "1.25rem" }}>
+            Tenvyr Control Center
+          </span>
         </div>
-        <button onClick={refreshData} className="btn btn-secondary" style={{ gap: "0.5rem" }}>
+        <button
+          onClick={refreshData}
+          className="btn btn-secondary"
+          style={{ gap: "0.5rem" }}
+        >
           <RefreshCw size={16} /> Refresh
         </button>
       </header>
 
       {/* Main Grid */}
       <div className="dashboard-grid">
-        
         {/* Left Side: Pipeline Creator & Config */}
         <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-          
           {/* Create Pipeline Section */}
-          <div className="glass-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h3 style={{ fontSize: "1.1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <Layers size={18} color="var(--accent-purple)" /> Register New Pipeline
+          <div
+            className="glass-card"
+            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+          >
+            <h3
+              style={{
+                fontSize: "1.1rem",
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
+              <Layers size={18} color="var(--accent-purple)" /> Register New
+              Pipeline
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Define DAG workflow in YAML format:</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+              Define DAG workflow in YAML format:
+            </p>
             <textarea
               value={yamlInput}
               onChange={(e) => setYamlInput(e.target.value)}
@@ -299,7 +449,7 @@ steps:
                 color: "var(--text-primary)",
                 fontFamily: "var(--font-code)",
                 fontSize: "0.8rem",
-                resize: "vertical"
+                resize: "vertical",
               }}
             />
             <button
@@ -313,12 +463,30 @@ steps:
           </div>
 
           {/* Trigger Run Section */}
-          <div className="glass-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h3 style={{ fontSize: "1.1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <div
+            className="glass-card"
+            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+          >
+            <h3
+              style={{
+                fontSize: "1.1rem",
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
               <Play size={18} color="var(--accent-green)" /> Trigger Execution
             </h3>
-            
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.5rem", fontSize: "0.85rem" }}>
+
+            <label
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+                fontSize: "0.85rem",
+              }}
+            >
               Select Active Pipeline:
               <select
                 value={selectedPipelineId}
@@ -328,7 +496,7 @@ steps:
                   border: "1px solid var(--border-color)",
                   borderRadius: "8px",
                   padding: "0.5rem",
-                  color: "var(--text-primary)"
+                  color: "var(--text-primary)",
                 }}
               >
                 <option value="">-- Choose Pipeline --</option>
@@ -340,7 +508,14 @@ steps:
               </select>
             </label>
 
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.5rem", fontSize: "0.85rem" }}>
+            <label
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+                fontSize: "0.85rem",
+              }}
+            >
               Input Context Parameters (JSON):
               <textarea
                 value={pipelineInput}
@@ -355,7 +530,7 @@ steps:
                   color: "var(--text-primary)",
                   fontFamily: "var(--font-code)",
                   fontSize: "0.8rem",
-                  resize: "vertical"
+                  resize: "vertical",
                 }}
               />
             </label>
@@ -372,12 +547,30 @@ steps:
 
           {/* Feedback Messages */}
           {errorMsg && (
-            <div style={{ background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)", color: "#f87171", padding: "0.75rem 1rem", borderRadius: "8px", fontSize: "0.85rem" }}>
+            <div
+              style={{
+                background: "rgba(239, 68, 68, 0.15)",
+                border: "1px solid rgba(239, 68, 68, 0.3)",
+                color: "#f87171",
+                padding: "0.75rem 1rem",
+                borderRadius: "8px",
+                fontSize: "0.85rem",
+              }}
+            >
               {errorMsg}
             </div>
           )}
           {successMsg && (
-            <div style={{ background: "rgba(16, 185, 129, 0.15)", border: "1px solid rgba(16, 185, 129, 0.3)", color: "#34d399", padding: "0.75rem 1rem", borderRadius: "8px", fontSize: "0.85rem" }}>
+            <div
+              style={{
+                background: "rgba(16, 185, 129, 0.15)",
+                border: "1px solid rgba(16, 185, 129, 0.3)",
+                color: "#34d399",
+                padding: "0.75rem 1rem",
+                borderRadius: "8px",
+                fontSize: "0.85rem",
+              }}
+            >
               {successMsg}
             </div>
           )}
@@ -385,120 +578,452 @@ steps:
 
         {/* Right Side: Visual Graph Monitor & Executions List */}
         <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-          
           {/* Active Visual Graph Monitor */}
-          <div className="glass-card" style={{ minHeight: "350px", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "0.75rem" }}>
-              <h3 style={{ fontSize: "1.1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Activity size={18} color="var(--accent-blue)" /> Live DAG Execution Monitor
+          <div
+            className="glass-card"
+            style={{
+              minHeight: "350px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1.5rem",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                borderBottom: "1px solid var(--border-color)",
+                paddingBottom: "0.75rem",
+              }}
+            >
+              <h3
+                style={{
+                  fontSize: "1.1rem",
+                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <Activity size={18} color="var(--accent-blue)" /> Live DAG
+                Execution Monitor
               </h3>
               {selectedExecution && (
-                <span style={{ fontSize: "0.75rem", background: "rgba(255,255,255,0.05)", padding: "0.25rem 0.5rem", borderRadius: "4px", color: "var(--text-secondary)" }}>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    background: "rgba(255,255,255,0.05)",
+                    padding: "0.25rem 0.5rem",
+                    borderRadius: "4px",
+                    color: "var(--text-secondary)",
+                  }}
+                >
                   ID: {selectedExecution.id.substring(0, 8)}...
                 </span>
               )}
             </div>
 
             {selectedExecution ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "2rem", flex: 1 }}>
-                
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2rem",
+                  flex: 1,
+                }}
+              >
                 {/* Overall Execution Info Header */}
-                <div style={{ display: "flex", gap: "2rem", background: "rgba(255, 255, 255, 0.01)", padding: "0.75rem", borderRadius: "8px", border: "1px solid var(--border-color)", fontSize: "0.85rem" }}>
-                  <div>Status: <span style={{ fontWeight: "bold" }}>{selectedExecution.status}</span></div>
-                  <div>Started: <span style={{ color: "var(--text-secondary)" }}>{new Date(selectedExecution.startTime).toLocaleTimeString()}</span></div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "2rem",
+                    background: "rgba(255, 255, 255, 0.01)",
+                    padding: "0.75rem",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  <div>
+                    Status:{" "}
+                    <span style={{ fontWeight: "bold" }}>
+                      {selectedExecution.status}
+                    </span>
+                  </div>
+                  <div>
+                    Started:{" "}
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      {new Date(
+                        selectedExecution.startTime,
+                      ).toLocaleTimeString()}
+                    </span>
+                  </div>
                   {selectedExecution.endTime && (
-                    <div>Completed: <span style={{ color: "var(--text-secondary)" }}>{new Date(selectedExecution.endTime).toLocaleTimeString()}</span></div>
+                    <div>
+                      Completed:{" "}
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {new Date(
+                          selectedExecution.endTime,
+                        ).toLocaleTimeString()}
+                      </span>
+                    </div>
                   )}
+                  <div>
+                    Duration:{" "}
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      {formatDuration(
+                        selectedExecution.startTime,
+                        selectedExecution.endTime,
+                      ) || "—"}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Nodes Grid (DAG Visualization) */}
-                <div style={{ display: "flex", flexDirection: "column", gap: "1rem", position: "relative" }}>
-                  {selectedExecution.steps && selectedExecution.steps.length > 0 ? (
-                    selectedExecution.steps.map((step: any, index: number) => (
-                      <React.Fragment key={step.id}>
-                        {index > 0 && (
-                          <div style={{
-                            width: "2px",
-                            height: "20px",
-                            backgroundColor: step.status === "RUNNING" ? "var(--accent-blue)" : "var(--border-color)",
-                            marginLeft: "2rem",
-                            marginTop: "-0.5rem",
-                            marginBottom: "-0.5rem",
-                            animation: step.status === "RUNNING" ? "connectorPulse 1.5s infinite" : "none"
-                          }} />
-                        )}
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "1rem",
+                    position: "relative",
+                  }}
+                >
+                  {selectedExecution.steps &&
+                  selectedExecution.steps.length > 0 ? (
+                    selectedExecution.steps.map((step, index) => {
+                      const pipelineStep = selectedPipeline?.steps?.find(
+                        (candidate) => candidate.id === step.stepId,
+                      );
+                      const metadata = isRecord(pipelineStep?.metadata)
+                        ? pipelineStep.metadata
+                        : {};
+                      const output = isRecord(step.output) ? step.output : {};
+                      const tenvyr = isRecord(output._tenvyr)
+                        ? output._tenvyr
+                        : {};
+                      const providerMetadata = isRecord(tenvyr.metadata)
+                        ? tenvyr.metadata
+                        : tenvyr;
+                      const outputError = isRecord(output.error)
+                        ? output.error
+                        : {};
+                      const runtime =
+                        displayValue(metadata.runtime) ||
+                        displayValue(providerMetadata.runtime);
+                      const language =
+                        displayValue(metadata.language) ||
+                        displayValue(providerMetadata.language);
+                      const transport =
+                        displayValue(metadata.transport) ||
+                        displayValue(providerMetadata.transport);
+                      const runnerRuntime = displayValue(
+                        metadata.runnerRuntime,
+                      );
+                      const provider = displayValue(providerMetadata.provider);
+                      const model = displayValue(providerMetadata.model);
+                      const fallback = displayValue(
+                        providerMetadata.fallbackUsed,
+                      );
+                      const stepDuration = formatDuration(
+                        step.startTime,
+                        step.endTime,
+                      );
+                      const failureCode =
+                        displayValue(step.failureCode) ||
+                        displayValue(step.errorCode) ||
+                        displayValue(tenvyr.failureCode) ||
+                        displayValue(outputError.code) ||
+                        step.error?.match(/^([A-Z][A-Z0-9_]+):\s/)?.[1];
 
-                        <div style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          background: getStatusColor(step.status),
-                          border: `1px solid ${getStatusBorderColor(step.status)}`,
-                          borderRadius: "12px",
-                          padding: "1rem",
-                          transition: "all 0.3s ease"
-                        }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                              {getStatusIcon(step.status)}
-                              <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>{step.stepId}</span>
-                              <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>({step.agent})</span>
+                      return (
+                        <React.Fragment key={step.id}>
+                          {index > 0 && (
+                            <div
+                              style={{
+                                width: "2px",
+                                height: "20px",
+                                backgroundColor:
+                                  step.status === "RUNNING"
+                                    ? "var(--accent-blue)"
+                                    : "var(--border-color)",
+                                marginLeft: "2rem",
+                                marginTop: "-0.5rem",
+                                marginBottom: "-0.5rem",
+                                animation:
+                                  step.status === "RUNNING"
+                                    ? "connectorPulse 1.5s infinite"
+                                    : "none",
+                              }}
+                            />
+                          )}
+
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              background: getStatusColor(step.status),
+                              border: `1px solid ${getStatusBorderColor(step.status)}`,
+                              borderRadius: "12px",
+                              padding: "1rem",
+                              transition: "all 0.3s ease",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "0.75rem",
+                                }}
+                              >
+                                {getStatusIcon(step.status)}
+                                <span
+                                  style={{
+                                    fontWeight: 700,
+                                    fontSize: "0.9rem",
+                                  }}
+                                >
+                                  {step.stepId}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: "0.75rem",
+                                    color: "var(--text-secondary)",
+                                  }}
+                                >
+                                  ({step.agent})
+                                </span>
+                              </div>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "0.75rem",
+                                  fontSize: "0.75rem",
+                                  color: "var(--text-secondary)",
+                                }}
+                              >
+                                <span>
+                                  Attempt {step.attempt ?? "—"}
+                                  {step.maxAttempts != null
+                                    ? `/${step.maxAttempts}`
+                                    : ""}
+                                </span>
+                                {stepDuration && <span>{stepDuration}</span>}
+                              </div>
                             </div>
-                            {step.endTime && step.startTime && (
-                              <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                                {Math.round(new Date(step.endTime).getTime() - new Date(step.startTime).getTime())}ms
-                              </span>
+
+                            {(runtime ||
+                              language ||
+                              transport ||
+                              runnerRuntime ||
+                              provider ||
+                              model ||
+                              fallback ||
+                              failureCode) && (
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  gap: "0.5rem",
+                                  marginTop: "0.75rem",
+                                  fontSize: "0.75rem",
+                                  color: "var(--text-secondary)",
+                                }}
+                              >
+                                {runtime && <span>Runtime: {runtime}</span>}
+                                {language && <span>Language: {language}</span>}
+                                {transport && (
+                                  <span>Transport: {transport}</span>
+                                )}
+                                {runnerRuntime && (
+                                  <span>Runner runtime: {runnerRuntime}</span>
+                                )}
+                                {provider && <span>Provider: {provider}</span>}
+                                {model && <span>Model: {model}</span>}
+                                {fallback && <span>Fallback: {fallback}</span>}
+                                {failureCode && (
+                                  <span style={{ color: "#f87171" }}>
+                                    Failure: {failureCode}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Expanded Step Info */}
+                            {step.input !== undefined &&
+                              step.input !== null && (
+                                <div
+                                  style={{
+                                    marginTop: "0.75rem",
+                                    padding: "0.5rem",
+                                    background: "rgba(0,0,0,0.2)",
+                                    borderRadius: "6px",
+                                    fontSize: "0.75rem",
+                                    fontFamily: "var(--font-code)",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      color: "var(--accent-blue)",
+                                      fontWeight: "bold",
+                                      marginBottom: "0.25rem",
+                                    }}
+                                  >
+                                    [Input Context]
+                                  </div>
+                                  <pre
+                                    style={{
+                                      margin: 0,
+                                      whiteSpace: "pre-wrap",
+                                      overflowWrap: "anywhere",
+                                    }}
+                                  >
+                                    {safeJsonPreview(step.input)}
+                                  </pre>
+                                </div>
+                              )}
+
+                            {step.output !== undefined &&
+                              step.output !== null && (
+                                <div
+                                  style={{
+                                    marginTop: "0.5rem",
+                                    padding: "0.5rem",
+                                    background: "rgba(0,0,0,0.2)",
+                                    borderRadius: "6px",
+                                    fontSize: "0.75rem",
+                                    fontFamily: "var(--font-code)",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      color: "var(--accent-green)",
+                                      fontWeight: "bold",
+                                      marginBottom: "0.25rem",
+                                    }}
+                                  >
+                                    [Agent Output]
+                                  </div>
+                                  <pre
+                                    style={{
+                                      margin: 0,
+                                      whiteSpace: "pre-wrap",
+                                      overflowWrap: "anywhere",
+                                    }}
+                                  >
+                                    {safeJsonPreview(step.output)}
+                                  </pre>
+                                </div>
+                              )}
+
+                            {step.error && (
+                              <div
+                                style={{
+                                  marginTop: "0.5rem",
+                                  padding: "0.5rem",
+                                  background: "rgba(239,68,68,0.1)",
+                                  border: "1px solid rgba(239,68,68,0.2)",
+                                  borderRadius: "6px",
+                                  fontSize: "0.75rem",
+                                  fontFamily: "var(--font-code)",
+                                  color: "#f87171",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: "bold",
+                                    marginBottom: "0.25rem",
+                                  }}
+                                >
+                                  [Error Trace]
+                                </div>
+                                <div>{step.error}</div>
+                              </div>
                             )}
                           </div>
-
-                          {/* Expanded Step Info */}
-                          {step.input && (
-                            <div style={{ marginTop: "0.75rem", padding: "0.5rem", background: "rgba(0,0,0,0.2)", borderRadius: "6px", fontSize: "0.75rem", fontFamily: "var(--font-code)" }}>
-                              <div style={{ color: "var(--accent-blue)", fontWeight: "bold", marginBottom: "0.25rem" }}>[Input Context]</div>
-                              <div>{JSON.stringify(step.input)}</div>
-                            </div>
-                          )}
-
-                          {step.output && (
-                            <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "rgba(0,0,0,0.2)", borderRadius: "6px", fontSize: "0.75rem", fontFamily: "var(--font-code)" }}>
-                              <div style={{ color: "var(--accent-green)", fontWeight: "bold", marginBottom: "0.25rem" }}>[Agent Output]</div>
-                              <div>{JSON.stringify(step.output)}</div>
-                            </div>
-                          )}
-
-                          {step.error && (
-                            <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: "6px", fontSize: "0.75rem", fontFamily: "var(--font-code)", color: "#f87171" }}>
-                              <div style={{ fontWeight: "bold", marginBottom: "0.25rem" }}>[Error Trace]</div>
-                              <div>{step.error}</div>
-                            </div>
-                          )}
-                        </div>
-                      </React.Fragment>
-                    ))
+                        </React.Fragment>
+                      );
+                    })
                   ) : (
-                    <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem", textAlign: "center", padding: "2rem" }}>
+                    <div
+                      style={{
+                        color: "var(--text-secondary)",
+                        fontSize: "0.85rem",
+                        textAlign: "center",
+                        padding: "2rem",
+                      }}
+                    >
                       Pipeline starting, building nodes...
                     </div>
                   )}
                 </div>
-
               </div>
             ) : (
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1rem", color: "var(--text-secondary)", border: "1px dashed var(--border-color)", borderRadius: "12px" }}>
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "1rem",
+                  color: "var(--text-secondary)",
+                  border: "1px dashed var(--border-color)",
+                  borderRadius: "12px",
+                }}
+              >
                 <Terminal size={32} />
-                <span style={{ fontSize: "0.9rem" }}>No active run selected. Choose a run from history or start a new run.</span>
+                <span style={{ fontSize: "0.9rem" }}>
+                  No active run selected. Choose a run from history or start a
+                  new run.
+                </span>
               </div>
             )}
           </div>
 
           {/* Execution History */}
-          <div className="glass-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h3 style={{ fontSize: "1.1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <Database size={18} color="var(--accent-blue)" /> Execution Run History
+          <div
+            className="glass-card"
+            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+          >
+            <h3
+              style={{
+                fontSize: "1.1rem",
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
+              <Database size={18} color="var(--accent-blue)" /> Execution Run
+              History
             </h3>
-            
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxHeight: "300px", overflowY: "auto" }}>
+
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem",
+                maxHeight: "300px",
+                overflowY: "auto",
+              }}
+            >
               {executions.length === 0 ? (
-                <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem", textAlign: "center", padding: "1.5rem" }}>
+                <div
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                    textAlign: "center",
+                    padding: "1.5rem",
+                  }}
+                >
                   No execution runs found.
                 </div>
               ) : (
@@ -511,23 +1036,45 @@ steps:
                       justifyContent: "space-between",
                       alignItems: "center",
                       padding: "0.75rem 1rem",
-                      background: selectedExecution && selectedExecution.id === exec.id ? "rgba(255, 255, 255, 0.05)" : "rgba(255, 255, 255, 0.01)",
+                      background:
+                        selectedExecution && selectedExecution.id === exec.id
+                          ? "rgba(255, 255, 255, 0.05)"
+                          : "rgba(255, 255, 255, 0.01)",
                       border: `1px solid ${selectedExecution && selectedExecution.id === exec.id ? "var(--accent-blue)" : "var(--border-color)"}`,
                       borderRadius: "8px",
                       cursor: "pointer",
-                      transition: "all 0.2s"
+                      transition: "all 0.2s",
                     }}
                   >
-                    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.25rem",
+                      }}
+                    >
                       <span style={{ fontSize: "0.85rem", fontWeight: "bold" }}>
                         Run {exec.id.substring(0, 8)}
                       </span>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
                         {new Date(exec.startTime).toLocaleString()}
                       </span>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>{exec.status}</span>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>
+                        {exec.status}
+                      </span>
                       {getStatusIcon(exec.status)}
                     </div>
                   </div>
@@ -535,9 +1082,7 @@ steps:
               )}
             </div>
           </div>
-
         </div>
-
       </div>
 
       {/* Inline styles */}

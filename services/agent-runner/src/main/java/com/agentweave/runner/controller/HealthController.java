@@ -35,7 +35,7 @@ public class HealthController {
         Map<String, Object> data = new HashMap<>();
         Map<String, Object> meta = new HashMap<>();
 
-        data.put("message", "Welcome to AgentWeave Core Agent Runner API");
+        data.put("message", "Welcome to Tenvyr Core Agent Runner API");
 
         meta.put("timestamp", Instant.now().toString());
 

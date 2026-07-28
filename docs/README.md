@@ -1,0 +1,86 @@
+---
+title: Tenvyr Documentation
+status: current
+audience:
+  - developer
+  - operator
+  - product
+last_verified: 2026-07-28
+sources:
+  - package.json
+  - docs/reference/implementation-status.json
+---
+
+# Tenvyr Documentation
+
+Use this index after executable sources. Documentation is divided by purpose so
+planned or historical material cannot be mistaken for current behavior.
+
+## Source-of-truth hierarchy
+
+1. Executable contracts and schemas.
+2. Production code.
+3. Executable tests and conformance fixtures.
+4. Current architecture and operations documentation.
+5. Product decisions.
+6. Roadmap documents.
+7. Historical plans, specifications, migrations, and decisions.
+
+When these disagree, code, executable contracts, and tests take precedence over
+prose. The conflict must still be corrected rather than ignored.
+
+## Current architecture
+
+- [System overview](architecture/overview.md)
+- [Control plane](architecture/control-plane.md)
+- [Agents and runners](architecture/agents-and-runners.md)
+- Contracts: [agent protocol v1](architecture/contracts/agent-protocol-v1.md)
+  and [JSON interoperability](architecture/contracts/json-interoperability.md)
+- Transports: [adapter model](architecture/transports/adapter-model.md),
+  [Kafka runtime v1](architecture/transports/kafka-runtime-v1.md), and
+  [HTTP adapter v1](architecture/transports/http-agent-adapter-v1.md)
+- Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
+  [Python](architecture/workers/python-worker-sdk.md), and the
+  [machine parity ledger](architecture/workers/worker-sdk-parity.json)
+
+## Operations
+
+- [Local development](operations/local-development.md)
+- [Configuration reference](operations/configuration.md)
+- [Testing and verification](operations/testing-and-verification.md)
+- [Package verification](operations/package-verification.md)
+
+## Showcase
+
+- [5–10 minute demo guide](showcase/demo-guide.md)
+- [Using model providers](showcase/using-model-providers.md)
+- [Portfolio case study](showcase/case-study.md)
+
+## Development and tooling
+
+- [Agent rules](development/agent-rules.md)
+- Optional local tooling: [CodeGraph](development/tooling/codegraph.md),
+  [agent skills](development/tooling/agent-skills.md),
+  [persistent memory](development/tooling/persistent-memory.md), and
+  [output compression](development/tooling/output-compression.md)
+
+Developer tooling is not a Tenvyr production runtime feature.
+
+## Product and reference
+
+- [Product principles](product/principles.md)
+- [Product identity and publication blockers](product/identity.md)
+- [Implementation status](reference/implementation-status.md) and its
+  [machine-readable ledger](reference/implementation-status.json)
+- [Product-name inventory](reference/product-name-inventory.json)
+
+## Roadmap, plans, and history
+
+- Planned work: [roadmap index](roadmap/README.md) and
+  [observability/provenance roadmap](roadmap/observability-provenance.md)
+- Plan policy: [plan lifecycle](plans/README.md)
+- Historical records: [archive policy and index](archive/README.md)
+
+Roadmap entries are not implementation claims. Active accepted plans belong in
+`docs/plans/active/`; completed records belong in `docs/archive/`; local scratch
+work belongs in ignored `docs/_scratch/`.

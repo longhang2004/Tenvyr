@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1",
+  "invocation": {
+    "schemaVersion": "1",
+    "invocationId": "invocation-conformance-1",
+    "executionId": "execution-conformance-1",
+    "stepExecutionId": "step-execution-conformance-1",
+    "stepId": "echo",
+    "target": {
+      "agent": "echo-agent"
+    },
+    "input": {
+      "message": "Xin chào",
+      "count": 2
+    },
+    "context": {
+      "tenant": "conformance"
+    },
+    "attempt": 2,
+    "createdAt": "2026-07-26T00:00:00.000Z",
+    "deadlineAt": "2026-07-26T00:15:00.000Z",
+    "trace": {
+      "traceId": "trace-conformance-1",
+      "correlationId": "invocation-conformance-1"
+    },
+    "metadata": {
+      "suite": "http-v1"
+    }
+  },
+  "resultDelivery": {
+    "mode": "callback",
+    "callbackUrl": "https://orchestrator.example/internal/agent-callbacks/http/echo-agent",
+    "authentication": {
+      "scheme": "hmac-sha256",
+      "keyId": "conformance-v1"
+    }
+  }
+}

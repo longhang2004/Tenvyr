@@ -1,9 +1,10 @@
-import type { Metadata } from 'next';
-import './globals.css';
+import type { Metadata } from "next";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: 'AgentWeave — Multi-Agent Orchestration Framework',
-  description: 'An open-source multi-agent orchestration framework utilizing Kafka as the event bus to connect and coordinate specialized AI agents.',
+  title: "Tenvyr — Agent Execution Control Plane",
+  description:
+    "A framework-neutral execution control plane that runs outside agent processes to dispatch, supervise, and orchestrate durable work.",
 };
 
 export default function RootLayout({

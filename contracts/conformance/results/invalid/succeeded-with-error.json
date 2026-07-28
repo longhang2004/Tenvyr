@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "invocation-conformance-1",
+  "executionId": "execution-conformance-1",
+  "stepExecutionId": "step-execution-conformance-1",
+  "status": "succeeded",
+  "error": {
+    "code": "IMPOSSIBLE",
+    "message": "Succeeded results cannot contain errors",
+    "retryable": false
+  },
+  "completedAt": "2026-07-26T00:00:02.000Z"
+}

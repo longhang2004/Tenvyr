@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "invocation-conformance-1",
+  "executionId": "execution-conformance-1",
+  "stepExecutionId": "step-execution-conformance-1",
+  "status": "succeeded",
+  "output": {
+    "echo": "Xin chào"
+  },
+  "usage": {
+    "inputTokens": 1,
+    "outputTokens": 2,
+    "totalTokens": 3,
+    "costUsd": 0
+  },
+  "artifacts": [
+    {
+      "id": "artifact-1",
+      "name": "echo.json",
+      "mediaType": "application/json",
+      "uri": "https://artifacts.example/echo.json"
+    }
+  ],
+  "startedAt": "2026-07-26T00:00:01.000Z",
+  "completedAt": "2026-07-26T00:00:02.000Z",
+  "metadata": {
+    "suite": "http-v1"
+  }
+}

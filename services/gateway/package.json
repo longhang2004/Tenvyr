@@ -1,7 +1,7 @@
 {
   "name": "gateway",
-  "version": "1.0.0",
-  "description": "AgentWeave Gateway Service",
+  "version": "0.1.0",
+  "description": "Tenvyr Gateway Service",
   "main": "dist/main.js",
   "scripts": {
     "build": "nest build",

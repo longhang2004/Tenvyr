@@ -1,0 +1,82 @@
+[
+  {
+    "name": "minimal-json",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"a\":1,\"b\":2}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"a\":1,\"b\":2}",
+    "expectedSignature": "v1=4ba9bbb06eea7372b76c80db5f669dbdd9930eee6cde15bb1dec40d3cf94217d"
+  },
+  {
+    "name": "pretty-json",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\n  \"a\": 1,\n  \"b\": 2\n}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\n  \"a\": 1,\n  \"b\": 2\n}",
+    "expectedSignature": "v1=f69275b6af028b6fcf1a0f643a34d5ed7cc6da3cac7cbb9e6d0db2ea55d61c5b"
+  },
+  {
+    "name": "reordered-properties",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"b\":2,\"a\":1}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"b\":2,\"a\":1}",
+    "expectedSignature": "v1=6d2783fe2049e1652d5333b8504e9f2c7ce5c287544df9006e8b868b2d86a5ac"
+  },
+  {
+    "name": "unicode-utf8",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"message\":\"Xin chào 🌏\"}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"message\":\"Xin chào 🌏\"}",
+    "expectedSignature": "v1=9961b44bd6f1248fbf853dc3068f271d29f9b90795885a1cb23e68ef14dd048c"
+  },
+  {
+    "name": "escaped-characters",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"text\":\"line\\nquote\\\"slash\\\\\"}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"text\":\"line\\nquote\\\"slash\\\\\"}",
+    "expectedSignature": "v1=a3841d8e64cd60690ac98feecd1f96fa0ce6a53b70c133991e3f67ff388ca33a"
+  },
+  {
+    "name": "empty-object",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{}",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{}",
+    "expectedSignature": "v1=27c76fe4a1ad4ff127a288b23a1e57eb05481c2834b692a299da5c5f184685d3"
+  },
+  {
+    "name": "trailing-newline",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "{\"a\":1}\n",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.{\"a\":1}\n",
+    "expectedSignature": "v1=ea8068b2c1270ee4c024df015ec602ab8e43d3c2519a0306a73399a2ef157b71"
+  },
+  {
+    "name": "leading-trailing-whitespace",
+    "keyId": "conformance-v1",
+    "secret": "tenvyr-conformance-secret",
+    "timestamp": "1785024000",
+    "deliveryId": "delivery-conformance-1",
+    "rawBodyUtf8": "  {\"a\":1} \t",
+    "expectedSignedPayload": "1785024000.delivery-conformance-1.  {\"a\":1} \t",
+    "expectedSignature": "v1=4c358a3c20bf4103981d2fa3094accd81a8de4c44a2a32a0c0ed590309f9da64"
+  }
+]

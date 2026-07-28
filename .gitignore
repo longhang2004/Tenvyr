@@ -9,6 +9,13 @@ build/
 .next/
 out/
 target/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
 *.class
 *.jar
 *.war
@@ -53,6 +60,9 @@ Thumbs.db
 *.sqlite
 .codegraph/
 
+# Local documentation and agent scratch artifacts
+docs/_scratch/
+
 # Skills and dynamic agent config
 .claude/
 .cursor/
@@ -61,3 +71,7 @@ Thumbs.db
 .clauderules
 .cursorrules
 .antigravityrules
+
+# Local owner artifacts
+/AgentWeave.zip
+/scripts/compress.sh

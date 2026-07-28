@@ -1,8 +1,15 @@
-import { Controller, Get, Post, Body, Param, NotFoundException } from '@nestjs/common';
-import { PipelineService } from './services/pipeline.service';
-import { ExecutionService } from './services/execution.service';
-import { EngineService } from './services/engine.service';
-import * as yaml from 'js-yaml';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  NotFoundException,
+} from "@nestjs/common";
+import { PipelineService } from "./services/pipeline.service";
+import { ExecutionService } from "./services/execution.service";
+import { EngineService } from "./services/engine.service";
+import * as yaml from "js-yaml";
 
 @Controller()
 export class AppController {
@@ -12,13 +19,13 @@ export class AppController {
     private engineService: EngineService,
   ) {}
 
-  @Get('health')
+  @Get("health")
   getHealth() {
     return {
       success: true,
       data: {
-        status: 'UP',
-        service: 'orchestrator',
+        status: "UP",
+        service: "orchestrator",
       },
       error: null,
       meta: {
@@ -27,12 +34,12 @@ export class AppController {
     };
   }
 
-  @Post('pipelines')
+  @Post("pipelines")
   async createPipeline(@Body() body: any) {
     let pipelineData = body;
-    
+
     // If input is a raw YAML string string, parse it
-    if (typeof body === 'string' || body.yamlString) {
+    if (typeof body === "string" || body.yamlString) {
       const rawYaml = body.yamlString || body;
       try {
         pipelineData = yaml.load(rawYaml);
@@ -47,8 +54,8 @@ export class AppController {
     try {
       const pipeline = await this.pipelineService.create({
         name: pipelineData.name,
-        version: pipelineData.version || '1.0',
-        description: pipelineData.description || '',
+        version: pipelineData.version || "1.0",
+        description: pipelineData.description || "",
         steps: pipelineData.steps || [],
       });
 
@@ -64,7 +71,7 @@ export class AppController {
     }
   }
 
-  @Get('pipelines')
+  @Get("pipelines")
   async getPipelines() {
     const pipelines = await this.pipelineService.findAll();
     return {
@@ -73,8 +80,8 @@ export class AppController {
     };
   }
 
-  @Get('pipelines/:id')
-  async getPipeline(@Param('id') id: string) {
+  @Get("pipelines/:id")
+  async getPipeline(@Param("id") id: string) {
     const pipeline = await this.pipelineService.findOne(id);
     if (!pipeline) {
       throw new NotFoundException(`Pipeline not found`);
@@ -85,7 +92,7 @@ export class AppController {
     };
   }
 
-  @Post('executions')
+  @Post("executions")
   async triggerExecution(@Body() body: { pipelineId: string; input: any }) {
     try {
       const execution = await this.engineService.startExecution(
@@ -104,7 +111,7 @@ export class AppController {
     }
   }
 
-  @Get('executions')
+  @Get("executions")
   async getExecutions() {
     const executions = await this.executionService.listExecutions();
     return {
@@ -113,15 +120,15 @@ export class AppController {
     };
   }
 
-  @Get('executions/:id')
-  async getExecution(@Param('id') id: string) {
+  @Get("executions/:id")
+  async getExecution(@Param("id") id: string) {
     const execution = await this.executionService.getExecution(id);
     if (!execution) {
       throw new NotFoundException(`Execution not found`);
     }
 
     const steps = await this.executionService.getStepExecutions(id);
-    
+
     return {
       success: true,
       data: {
@@ -140,7 +147,7 @@ export class AppController {
     return {
       success: true,
       data: {
-        message: 'Welcome to AgentWeave Orchestrator API',
+        message: "Welcome to Tenvyr Orchestrator API",
       },
       error: null,
       meta: {

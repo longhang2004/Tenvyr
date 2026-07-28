@@ -12,7 +12,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,8 +24,11 @@ public class LlmService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    @Value("${LLM_PROVIDER:openai}")
+    @Value("${LLM_PROVIDER:mock}")
     private String llmProvider;
+
+    @Value("${LLM_FAILURE_MODE:}")
+    private String llmFailureMode;
 
     @Value("${OPENAI_API_KEY:}")
     private String openaiApiKey;
@@ -51,38 +56,47 @@ public class LlmService {
         Map<String, Object> context = request.getContext() != null ? request.getContext() : Map.of();
         String prompt = resolvePromptTemplate(request.getPromptTemplate(), context);
 
-        System.out.println("Processing prompt: " + prompt.substring(0, Math.min(prompt.length(), 200)) + "...");
-
-        String output = executeProviderOrFallback(prompt, context);
+        ProviderExecution execution = executeProviderOrFallback(prompt, context);
         int promptTokens = estimateTokens(prompt);
-        int completionTokens = estimateTokens(output);
+        int completionTokens = estimateTokens(execution.output());
 
         return new RunResponse(
-            output,
+            execution.output(),
             promptTokens,
             completionTokens,
-            promptTokens + completionTokens
+            promptTokens + completionTokens,
+            execution.metadata()
         );
     }
 
-    private String executeProviderOrFallback(String prompt, Map<String, Object> context) {
-        String provider = llmProvider != null ? llmProvider.trim().toLowerCase() : "mock";
+    private ProviderExecution executeProviderOrFallback(String prompt, Map<String, Object> context) {
+        String provider = resolveProvider();
+        String failureMode = resolveFailureMode(provider);
 
-        try {
-            if ("openai".equals(provider) && hasCredential(openaiApiKey)) {
-                return callOpenAi(prompt);
-            }
-            if ("anthropic".equals(provider) && hasCredential(anthropicApiKey)) {
-                return callAnthropic(prompt);
-            }
-            if ("ollama".equals(provider)) {
-                return callOllama(prompt);
-            }
-        } catch (Exception ex) {
-            System.err.println("LLM provider call failed. Falling back to local heuristic response: " + ex.getMessage());
+        if ("mock".equals(provider)) {
+            return mockExecution(prompt, context, true, null);
         }
 
-        return generateMockResponse(prompt, context);
+        try {
+            if ("openai".equals(provider)) {
+                requireCredential(openaiApiKey, "OPENAI_API_KEY", provider);
+                requireModel(openaiModel, "OPENAI_MODEL", provider);
+                return realExecution(callOpenAi(prompt), provider, openaiModel);
+            }
+            if ("anthropic".equals(provider)) {
+                requireCredential(anthropicApiKey, "ANTHROPIC_API_KEY", provider);
+                requireModel(anthropicModel, "ANTHROPIC_MODEL", provider);
+                return realExecution(callAnthropic(prompt), provider, anthropicModel);
+            }
+            requireModel(ollamaModel, "OLLAMA_MODEL", provider);
+            return realExecution(callOllama(prompt), provider, ollamaModel);
+        } catch (Exception ex) {
+            if ("mock".equals(failureMode)) {
+                System.err.println("LLM provider call failed for " + provider + "; using deterministic mock output.");
+                return mockExecution(prompt, context, true, provider);
+            }
+            throw new IllegalStateException("LLM provider call failed for " + provider);
+        }
     }
 
     private String callOpenAi(String prompt) throws Exception {
@@ -158,9 +172,62 @@ public class LlmService {
     private JsonNode sendJsonRequest(HttpRequest request) throws Exception {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IllegalStateException("Provider returned HTTP " + response.statusCode() + ": " + response.body());
+            throw new IllegalStateException("Provider returned HTTP " + response.statusCode());
         }
         return OBJECT_MAPPER.readTree(response.body());
+    }
+
+    private ProviderExecution realExecution(String output, String provider, String model) {
+        return new ProviderExecution(output, provider, model, false, null);
+    }
+
+    private ProviderExecution mockExecution(
+        String prompt,
+        Map<String, Object> context,
+        boolean fallbackUsed,
+        String requestedProvider
+    ) {
+        return new ProviderExecution(
+            generateMockResponse(prompt, context),
+            "mock",
+            "local-heuristic",
+            fallbackUsed,
+            requestedProvider
+        );
+    }
+
+    private String resolveProvider() {
+        String provider = llmProvider == null || llmProvider.isBlank()
+            ? "mock"
+            : llmProvider.trim().toLowerCase(Locale.ROOT);
+        if (!List.of("mock", "openai", "anthropic", "ollama").contains(provider)) {
+            throw new IllegalArgumentException(
+                "Unsupported LLM_PROVIDER. Expected mock, openai, anthropic, or ollama."
+            );
+        }
+        return provider;
+    }
+
+    private String resolveFailureMode(String provider) {
+        String failureMode = llmFailureMode == null || llmFailureMode.isBlank()
+            ? ("mock".equals(provider) ? "mock" : "fail")
+            : llmFailureMode.trim().toLowerCase(Locale.ROOT);
+        if (!List.of("fail", "mock").contains(failureMode)) {
+            throw new IllegalArgumentException("Unsupported LLM_FAILURE_MODE. Expected fail or mock.");
+        }
+        return failureMode;
+    }
+
+    private void requireCredential(String value, String variable, String provider) {
+        if (!hasCredential(value)) {
+            throw new IllegalStateException(variable + " is required for provider " + provider);
+        }
+    }
+
+    private void requireModel(String value, String variable, String provider) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(variable + " is required for provider " + provider);
+        }
     }
 
     private String generateMockResponse(String prompt, Map<String, Object> context) {
@@ -174,7 +241,7 @@ public class LlmService {
             return generateObservabilityReview(context);
         }
 
-        return "Hello! I am the AgentWeave LLM Runner. Prompt received: " + prompt;
+        return "Hello! I am the Tenvyr LLM Runner. Prompt received: " + prompt;
     }
 
     private String generateSecurityReview(Map<String, Object> context) {
@@ -285,5 +352,25 @@ public class LlmService {
 
     private int estimateTokens(String text) {
         return Math.max(1, text.length() / 4);
+    }
+
+    private record ProviderExecution(
+        String output,
+        String provider,
+        String model,
+        boolean fallbackUsed,
+        String requestedProvider
+    ) {
+        private Map<String, Object> metadata() {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("provider", provider);
+            metadata.put("model", model);
+            metadata.put("fallbackUsed", fallbackUsed);
+            metadata.put("usageSource", "estimated");
+            if (requestedProvider != null) {
+                metadata.put("requestedProvider", requestedProvider);
+            }
+            return metadata;
+        }
     }
 }

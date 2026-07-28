@@ -1,18 +1,32 @@
 package com.agentweave.runner.model;
 
+import java.util.Map;
+
 public class RunResponse {
     private String output;
     private int promptTokens;
     private int completionTokens;
     private int totalTokens;
+    private Map<String, Object> metadata;
 
     public RunResponse() {}
 
     public RunResponse(String output, int promptTokens, int completionTokens, int totalTokens) {
+        this(output, promptTokens, completionTokens, totalTokens, Map.of());
+    }
+
+    public RunResponse(
+        String output,
+        int promptTokens,
+        int completionTokens,
+        int totalTokens,
+        Map<String, Object> metadata
+    ) {
         this.output = output;
         this.promptTokens = promptTokens;
         this.completionTokens = completionTokens;
         this.totalTokens = totalTokens;
+        this.metadata = metadata;
     }
 
     // Getters and Setters
@@ -46,5 +60,13 @@ public class RunResponse {
 
     public void setTotalTokens(int totalTokens) {
         this.totalTokens = totalTokens;
+    }
+
+    public Map<String, Object> getMetadata() {
+        return metadata;
+    }
+
+    public void setMetadata(Map<String, Object> metadata) {
+        this.metadata = metadata;
     }
 }

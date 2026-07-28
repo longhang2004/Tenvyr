@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-28",
+  "features": [
+    {
+      "feature": "HTTP routes and response status mapping",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13-real-socket",
+      "shared_test_or_fixture": "contracts schemas plus language-specific HTTP suites",
+      "intentional_difference": null,
+      "reason": "The Python 3.13 real-socket suite passed locally; the CI version matrix remains pending."
+    },
+    {
+      "feature": "Bearer authentication before body read",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-unit",
+      "shared_test_or_fixture": "language-specific authentication and HTTP ordering tests",
+      "intentional_difference": null,
+      "reason": "Both use a single Bearer token and constant-time byte comparison."
+    },
+    {
+      "feature": "Bounded streamed request bodies and finite JSON",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13-real-socket",
+      "shared_test_or_fixture": "run-request fixtures and language-specific size tests",
+      "intentional_difference": null,
+      "reason": "Both precheck Content-Length and enforce an accumulated stream limit."
+    },
+    {
+      "feature": "Cross-language safe integer policy",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13",
+      "shared_test_or_fixture": "contracts/conformance/json-numbers",
+      "intentional_difference": "Python must explicitly exclude bool from integer handling and also checks integral-valued floats.",
+      "reason": "Both reject integral values outside -9007199254740991 through 9007199254740991 recursively before acceptance, fingerprinting, result delivery, or callback serialization."
+    },
+    {
+      "feature": "Idempotency duplicate, conflict, expiry, and capacity",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-unit",
+      "shared_test_or_fixture": "language-specific idempotency and stress suites",
+      "intentional_difference": "Python stores the local SHA-256 fingerprint as bytes.",
+      "reason": "Fingerprint representation is process-local and never enters the wire contract."
+    },
+    {
+      "feature": "Exact capacity and FIFO queue scheduling",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-unit",
+      "shared_test_or_fixture": "language-specific scheduler and stress suites",
+      "intentional_difference": null,
+      "reason": "Both reserve active plus queued capacity atomically before returning 202."
+    },
+    {
+      "feature": "Callable and object input/output parsers",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-unit",
+      "shared_test_or_fixture": "public API and execution parser tests",
+      "intentional_difference": "Python accepts a callable or an object exposing callable parse.",
+      "reason": "The Python spelling follows normal callable and Protocol conventions."
+    },
+    {
+      "feature": "Timeout, shutdown, and cooperative cancellation",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13-real-socket",
+      "shared_test_or_fixture": "language-specific execution and lifecycle suites",
+      "intentional_difference": "Python threads cannot be killed and coroutines may suppress cancellation.",
+      "reason": "Late user work is detached and cannot publish a second terminal result."
+    },
+    {
+      "feature": "Callback exact bytes and redirect refusal",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13-real-socket",
+      "shared_test_or_fixture": "callback-signatures/vectors.json and callback suites",
+      "intentional_difference": null,
+      "reason": "Both serialize once and sign the transmitted UTF-8 bytes."
+    },
+    {
+      "feature": "Retry status, Retry-After, backoff, and response bounds",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13",
+      "shared_test_or_fixture": "protocol/callback-status-cases.json, protocol/retry-classification.json, and protocol/retry-after-cases.json",
+      "intentional_difference": "Python configuration uses seconds rather than milliseconds.",
+      "reason": "Both accept only ASCII delta-seconds, cap a 5,000-digit value without unbounded conversion, and use calculated backoff for invalid values."
+    },
+    {
+      "feature": "HMAC-SHA256 callback signatures",
+      "typescript_status": "passed-local-8-of-8",
+      "python_status": "passed-local-8-of-8",
+      "shared_test_or_fixture": "callback-signatures/vectors.json",
+      "intentional_difference": null,
+      "reason": "All eight shared vectors use the same timestamp, delivery ID, and raw body construction."
+    },
+    {
+      "feature": "Liveness and readiness health",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13-real-socket",
+      "shared_test_or_fixture": "language-specific health and lifecycle tests",
+      "intentional_difference": null,
+      "reason": "Python 3.13 liveness and readiness passed against an ephemeral localhost listener."
+    },
+    {
+      "feature": "One-shot lifecycle and owned-resource cleanup",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-python-3.13-real-socket; CI matrix pending",
+      "shared_test_or_fixture": "language-specific lifecycle and open-handle suites",
+      "intentional_difference": "Applications, not the Python SDK, install process signal handlers.",
+      "reason": "The SDK owns only its runner, session, tasks, timers, and callback work."
+    },
+    {
+      "feature": "Public API compatibility surface",
+      "typescript_status": "passed-local",
+      "python_status": "passed-local-exact-12-exports",
+      "shared_test_or_fixture": "language-specific public consumer tests",
+      "intentional_difference": "Python uses snake_case, seconds, StrEnum, Protocol, and warning.",
+      "reason": "Language-idiomatic APIs preserve the same runtime responsibilities."
+    },
+    {
+      "feature": "Package and schema isolation",
+      "typescript_status": "passed-local-pack-verifier",
+      "python_status": "passed-local-python-3.13-package-verifier",
+      "shared_test_or_fixture": "five canonical schemas and package allowlist verifiers",
+      "intentional_difference": "Python uses wheel, sdist, py.typed, and importlib.resources.",
+      "reason": "The Python verifier passed wheel/sdist allowlists, external-venv install, example smoke, and the dedicated cross-language loopback."
+    }
+  ],
+  "sharedConformanceCaseCount": 73,
+  "publicReleaseStatus": "blocked"
+}

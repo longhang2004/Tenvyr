@@ -1,21 +1,22 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
-import { SocketGateway } from './socket.gateway';
+import { Controller, Get, Post, Body, Param } from "@nestjs/common";
+import { SocketGateway } from "./socket.gateway";
 
 @Controller()
 export class AppController {
   private orchestratorUrl: string;
 
   constructor(private socketGateway: SocketGateway) {
-    this.orchestratorUrl = process.env.ORCHESTRATOR_URL || 'http://localhost:3001';
+    this.orchestratorUrl =
+      process.env.ORCHESTRATOR_URL || "http://localhost:3001";
   }
 
-  @Get('health')
+  @Get("health")
   getHealth() {
     return {
       success: true,
       data: {
-        status: 'UP',
-        service: 'gateway',
+        status: "UP",
+        service: "gateway",
       },
       error: null,
       meta: {
@@ -24,67 +25,79 @@ export class AppController {
     };
   }
 
-  @Post('api/webhooks/execution-update')
+  @Post("api/webhooks/execution-update")
   async handleExecutionWebhook(@Body() body: { executionId: string }) {
     const { executionId } = body;
     console.log(`Received execution webhook event for run: ${executionId}`);
 
     try {
       // Fetch full updated state from Orchestrator
-      const data = await this.forwardToOrchestrator(`/executions/${executionId}`);
+      const data = await this.forwardToOrchestrator(
+        `/executions/${executionId}`,
+      );
       if (data.success) {
         this.socketGateway.broadcastExecutionUpdate(executionId, data.data);
       }
       return { success: true };
     } catch (err) {
       const message = this.getErrorMessage(err);
-      console.error(`Failed to handle execution update for ${executionId}:`, message);
+      console.error(
+        `Failed to handle execution update for ${executionId}:`,
+        message,
+      );
       return { success: false, error: message };
     }
   }
 
-  @Post('api/pipelines')
+  @Post("api/pipelines")
   async createPipeline(@Body() body: any) {
-    return this.forwardToOrchestrator('/pipelines', {
-      method: 'POST',
+    return this.forwardToOrchestrator("/pipelines", {
+      method: "POST",
       body,
     });
   }
 
-  @Get('api/pipelines')
+  @Get("api/pipelines")
   async getPipelines() {
-    return this.forwardToOrchestrator('/pipelines');
+    return this.forwardToOrchestrator("/pipelines");
   }
 
-  @Get('api/pipelines/:id')
-  async getPipeline(@Param('id') id: string) {
+  @Get("api/pipelines/:id")
+  async getPipeline(@Param("id") id: string) {
     return this.forwardToOrchestrator(`/pipelines/${id}`);
   }
 
-  @Post('api/executions')
+  @Post("api/executions")
   async triggerExecution(@Body() body: any) {
-    return this.forwardToOrchestrator('/executions', {
-      method: 'POST',
+    return this.forwardToOrchestrator("/executions", {
+      method: "POST",
       body,
     });
   }
 
-  @Get('api/executions')
+  @Get("api/executions")
   async getExecutions() {
-    return this.forwardToOrchestrator('/executions');
+    return this.forwardToOrchestrator("/executions");
   }
 
-  @Get('api/executions/:id')
-  async getExecution(@Param('id') id: string) {
+  @Get("api/executions/:id")
+  async getExecution(@Param("id") id: string) {
     return this.forwardToOrchestrator(`/executions/${id}`);
   }
 
-  private async forwardToOrchestrator(path: string, options: { method?: string; body?: unknown } = {}) {
+  private async forwardToOrchestrator(
+    path: string,
+    options: { method?: string; body?: unknown } = {},
+  ) {
     try {
       const response = await fetch(`${this.orchestratorUrl}${path}`, {
-        method: options.method || 'GET',
-        headers: options.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        method: options.method || "GET",
+        headers:
+          options.body !== undefined
+            ? { "Content-Type": "application/json" }
+            : undefined,
+        body:
+          options.body !== undefined ? JSON.stringify(options.body) : undefined,
       });
 
       const data = await response.json();
@@ -92,7 +105,10 @@ export class AppController {
         return {
           success: false,
           data: null,
-          error: data.message || data.error || `Orchestrator returned HTTP ${response.status}`,
+          error:
+            data.message ||
+            data.error ||
+            `Orchestrator returned HTTP ${response.status}`,
         };
       }
       return data;
@@ -110,7 +126,7 @@ export class AppController {
     return {
       success: true,
       data: {
-        message: 'Welcome to AgentWeave Gateway API',
+        message: "Welcome to Tenvyr Gateway API",
       },
       error: null,
       meta: {

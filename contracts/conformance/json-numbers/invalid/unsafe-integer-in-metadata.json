@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1",
+  "invocationId": "invocation-json-number-1",
+  "executionId": "execution-json-number-1",
+  "stepExecutionId": "step-execution-json-number-1",
+  "status": "succeeded",
+  "output": {
+    "safe": true
+  },
+  "completedAt": "2026-07-26T00:00:02.000Z",
+  "metadata": { "nested": { "unsafe": -9007199254740993 } }
+}
