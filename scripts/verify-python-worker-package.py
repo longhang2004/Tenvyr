@@ -203,9 +203,7 @@ def verify_metadata(raw: bytes, archive_name: str) -> None:
     if metadata.get("License-Expression") != "MIT":
         raise AssertionError(f"{archive_name} metadata license is not MIT")
     if metadata.get_all("License-File", []) != ["LICENSE"]:
-        raise AssertionError(
-            f"{archive_name} does not include the MIT license file"
-        )
+        raise AssertionError(f"{archive_name} does not include the MIT license file")
     runtime_requirements = {
         requirement.replace(" ", "")
         for requirement in metadata.get_all("Requires-Dist", [])
