@@ -171,8 +171,15 @@
     {
       "id": "offline-showcase",
       "status": "implemented",
-      "sources": ["docker-compose.showcase.yml", "scripts/smoke-e2e.mjs"],
-      "tests": ["scripts/smoke-e2e.test.mjs"],
+      "sources": [
+        "docker-compose.showcase.yml",
+        "scripts/smoke-e2e.mjs",
+        "services/orchestrator/Dockerfile",
+        "services/orchestrator/tsconfig.json",
+        "services/agent-code-reviewer/Dockerfile",
+        "services/agent-observability/Dockerfile"
+      ],
+      "tests": ["scripts/setup-check.test.mjs", "scripts/smoke-e2e.test.mjs"],
       "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
       "limitations": [
         "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",

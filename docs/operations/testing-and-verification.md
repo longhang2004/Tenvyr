@@ -126,9 +126,16 @@ Static Compose validation does not require starting the stack, but it does requi
 ```bash
 docker compose config
 docker compose -f docker-compose.yml -f docker-compose.no-host-ports.yml config
+node --test scripts/setup-check.test.mjs
 pnpm exec prettier --check <touched-non-python-files>
 git diff --check
 ```
+
+The static setup test verifies that every Node service image which builds
+`@tenvyr/contracts` copies `scripts/copy-contract-schemas.mjs` into its shared
+base stage before either development or production compilation inherits it.
+The Orchestrator production TypeScript build excludes test-only `*.spec.ts`
+imports; Jest still compiles those files in the test gate.
 
 Known environment blockers include an unavailable Docker daemon or CLI, occupied
 loopback ports, restricted socket binding, missing external package caches, or

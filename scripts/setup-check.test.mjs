@@ -7,6 +7,11 @@ const dockerIgnore = new Set(
   readFileSync(".dockerignore", "utf8").split(/\r?\n/).filter(Boolean),
 );
 const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+const contractServiceDockerfiles = [
+  "services/orchestrator/Dockerfile",
+  "services/agent-code-reviewer/Dockerfile",
+  "services/agent-observability/Dockerfile",
+];
 
 test("setup checker requires the release toolchain versions", () => {
   assert.match(
@@ -32,6 +37,17 @@ test("Docker context excludes secrets, owner artifacts, and local caches", () =>
   }
   for (const source of ["examples", "packages", "sdks", "services"]) {
     assert(!dockerIgnore.has(source), source);
+  }
+});
+
+test("contract-dependent service images include the schema build helper", () => {
+  const copy =
+    "COPY scripts/copy-contract-schemas.mjs ./scripts/copy-contract-schemas.mjs";
+  for (const path of contractServiceDockerfiles) {
+    const source = readFileSync(path, "utf8");
+    const copyIndex = source.indexOf(copy);
+    assert.notEqual(copyIndex, -1, path);
+    assert(copyIndex < source.indexOf("FROM base AS development"), path);
   }
 });
 

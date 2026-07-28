@@ -63,7 +63,7 @@ Dispatch `article-analyzer` subagents to extract implicit knowledge:
    - The full list of existing node IDs (so the agent can reference them)
    - The batch number for output file naming
    - The intermediate directory path: `$INTERMEDIATE_DIR = $UA_DIR/intermediate`
-   
+
    The agent will write `analysis-batch-{N}.json` to the intermediate directory.
 
 4. Run up to 3 batches concurrently. Wait for all batches to complete.

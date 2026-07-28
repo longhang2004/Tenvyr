@@ -12,7 +12,7 @@ function generate() {
 
     const releases = JSON.parse(input);
     const lines = ['# Changelog', '', 'All notable changes to this project.', ''];
-    
+
     releases.slice(0, 50).forEach(r => {
       const date = r.published_at.split('T')[0];
       lines.push(`## [${r.tag_name}] - ${date}`);
@@ -20,7 +20,7 @@ function generate() {
       if (r.body) lines.push(r.body.trim());
       lines.push('');
     });
-    
+
     process.stdout.write(lines.join('
 ') + '
 ');

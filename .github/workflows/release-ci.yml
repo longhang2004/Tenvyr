@@ -57,6 +57,7 @@ jobs:
 
       - name: Repository verifiers
         run: |
+          node --test scripts/setup-check.test.mjs
           pnpm test:identity
           pnpm verify:identity
           pnpm test:docs

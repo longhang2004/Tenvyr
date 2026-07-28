@@ -6,6 +6,7 @@ WORKDIR /usr/src/app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/contracts/package.json ./packages/contracts/
 COPY services/orchestrator/package.json ./services/orchestrator/
+COPY scripts/copy-contract-schemas.mjs ./scripts/copy-contract-schemas.mjs
 
 RUN pnpm install --frozen-lockfile --filter orchestrator...
 
