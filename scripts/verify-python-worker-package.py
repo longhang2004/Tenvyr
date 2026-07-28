@@ -130,8 +130,11 @@ def verify_wheel(wheel: Path) -> None:
         files = {name for name in archive.namelist() if not name.endswith("/")}
         exact(files, WHEEL_FILES, "wheel")
         verify_metadata(archive.read(f"{DIST_NAME}.dist-info/METADATA"), "wheel")
-        if archive.read(f"{DIST_NAME}.dist-info/licenses/LICENSE") != MIT_LICENSE:
-            raise AssertionError("wheel MIT license differs from the repository license")
+        license_path = f"{DIST_NAME}.dist-info/licenses/LICENSE"
+        if archive.read(license_path) != MIT_LICENSE:
+            raise AssertionError(
+                "wheel MIT license differs from the repository license"
+            )
         verify_schema_bytes(
             lambda path: archive.read(path), "tenvyr_worker/schema_json"
         )
@@ -142,9 +145,12 @@ def verify_sdist(sdist: Path) -> None:
     with tarfile.open(sdist, "r:gz") as archive:
         members = {member.name: member for member in archive if member.isfile()}
         exact(set(members), SDIST_FILES, "sdist")
-        verify_metadata(read_tar(archive, members[f"{DIST_NAME}/PKG-INFO"]), "sdist")
+        metadata = read_tar(archive, members[f"{DIST_NAME}/PKG-INFO"])
+        verify_metadata(metadata, "sdist")
         if read_tar(archive, members[f"{DIST_NAME}/LICENSE"]) != MIT_LICENSE:
-            raise AssertionError("sdist MIT license differs from the repository license")
+            raise AssertionError(
+                "sdist MIT license differs from the repository license"
+            )
         verify_schema_bytes(
             lambda path: read_tar(archive, members[path]),
             f"{DIST_NAME}/src/tenvyr_worker/schema_json",
@@ -197,7 +203,9 @@ def verify_metadata(raw: bytes, archive_name: str) -> None:
     if metadata.get("License-Expression") != "MIT":
         raise AssertionError(f"{archive_name} metadata license is not MIT")
     if metadata.get_all("License-File", []) != ["LICENSE"]:
-        raise AssertionError(f"{archive_name} does not include the MIT license file")
+        raise AssertionError(
+            f"{archive_name} does not include the MIT license file"
+        )
     runtime_requirements = {
         requirement.replace(" ", "")
         for requirement in metadata.get_all("Requires-Dist", [])
