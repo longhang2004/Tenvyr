@@ -83,6 +83,13 @@ only the showcase resources with:
 pnpm showcase:down
 ```
 
+## Dashboard showcase
+
+The offline showcase records each step's runtime, transport, attempt count,
+duration, safe previews, and provider metadata in the dashboard.
+
+![Tenvyr dashboard showing a completed retry-once execution](docs/showcase/images/tenvyr-dashboard-showcase.png)
+
 The default showcase is offline and deterministic. Unless `LLM_PROVIDER` is
 explicitly exported in the invoking shell, `showcase:up` selects mock even when
 Compose auto-loads a provider value from `.env`; no provider key is required.
