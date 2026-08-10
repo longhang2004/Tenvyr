@@ -5,36 +5,58 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
-} from 'typeorm';
+  VersionColumn,
+} from "typeorm";
 
-export type ExecutionStatus = 'PENDING' | 'RUNNING' | 'WAITING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type ExecutionStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "WAITING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
 
-@Entity('executions')
-@Index('IDX_executions_pipeline_status', ['pipelineId', 'status'])
+@Entity("executions")
+@Index("IDX_executions_pipeline_status", ["pipelineId", "status"])
 export class ExecutionEntity {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: "uuid" })
   pipelineId: string;
 
   @Column({
-    type: 'varchar',
+    type: "varchar",
     length: 50,
-    default: 'PENDING',
+    default: "PENDING",
   })
   status: ExecutionStatus;
 
-  @Column({ type: 'jsonb' })
+  @Column({ type: "jsonb" })
   input: any; // Input parameters for this run
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ type: "varchar", length: 50, nullable: true })
+  pipelineVersion: string;
+
+  @Column({ type: "varchar", length: 64, nullable: true })
+  pipelineHash: string;
+
+  @Column({ type: "jsonb", nullable: true })
+  configurationSnapshot: Record<string, unknown>;
+
+  @Column({ type: "uuid", nullable: true })
+  activePlanRevisionId: string;
+
+  @Column({ type: "text", nullable: true })
+  terminationReason: string;
+
+  @Column({ type: "jsonb", nullable: true })
   output: any; // Final output data
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   startTime: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   endTime: Date;
 
   @CreateDateColumn()
@@ -42,4 +64,7 @@ export class ExecutionEntity {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @VersionColumn()
+  rowVersion: number;
 }

@@ -4,6 +4,7 @@ import {
   type AgentResultV1,
 } from "@tenvyr/contracts";
 import { KafkaAgentAdapter } from "./kafka-agent.adapter";
+import { EventPayloadTooLargeError } from "../services/agent-event.service";
 
 const invocation: AgentInvocationV1 = {
   schemaVersion: "1",
@@ -65,6 +66,7 @@ describe("KafkaAgentAdapter", () => {
     getStepExecution: jest.Mock;
   };
   let resultHandler: jest.Mock;
+  let eventHandler: jest.Mock;
   let adapter: KafkaAgentAdapter;
   let inbound: (payload: any) => Promise<void>;
 
@@ -90,19 +92,21 @@ describe("KafkaAgentAdapter", () => {
     });
 
     it("starts once and does not register duplicate consumers", async () => {
-      await adapter.start(resultHandler);
-      await adapter.start(resultHandler);
+      await adapter.start({ result: resultHandler, event: jest.fn() });
+      await adapter.start({ result: resultHandler, event: jest.fn() });
 
       expect(kafka.connect).toHaveBeenCalledTimes(1);
       expect(kafka.subscribe).toHaveBeenCalledTimes(1);
       expect(kafka.subscribe.mock.calls[0][0]).toEqual([
         "agentweave.agent.code-reviewer.result",
         "agentweave.agent.observability.result",
+        "agentweave.agent.code-reviewer.event",
+        "agentweave.agent.observability.event",
       ]);
     });
 
     it("stops idempotently", async () => {
-      await adapter.start(resultHandler);
+      await adapter.start({ result: resultHandler, event: jest.fn() });
       await adapter.stop();
       await adapter.stop();
 
@@ -123,7 +127,7 @@ describe("KafkaAgentAdapter", () => {
         new Error("password=secret broker.internal:9092"),
       );
 
-      await expect(adapter.start(resultHandler)).rejects.toMatchObject({
+      await expect(adapter.start({ result: resultHandler, event: jest.fn() })).rejects.toMatchObject({
         code: "ADAPTER_START_FAILED",
         adapter: "kafka",
         retryable: true,
@@ -134,17 +138,17 @@ describe("KafkaAgentAdapter", () => {
     it("cleans up a partial start so startup can be retried", async () => {
       kafka.subscribe.mockRejectedValueOnce(new Error("subscription failed"));
 
-      await expect(adapter.start(resultHandler)).rejects.toMatchObject({
+      await expect(adapter.start({ result: resultHandler, event: jest.fn() })).rejects.toMatchObject({
         code: "ADAPTER_START_FAILED",
       });
       expect(kafka.disconnect).toHaveBeenCalledTimes(1);
 
-      await expect(adapter.start(resultHandler)).resolves.toBeUndefined();
+      await expect(adapter.start({ result: resultHandler, event: jest.fn() })).resolves.toBeUndefined();
       expect(kafka.connect).toHaveBeenCalledTimes(2);
     });
 
     it("maps stop failures and permits a later retry", async () => {
-      await adapter.start(resultHandler);
+      await adapter.start({ result: resultHandler, event: jest.fn() });
       kafka.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
 
       await expect(adapter.stop()).rejects.toMatchObject({
@@ -160,7 +164,7 @@ describe("KafkaAgentAdapter", () => {
 
   describe("outbound", () => {
     beforeEach(async () => {
-      await adapter.start(resultHandler);
+      await adapter.start({ result: resultHandler, event: jest.fn() });
     });
 
     it("publishes a valid invocation to the existing topic and key", async () => {
@@ -250,7 +254,7 @@ describe("KafkaAgentAdapter", () => {
 
   describe("inbound", () => {
     beforeEach(async () => {
-      await adapter.start(resultHandler);
+      await adapter.start({ result: resultHandler, event: jest.fn() });
     });
 
     it("parses a v1 result and delivers it to the handler", async () => {
@@ -340,13 +344,14 @@ describe("KafkaAgentAdapter", () => {
       error.mockRestore();
     });
 
-    it("maps handler failure and does not report successful processing", async () => {
+    it("propagates retryable handler failure so Kafka can redeliver", async () => {
       const error = jest.spyOn(console, "error").mockImplementation();
       resultHandler.mockRejectedValue(new Error("processor failed"));
 
-      await expect(
-        inbound(kafkaMessage(succeededResult)),
-      ).resolves.toBeUndefined();
+      await expect(inbound(kafkaMessage(succeededResult))).rejects.toMatchObject({
+        code: "RESULT_HANDLER_FAILED",
+        retryable: true,
+      });
 
       expect(error.mock.calls.flat()).toContainEqual(
         expect.objectContaining({ errorCode: "RESULT_HANDLER_FAILED" }),
@@ -375,6 +380,157 @@ describe("KafkaAgentAdapter", () => {
           "topic",
         ].sort(),
       );
+    });
+  });
+  describe("event topic ingestion", () => {
+    const eventBody = (overrides: Record<string, unknown> = {}) => ({
+      schemaVersion: "1",
+      eventId: "event-1",
+      invocationId: "step-execution-1:1",
+      executionId: "execution-1",
+      stepExecutionId: "step-execution-1",
+      sequence: 1,
+      type: "progress",
+      occurredAt: "2026-08-10T00:00:00.000Z",
+      payload: { stage: "indexing" },
+      trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      ...overrides,
+    });
+    const eventMessage = (overrides: { body?: Record<string, unknown> } = {}) => ({
+      topic: "agentweave.agent.code-reviewer.event",
+      partition: 2,
+      message: {
+        key: Buffer.from("execution-1"),
+        value: Buffer.from(JSON.stringify(eventBody(overrides.body))),
+        offset: "41",
+        timestamp: "1785024000000",
+      },
+    });
+
+    beforeEach(async () => {
+      eventHandler = jest.fn().mockResolvedValue(undefined);
+      await adapter.start({ result: resultHandler, event: eventHandler });
+    });
+
+    it("ingests a canonical AgentEvent with safe scalar transport metadata", async () => {
+      await inbound(eventMessage());
+
+      expect(eventHandler).toHaveBeenCalledWith({
+        event: expect.objectContaining({
+          eventId: "event-1",
+          type: "progress",
+          sequence: 1,
+        }),
+        transport: expect.objectContaining({
+          adapter: "kafka",
+          topic: "agentweave.agent.code-reviewer.event",
+          partition: 2,
+          offset: "41",
+        }),
+      });
+      expect(resultHandler).not.toHaveBeenCalled();
+    });
+
+    it("treats an invalid event as a poison record (acknowledged, not retried)", async () => {
+      const invalid = eventBody({ sequence: "nope" });
+      await inbound({
+        topic: "agentweave.agent.code-reviewer.event",
+        partition: 0,
+        message: {
+          key: Buffer.from("execution-1"),
+          value: Buffer.from(JSON.stringify(invalid)),
+          offset: "1",
+          timestamp: "1785024000000",
+        },
+      });
+
+      expect(eventHandler).not.toHaveBeenCalled();
+      // No throw: KafkaJS acknowledges the poison record.
+    });
+
+    it("acks an oversized event as poison (never redelivered)", async () => {
+      eventHandler.mockRejectedValueOnce(
+        new EventPayloadTooLargeError(65536),
+      );
+      const oversized = eventBody({ payload: { blob: "x".repeat(70 * 1024) } });
+
+      // Non-retryable handler failures are acknowledged, never rethrown, so
+      // the poison record does not stall the partition.
+      await expect(
+        inbound({
+          topic: "agentweave.agent.code-reviewer.event",
+          partition: 0,
+          message: {
+            key: Buffer.from("execution-1"),
+            value: Buffer.from(JSON.stringify(oversized)),
+            offset: "5",
+            timestamp: "1785024000000",
+          },
+        }),
+      ).resolves.toBeUndefined();
+      expect(eventHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it("propagates durable application failures so Kafka can redeliver", async () => {
+      eventHandler.mockRejectedValueOnce(new Error("database unavailable"));
+
+      await expect(
+        inbound(eventMessage()),
+      ).rejects.toMatchObject({ code: "EVENT_HANDLER_FAILED", retryable: true });
+    });
+
+    it("does not normalize legacy event payloads (canonical-only ingestion)", async () => {
+      const legacyShaped = {
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        // A legacy-style result on an event topic must not be normalized.
+        status: "succeeded",
+        completedAt: "2026-08-10T00:00:00.000Z",
+      };
+      await inbound({
+        topic: "agentweave.agent.code-reviewer.event",
+        partition: 0,
+        message: {
+          key: Buffer.from("execution-1"),
+          value: Buffer.from(JSON.stringify(legacyShaped)),
+          offset: "2",
+          timestamp: "1785024000000",
+        },
+      });
+
+      expect(eventHandler).not.toHaveBeenCalled();
+      expect(resultHandler).not.toHaveBeenCalled();
+    });
+
+    it("keeps result topics behaving unchanged while events flow", async () => {
+      executionService.getStepExecution.mockResolvedValue({
+        executionId: "execution-1",
+        stepId: "code-review",
+        status: "RUNNING",
+      });
+      await inbound({
+        topic: "agentweave.agent.code-reviewer.result",
+        partition: 1,
+        message: {
+          key: Buffer.from("execution-1"),
+          value: Buffer.from(
+            JSON.stringify({
+              schemaVersion: "1",
+              invocationId: "step-execution-1:1",
+              executionId: "execution-1",
+              stepExecutionId: "step-execution-1",
+              status: "succeeded",
+              output: { score: 100 },
+              completedAt: "2026-08-10T00:00:00.000Z",
+            }),
+          ),
+          offset: "9",
+          timestamp: "1785024000000",
+        },
+      });
+
+      expect(resultHandler).toHaveBeenCalledTimes(1);
+      expect(eventHandler).not.toHaveBeenCalled();
     });
   });
 });

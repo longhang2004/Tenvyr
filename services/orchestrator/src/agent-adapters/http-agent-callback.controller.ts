@@ -66,7 +66,10 @@ export class HttpAgentCallbackController {
         if (error.code === "CALLBACK_UNAUTHORIZED")
           throw new UnauthorizedException();
         if (error.code === "CALLBACK_INVALID") throw new BadRequestException();
+        if (error.code === "CALLBACK_AMBIGUOUS") throw new BadRequestException();
         if (error.code === "CALLBACK_HANDLER_UNAVAILABLE")
+          throw new ServiceUnavailableException();
+        if (error.code === "EVENT_HANDLER_FAILED")
           throw new ServiceUnavailableException();
       }
       throw new InternalServerErrorException();

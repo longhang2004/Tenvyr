@@ -1,4 +1,5 @@
 import {
+  parseAgentEvent,
   parseAgentInvocation,
   parseAgentResult,
   parseHttpAgentRunAccepted,
@@ -8,12 +9,13 @@ import { Injectable } from "@nestjs/common";
 import { AgentAdapterError } from "./agent-adapter.errors";
 import type {
   AgentAdapter,
+  AgentAdapterHandlers,
   AgentDispatchReceipt,
-  AgentResultHandler,
   AgentTransportMetadata,
 } from "./agent-adapter.types";
 import { AgentTransportConfigService } from "./agent-transport-config.service";
 import { verifyHttpCallbackSignature } from "./http-callback-auth";
+import { EventPayloadTooLargeError } from "../services/agent-event.service";
 
 type HttpCallbackRequest = {
   agent: string;
@@ -35,27 +37,27 @@ type ReplayEntry = {
 export class HttpAgentAdapter implements AgentAdapter {
   readonly kind = "http";
 
-  private resultHandler?: AgentResultHandler;
+  private handlers?: AgentAdapterHandlers;
   private replayCleanupTimer?: NodeJS.Timeout;
   private readonly replayEntries = new Map<string, ReplayEntry>();
   private readonly activeRequests = new Set<AbortController>();
 
   constructor(private readonly config: AgentTransportConfigService) {}
 
-  async start(handler: AgentResultHandler): Promise<void> {
-    if (this.resultHandler) {
-      if (this.resultHandler === handler) return;
+  async start(handlers: AgentAdapterHandlers): Promise<void> {
+    if (this.handlers) {
+      if (this.handlers === handlers) return;
       throw new AgentAdapterError(
         "ADAPTER_START_FAILED",
         this.kind,
-        "HTTP agent adapter already has a handler",
+        "HTTP agent adapter already has handlers",
         {
           retryable: false,
         },
       );
     }
 
-    this.resultHandler = handler;
+    this.handlers = handlers;
     const { replayTtlMs } = this.config.callbackSettings();
     this.replayCleanupTimer = setInterval(
       () => this.cleanupReplayEntries(Date.now()),
@@ -65,9 +67,9 @@ export class HttpAgentAdapter implements AgentAdapter {
   }
 
   async stop(): Promise<void> {
-    if (!this.resultHandler && !this.replayCleanupTimer) return;
+    if (!this.handlers && !this.replayCleanupTimer) return;
 
-    this.resultHandler = undefined;
+    this.handlers = undefined;
     if (this.replayCleanupTimer) clearInterval(this.replayCleanupTimer);
     this.replayCleanupTimer = undefined;
     this.replayEntries.clear();
@@ -78,7 +80,7 @@ export class HttpAgentAdapter implements AgentAdapter {
   async invoke(
     invocation: Parameters<AgentAdapter["invoke"]>[0],
   ): Promise<AgentDispatchReceipt> {
-    if (!this.resultHandler) {
+    if (!this.handlers) {
       throw new AgentAdapterError(
         "ADAPTER_NOT_STARTED",
         this.kind,
@@ -285,11 +287,11 @@ export class HttpAgentAdapter implements AgentAdapter {
       maxSkewSeconds: settings.callbackMaxSkewSeconds,
       nowMs: request.nowMs,
     });
-    if (!this.resultHandler) {
+    if (!this.handlers) {
       throw new AgentAdapterError(
         "CALLBACK_HANDLER_UNAVAILABLE",
         this.kind,
-        "HTTP callback handler is unavailable",
+        "HTTP callback handlers are unavailable",
         {
           retryable: true,
         },
@@ -300,7 +302,8 @@ export class HttpAgentAdapter implements AgentAdapter {
     const now = request.nowMs ?? Date.now();
     const replayKey = `${request.agent}\0${request.keyId}\0${deliveryId}`;
     this.cleanupReplayEntries(now);
-    if (this.replayEntries.has(replayKey)) {
+    const existing = this.replayEntries.get(replayKey);
+    if (existing && existing.state === "completed") {
       console.warn("Ignoring duplicate HTTP callback delivery", {
         adapter: this.kind,
         agent: request.agent,
@@ -309,11 +312,16 @@ export class HttpAgentAdapter implements AgentAdapter {
       });
       return "duplicate";
     }
-    this.reserveReplayEntry(
-      replayKey,
-      now + settings.replayTtlMs,
-      settings.replayMaxEntries,
-    );
+    if (!existing) {
+      // An in-flight duplicate (same deliveryId processed concurrently) is
+      // routed through the durable result handler; the ResultInbox, not this
+      // process-local map, is the authoritative deduplicator across replicas.
+      this.reserveReplayEntry(
+        replayKey,
+        now + settings.replayTtlMs,
+        settings.replayMaxEntries,
+      );
+    }
 
     let value: unknown;
     try {
@@ -331,12 +339,28 @@ export class HttpAgentAdapter implements AgentAdapter {
       );
     }
 
-    let result;
-    try {
-      result = parseAgentResult(value);
-    } catch (cause) {
+    // Explicit shape discrimination after authentication and signature
+    // verification: a canonical AgentResult carries status+completedAt, a
+    // canonical AgentEvent carries eventId+sequence+type. Payloads that look
+    // like both are ambiguous and rejected rather than guessed at.
+    const record = value as Record<string, unknown>;
+    const resultShape =
+      typeof record.status === "string" &&
+      typeof record.completedAt === "string";
+    const eventShape =
+      typeof record.eventId === "string" &&
+      typeof record.sequence === "number" &&
+      typeof record.type === "string";
+    if (resultShape && eventShape) {
       this.replayEntries.delete(replayKey);
-      throw cause;
+      throw new AgentAdapterError(
+        "CALLBACK_AMBIGUOUS",
+        this.kind,
+        "HTTP callback body matches both AgentResult and AgentEvent shapes",
+        {
+          retryable: false,
+        },
+      );
     }
 
     const transport: AgentTransportMetadata = {
@@ -346,8 +370,60 @@ export class HttpAgentAdapter implements AgentAdapter {
       keyId: request.keyId,
       remoteAddress: request.remoteAddress,
     };
+
+    if (eventShape) {
+      let event;
+      try {
+        event = parseAgentEvent(value);
+      } catch (cause) {
+        this.replayEntries.delete(replayKey);
+        throw cause;
+      }
+      try {
+        await this.handlers.event({ event, transport });
+      } catch (cause) {
+        this.replayEntries.delete(replayKey);
+        throw new AgentAdapterError(
+          "EVENT_HANDLER_FAILED",
+          this.kind,
+          "HTTP callback event handler failed",
+          {
+            invocationId: event.invocationId,
+            // Oversized payloads are permanently rejected: the worker must
+            // drop them, not retry forever.
+            retryable: !(cause instanceof EventPayloadTooLargeError),
+            cause,
+          },
+        );
+      }
+      this.replayEntries.set(replayKey, {
+        state: "completed",
+        expiresAt: now + settings.replayTtlMs,
+      });
+      console.log("HTTP agent event processed", {
+        adapter: this.kind,
+        agent: request.agent,
+        invocationId: event.invocationId,
+        executionId: event.executionId,
+        stepExecutionId: event.stepExecutionId,
+        eventId: event.eventId,
+        type: event.type,
+        sequence: event.sequence,
+        deliveryId,
+        keyId: request.keyId,
+      });
+      return "processed";
+    }
+
+    let result;
     try {
-      await this.resultHandler({ result, transport });
+      result = parseAgentResult(value);
+    } catch (cause) {
+      this.replayEntries.delete(replayKey);
+      throw cause;
+    }
+    try {
+      await this.handlers.result({ result, transport });
     } catch (cause) {
       this.replayEntries.delete(replayKey);
       throw new AgentAdapterError(

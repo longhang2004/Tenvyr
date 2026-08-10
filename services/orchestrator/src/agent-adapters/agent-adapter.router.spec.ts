@@ -58,7 +58,7 @@ describe("AgentAdapterRouter", () => {
   it("routes exact HTTP agents to HTTP and preserves the receipt", async () => {
     const value = invocation("remote-security-reviewer");
 
-    await router.start(handler);
+    await router.start({ result: handler, event: jest.fn() });
     const receipt = await router.invoke(value);
 
     expect(http.invoke).toHaveBeenCalledWith(value);
@@ -74,7 +74,7 @@ describe("AgentAdapterRouter", () => {
     async (agent) => {
       const value = invocation(agent);
 
-      await router.start(handler);
+      await router.start({ result: handler, event: jest.fn() });
       const receipt = await router.invoke(value);
 
       expect(kafka.invoke).toHaveBeenCalledWith(value);
@@ -90,7 +90,7 @@ describe("AgentAdapterRouter", () => {
       agent: "remote-security-reviewer",
     };
 
-    await router.start(handler);
+    await router.start({ result: handler, event: jest.fn() });
     await router.invoke(invocation("code-reviewer", input));
 
     expect(config.forAgent).toHaveBeenCalledWith("code-reviewer");
@@ -106,7 +106,7 @@ describe("AgentAdapterRouter", () => {
       const failure = new Error("dispatch failed");
       (failing === "http" ? http : kafka).invoke.mockRejectedValue(failure);
 
-      await router.start(handler);
+      await router.start({ result: handler, event: jest.fn() });
 
       await expect(router.invoke(invocation(agent))).rejects.toBe(failure);
       expect((other === "http" ? http : kafka).invoke).not.toHaveBeenCalled();
@@ -114,26 +114,30 @@ describe("AgentAdapterRouter", () => {
   );
 
   it("starts both adapters once with the same handler", async () => {
-    await router.start(handler);
-    await router.start(handler);
+    await router.start({ result: handler, event: jest.fn() });
+    await router.start({ result: handler, event: jest.fn() });
 
     expect(kafka.start).toHaveBeenCalledTimes(1);
     expect(http.start).toHaveBeenCalledTimes(1);
-    expect(kafka.start).toHaveBeenCalledWith(handler);
-    expect(http.start).toHaveBeenCalledWith(handler);
+    expect(kafka.start).toHaveBeenCalledWith(
+      expect.objectContaining({ result: handler, event: expect.any(Function) }),
+    );
+    expect(http.start).toHaveBeenCalledWith(
+      expect.objectContaining({ result: handler, event: expect.any(Function) }),
+    );
   });
 
   it("cleans up Kafka when HTTP startup fails", async () => {
     http.start.mockRejectedValue(new Error("HTTP startup failed"));
 
-    await expect(router.start(handler)).rejects.toMatchObject({
+    await expect(router.start({ result: handler, event: jest.fn() })).rejects.toMatchObject({
       code: "ADAPTER_START_FAILED",
     });
     expect(kafka.stop).toHaveBeenCalledTimes(1);
   });
 
   it("stops both adapters once and is sequentially idempotent", async () => {
-    await router.start(handler);
+    await router.start({ result: handler, event: jest.fn() });
     await router.stop();
     await router.stop();
 
@@ -142,7 +146,7 @@ describe("AgentAdapterRouter", () => {
   });
 
   it("best-effort stops the second adapter when the first stop fails", async () => {
-    await router.start(handler);
+    await router.start({ result: handler, event: jest.fn() });
     http.stop.mockRejectedValue(new Error("HTTP stop failed"));
 
     await expect(router.stop()).rejects.toMatchObject({

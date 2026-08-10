@@ -136,7 +136,7 @@ describe("real Orchestrator to Python Worker loopback", () => {
 
     adapter = module.get(HttpAgentAdapter);
     resultHandler = jest.fn().mockResolvedValue(undefined);
-    await adapter.start(resultHandler);
+    await adapter.start({ result: resultHandler, event: jest.fn() });
   });
 
   afterAll(async () => {

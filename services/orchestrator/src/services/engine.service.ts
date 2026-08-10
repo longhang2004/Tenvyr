@@ -1,32 +1,17 @@
-import {
-  JsonValue,
-  parseAgentInvocation,
-  type AgentInvocationV1,
-} from "@tenvyr/contracts";
 import { Inject, Injectable } from "@nestjs/common";
 import { AGENT_ADAPTER } from "../agent-adapters/agent-adapter";
 import { AgentAdapterError } from "../agent-adapters/agent-adapter.errors";
 import type { AgentAdapter } from "../agent-adapters/agent-adapter.types";
 import { PipelineService } from "./pipeline.service";
 import { ExecutionService } from "./execution.service";
-import { ExecutionEntity } from "../entities/execution.entity";
+import { ExecutionEntity, type ExecutionStatus } from "../entities/execution.entity";
 import {
-  StepExecutionEntity,
-  StepStatus,
+  LogicalStepEntity,
+  type StepExecutionEntity,
+  type StepStatus,
 } from "../entities/step-execution.entity";
-
-type FailurePolicy = "continue" | "stop" | "retry";
-
-type PipelineStepConfig = {
-  id: string;
-  agent: string;
-  input?: Record<string, unknown>;
-  dependsOn?: string[];
-  condition?: string;
-  timeout?: string | number;
-  retries?: number;
-  onFailure?: FailurePolicy;
-};
+import type { PipelineStepConfig } from "../domain/pipeline-definition";
+import { DispatchOutboxService } from "./dispatch-outbox.service";
 
 type TemplateContext = {
   pipeline: {
@@ -44,7 +29,29 @@ type TemplateContext = {
   >;
 };
 
-const TERMINAL_STEP_STATUSES: StepStatus[] = ["COMPLETED", "FAILED", "SKIPPED"];
+const TERMINAL_STEP_STATUSES: StepStatus[] = [
+  "COMPLETED",
+  "FAILED",
+  "SKIPPED",
+  "CANCELLED",
+];
+
+const TERMINAL_EXECUTION_STATUSES: ExecutionStatus[] = [
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+];
+
+// ponytail: hard ceiling on sequential claim waves inside one reconciliation.
+// Each pass claims >= 1 step or makes a terminal transition; a pathological
+// chain longer than the ceiling (requires retries >= 99 on a step) is picked
+// up by the next recovery tick, which re-runs reconcileExecution.
+const RECONCILE_PASS_LIMIT = 100;
+
+export type ReconcileOptions = {
+  /** Best-effort Gateway projection even when the execution is terminal. */
+  projectTerminal?: boolean;
+};
 
 @Injectable()
 export class EngineService {
@@ -53,7 +60,78 @@ export class EngineService {
     private executionService: ExecutionService,
     @Inject(AGENT_ADAPTER)
     private agentAdapter: AgentAdapter,
+    private readonly dispatchOutbox: DispatchOutboxService,
   ) {}
+
+  /**
+   * Engine-level execution reconciliation. Given PostgreSQL's current
+   * authoritative state, makes every currently legal autonomous orchestration
+   * decision until no immediately actionable transition remains:
+   *
+   * - promotes recoverable PENDING startup state, backfills missing logical
+   *   step rows, and advances dependency-resolved PENDING steps to READY;
+   * - identifies due READY/RETRYING steps, materializes their input templates
+   *   at this scheduling boundary, and claims them transactionally through
+   *   the StepAttempt + DispatchOutbox primitive (freezing the spec on first
+   *   claim and persisting condition-skip decisions);
+   * - detects completion and stop-policy inability-to-continue from durable
+   *   logical-step state alone — no caller-provided step context;
+   * - pokes the dispatch outbox after committed claims, settling
+   *   non-retryable transport failures per the workflow failure policy.
+   *
+   * Idempotent, and safe to call concurrently from multiple Orchestrator
+   * replicas: claims use FOR UPDATE SKIP LOCKED and every transition is
+   * guarded. Terminal executions are left untouched except for best-effort
+   * projection when `projectTerminal` is set.
+   */
+  async reconcileExecution(
+    executionId: string,
+    options: ReconcileOptions = {},
+  ): Promise<void> {
+    let progressed = false;
+    const affectedExecutions = new Set<string>();
+    for (let pass = 0; pass < RECONCILE_PASS_LIMIT; pass++) {
+      const madeProgress = await this.reconcilePass(
+        executionId,
+        affectedExecutions,
+      );
+      progressed = progressed || madeProgress;
+      if (!madeProgress) break;
+    }
+    if (progressed) {
+      await this.notifyGatewayUpdate(executionId);
+    } else if (options.projectTerminal) {
+      const execution = await this.executionService.getExecution(executionId);
+      if (
+        execution &&
+        TERMINAL_EXECUTION_STATUSES.includes(execution.status)
+      ) {
+        await this.notifyGatewayUpdate(executionId);
+      }
+    }
+    // Reconcile/project the executions that ACTUALLY own a terminal dispatch
+    // failure committed during this reconciliation. With targeted dispatch
+    // that is normally the current execution (already settled by the loop);
+    // the set covers compatibility paths where the dispatcher reports a
+    // different owner. // ponytail: one extra level only — deeper cross-
+    // execution chains surface via the recovery tick, which reconciles each
+    // candidate independently.
+    for (const affected of affectedExecutions) {
+      if (affected !== executionId) {
+        await this.reconcileExecution(affected, { projectTerminal: true });
+      }
+    }
+  }
+
+  /**
+   * @deprecated Kept for protocol/API compatibility only. Progression is
+   * driven entirely by durable state: the ResultInbox commit is the trigger
+   * and `reconcileExecution` derives all next work from PostgreSQL. The step
+   * ID is not a source of scheduler truth.
+   */
+  async resumeAfterResult(executionId: string, _stepId: string): Promise<void> {
+    await this.reconcileExecution(executionId, { projectTerminal: true });
+  }
 
   async startExecution(
     pipelineId: string,
@@ -65,49 +143,39 @@ export class EngineService {
     }
 
     const execution = await this.executionService.createExecution(
-      pipelineId,
+      pipeline,
       input,
     );
-    const runningExecution = await this.executionService.updateExecutionStatus(
-      execution.id,
-      "RUNNING",
-    );
-
     console.log(
       `Starting execution [${execution.id}] for pipeline [${pipeline.name}]`,
     );
-    await this.notifyGatewayUpdate(execution.id);
 
-    const steps = pipeline.steps as PipelineStepConfig[];
-    const initialSteps = steps.filter(
-      (step) => !step.dependsOn || step.dependsOn.length === 0,
-    );
+    // Promotion to RUNNING, root-step advancement, claiming, and dispatch all
+    // flow through the same durable reconciliation path; a crash anywhere
+    // before or during it is repaired by runtime recovery.
+    await this.reconcileExecution(execution.id);
 
-    if (initialSteps.length === 0) {
+    const reloaded = await this.executionService.getExecution(execution.id);
+    if (!reloaded) return execution;
+    if (reloaded.status === "PENDING") {
       return this.failExecution(execution.id, {
         error: "No initial steps found without dependencies.",
       });
     }
-
-    for (const step of initialSteps) {
-      const shouldExecute = await this.evaluateStepCondition(
-        runningExecution,
-        [],
-        step,
-      );
-      if (shouldExecute) {
-        await this.triggerStep(runningExecution, step);
-      } else {
-        await this.skipStep(runningExecution, step);
-      }
-    }
-
-    return (
-      (await this.executionService.getExecution(execution.id)) ??
-      runningExecution
-    );
+    return reloaded;
   }
 
+  async cancelExecution(executionId: string): Promise<ExecutionEntity> {
+    const execution = await this.executionService.cancelExecution(executionId);
+    await this.notifyGatewayUpdate(executionId);
+    return execution;
+  }
+
+  /**
+   * @deprecated Compatibility/test helper only; not wired into the
+   * authoritative AgentResult path. Canonical result application is
+   * `ResultInboxService.apply` followed by `reconcileExecution`.
+   */
   async handleStepCompletion(
     executionId: string,
     stepId: string,
@@ -154,13 +222,15 @@ export class EngineService {
     );
     await this.notifyGatewayUpdate(executionId);
 
+    if (status === "CANCELLED") {
+      await this.cancelExecution(executionId);
+      return;
+    }
+
     const execution = await this.executionService.getExecution(executionId);
     if (!execution || execution.status !== "RUNNING") return;
 
-    const pipeline = await this.pipelineService.findOne(execution.pipelineId);
-    if (!pipeline) return;
-
-    const steps = pipeline.steps as PipelineStepConfig[];
+    const steps = await this.executionService.getExecutionPlanSteps(execution);
     const stepConfig = steps.find((step) => step.id === stepId);
 
     if (status === "FAILED") {
@@ -173,6 +243,203 @@ export class EngineService {
     }
 
     await this.processExecutionProgress(execution, steps, stepId);
+  }
+
+  /**
+   * One reconciliation pass over an execution: advance state, detect
+   * terminal-worthy conditions from durable rows, then claim and dispatch
+   * every due step. Returns whether any state transition happened.
+   * `affectedExecutions` collects the execution IDs that actually own a
+   * terminal dispatch failure committed during this pass (for targeted
+   * dispatch that is always the execution being reconciled).
+   */
+  private async reconcilePass(
+    executionId: string,
+    affectedExecutions: Set<string>,
+  ): Promise<boolean> {
+    await this.executionService.reconcileExecution(executionId);
+    const execution = await this.executionService.getExecution(executionId);
+    if (!execution || execution.status !== "RUNNING") return false;
+    // Without an active plan revision there is nothing authoritative to
+    // schedule against; leave the run for manual intervention instead of
+    // throwing on every pass.
+    if (!execution.activePlanRevisionId) return false;
+
+    const steps = await this.executionService.getExecutionPlanSteps(execution);
+    const logicalSteps =
+      await this.executionService.getStepExecutions(executionId);
+
+    // Stop-policy failure and cancellation leave nothing schedulable: the
+    // execution must not stay RUNNING. The inbox and dispatch paths commit
+    // these transitions atomically; this is the safety net for legacy entry
+    // points and manual state edits.
+    for (const step of logicalSteps) {
+      if (step.status !== "FAILED") continue;
+      const config = steps.find((candidate) => candidate.id === step.stepId);
+      if (config?.onFailure === "continue") continue;
+      await this.failExecution(execution.id, {
+        failedStep: step.stepId,
+        error: step.error ?? "Step failed with stop policy.",
+        attempts: step.attempt,
+        maxAttempts: step.maxAttempts,
+      });
+      return true;
+    }
+    if (logicalSteps.some((step) => step.status === "CANCELLED")) {
+      await this.cancelExecution(execution.id);
+      return true;
+    }
+
+    if (
+      steps.length > 0 &&
+      steps.every((config) => {
+        const step = logicalSteps.find(
+          (candidate) => candidate.stepId === config.id,
+        );
+        return step && TERMINAL_STEP_STATUSES.includes(step.status);
+      })
+    ) {
+      const outputs: Record<string, unknown> = {};
+      for (const step of logicalSteps) outputs[step.stepId] = step.output;
+      await this.executionService.updateExecutionStatus(
+        execution.id,
+        "COMPLETED",
+        outputs,
+      );
+      return true;
+    }
+
+    const now = new Date();
+    const due = logicalSteps
+      .filter(
+        (step) =>
+          (step.status === "READY" &&
+            (step.eligibleAt === null ||
+              step.eligibleAt === undefined ||
+              step.eligibleAt <= now)) ||
+          (step.status === "RETRYING" &&
+            (step.nextAttemptAt === null ||
+              step.nextAttemptAt === undefined ||
+              step.nextAttemptAt <= now)),
+      )
+      .sort((a, b) =>
+        a.createdAt < b.createdAt
+          ? -1
+          : a.createdAt > b.createdAt
+            ? 1
+            : a.id < b.id
+              ? -1
+              : 1,
+      );
+
+    let progressed = false;
+    for (const logicalStep of due) {
+      const config = steps.find(
+        (candidate) => candidate.id === logicalStep.stepId,
+      );
+      if (!config) continue;
+
+      // Template materialization happens at this scheduling boundary, before
+      // the attempt claim. A failure here is an orchestration/configuration
+      // failure of the run, not a step execution failure: the execution
+      // FAILED and no onFailure retry/continue semantics apply (no fake
+      // attempts are created to consume retry budgets).
+      let resolvedInput: unknown;
+      try {
+        resolvedInput = this.resolveInputTemplates(
+          config.input || {},
+          execution.input,
+          logicalSteps,
+        );
+      } catch (err) {
+        await this.failExecution(execution.id, {
+          failedStep: config.id,
+          error: `Input resolution failed: ${this.getErrorMessage(err)}`,
+        });
+        return true;
+      }
+
+      const maxAttempts = this.getMaxAttempts(config);
+      const timeoutMs = this.parseDurationMs(config.timeout);
+      const deadlineAt = timeoutMs
+        ? new Date(Date.now() + timeoutMs)
+        : undefined;
+      const claim = await this.executionService.claimRunnableStep(
+        execution.id,
+        config,
+        resolvedInput,
+        maxAttempts,
+        deadlineAt,
+      );
+      if (!claim) continue; // a concurrent replica won this scheduling decision
+      progressed = true;
+      if (claim.disposition === "skipped") {
+        console.log(
+          `Step [${config.id}] condition evaluated to false. Skipping step.`,
+        );
+        continue;
+      }
+      console.log(
+        `Triggering step [${config.id}] for agent [${config.agent}] in execution [${execution.id}]`,
+      );
+      const affected = await this.dispatchClaimedStep(
+        execution.id,
+        claim.attempt.id,
+        claim.logicalStep,
+        config,
+      );
+      if (affected && affected !== execution.id) {
+        affectedExecutions.add(affected);
+      }
+    }
+    return progressed;
+  }
+
+  /**
+   * Claim-specific dispatch: the immediate delivery targets the outbox row of
+   * the StepAttempt that was JUST claimed, never a globally-older record of a
+   * different execution. A retryable transport failure leaves the record
+   * PENDING for a later tick or replica; a non-retryable failure has already
+   * been committed per the workflow failure policy, and the execution ID that
+   * ACTUALLY owns the failed attempt is returned so the caller can
+   * reconcile/project it.
+   */
+  private async dispatchClaimedStep(
+    executionId: string,
+    stepAttemptId: string,
+    logicalStep: LogicalStepEntity,
+    stepConfig: PipelineStepConfig,
+  ): Promise<string | null> {
+    try {
+      const disposition = await this.dispatchOutbox.dispatchAttempt(
+        stepAttemptId,
+      );
+      if (disposition.outcome === "terminal_failure") {
+        console.error("Non-retryable dispatch failure committed", {
+          executionId: disposition.executionId,
+          stepExecutionId: logicalStep.id,
+          stepId: stepConfig.id,
+          attempt: logicalStep.attempt,
+        });
+        return disposition.executionId;
+      }
+    } catch (err) {
+      const adapterError = err instanceof AgentAdapterError ? err : undefined;
+      console.error(
+        "Agent invocation dispatch failed (outbox remains pending)",
+        {
+          adapter: this.agentAdapter.kind,
+          errorCode: adapterError?.code,
+          retryable: adapterError?.retryable,
+          invocationId: adapterError?.invocationId,
+          executionId,
+          stepExecutionId: logicalStep.id,
+          agent: stepConfig.agent,
+          attempt: logicalStep.attempt,
+        },
+      );
+    }
+    return null;
   }
 
   private async handleFailurePolicy(
@@ -224,14 +491,23 @@ export class EngineService {
     return false;
   }
 
+  /**
+   * @deprecated Legacy progression helper used only by `handleStepCompletion`;
+   * the authoritative path is `reconcileExecution`.
+   */
   private async processExecutionProgress(
     execution: ExecutionEntity,
     steps: PipelineStepConfig[],
     completedStepId: string,
-  ) {
+  ): Promise<boolean> {
     const stepExecutions = await this.executionService.getStepExecutions(
       execution.id,
     );
+
+    if (stepExecutions.some((step) => step.status === "CANCELLED")) {
+      await this.cancelExecution(execution.id);
+      return true;
+    }
 
     const allStepsCompleted = steps.every((stepConfig) => {
       const stepExecution = stepExecutions.find(
@@ -256,19 +532,20 @@ export class EngineService {
         outputs,
       );
       await this.notifyGatewayUpdate(execution.id);
-      return;
+      return true;
     }
 
     const nextSteps = steps.filter((step) =>
       step.dependsOn?.includes(completedStepId),
     );
 
+    let progressed = false;
     for (const nextStep of nextSteps) {
       const existingStep = await this.executionService.getStepExecution(
         execution.id,
         nextStep.id,
       );
-      if (existingStep) continue;
+      if (existingStep && existingStep.status !== "READY") continue;
 
       const dependenciesResolved = nextStep.dependsOn?.every((dependencyId) => {
         const dependencyExecution = stepExecutions.find(
@@ -279,33 +556,22 @@ export class EngineService {
 
       if (!dependenciesResolved) continue;
 
-      const shouldExecute = await this.evaluateStepCondition(
-        execution,
-        stepExecutions,
-        nextStep,
-      );
-      if (shouldExecute) {
-        await this.triggerStep(execution, nextStep);
-      } else {
-        console.log(
-          `Step [${nextStep.id}] condition evaluated to false. Skipping step.`,
-        );
-        await this.skipStep(execution, nextStep);
-      }
+      if (await this.triggerStep(execution, nextStep)) progressed = true;
     }
+    return progressed;
   }
 
   private async triggerStep(
     execution: ExecutionEntity,
     stepConfig: PipelineStepConfig,
     options: { force?: boolean } = {},
-  ) {
+  ): Promise<boolean> {
     if (!options.force) {
       const existingStep = await this.executionService.getStepExecution(
         execution.id,
         stepConfig.id,
       );
-      if (existingStep) return;
+      if (existingStep && existingStep.status !== "READY") return false;
     }
 
     console.log(
@@ -313,6 +579,8 @@ export class EngineService {
     );
 
     const maxAttempts = this.getMaxAttempts(stepConfig);
+    const timeoutMs = this.parseDurationMs(stepConfig.timeout);
+    const deadlineAt = timeoutMs ? new Date(Date.now() + timeoutMs) : undefined;
     let resolvedInput: unknown;
 
     try {
@@ -326,48 +594,45 @@ export class EngineService {
       );
     } catch (err) {
       const message = this.getErrorMessage(err);
-      const failedStep = await this.executionService.createStepExecution(
-        execution.id,
-        stepConfig.id,
-        stepConfig.agent,
-        null,
-        maxAttempts,
-      );
-      await this.handleStepCompletion(
-        execution.id,
-        stepConfig.id,
-        "FAILED",
-        null,
-        `Input resolution failed: ${message}`,
-        failedStep.attempt,
-      );
-      return;
+      await this.failExecution(execution.id, {
+        failedStep: stepConfig.id,
+        error: `Input resolution failed: ${message}`,
+      });
+      return true;
     }
 
-    const stepExecution = await this.executionService.createStepExecution(
+    const claim = await this.executionService.claimRunnableStep(
       execution.id,
-      stepConfig.id,
-      stepConfig.agent,
+      stepConfig,
       resolvedInput,
       maxAttempts,
+      deadlineAt,
     );
-    await this.executionService.updateStepStatus(
-      execution.id,
-      stepConfig.id,
-      "RUNNING",
-    );
-    await this.notifyGatewayUpdate(execution.id);
-    this.scheduleStepTimeout(execution.id, stepConfig, stepExecution.attempt);
-
-    try {
-      const invocation = this.createAgentInvocation(
-        execution,
-        stepExecution,
-        stepConfig,
-        resolvedInput,
-        maxAttempts,
+    if (!claim) return false;
+    if (claim.disposition === "skipped") {
+      console.log(
+        `Step [${stepConfig.id}] condition evaluated to false. Skipping step.`,
       );
-      await this.agentAdapter.invoke(invocation);
+      await this.notifyGatewayUpdate(execution.id);
+      const steps =
+        await this.executionService.getExecutionPlanSteps(execution);
+      await this.processExecutionProgress(execution, steps, stepConfig.id);
+      return true;
+    }
+    const stepExecution = claim.logicalStep;
+    await this.notifyGatewayUpdate(execution.id);
+    try {
+      // Claim-specific dispatch: deliver THIS attempt's own outbox row, and
+      // reconcile/project the execution that actually owns a terminal
+      // failure — never assume it is the local execution.
+      const disposition = await this.dispatchOutbox.dispatchAttempt(
+        claim.attempt.id,
+      );
+      if (disposition.outcome === "terminal_failure") {
+        await this.reconcileExecution(disposition.executionId, {
+          projectTerminal: true,
+        });
+      }
     } catch (err) {
       const message = this.getErrorMessage(err);
       const adapterError = err instanceof AgentAdapterError ? err : undefined;
@@ -381,119 +646,8 @@ export class EngineService {
         agent: stepConfig.agent,
         attempt: stepExecution.attempt,
       });
-      await this.handleStepCompletion(
-        execution.id,
-        stepConfig.id,
-        "FAILED",
-        null,
-        `Agent dispatch failed: ${message}`,
-        stepExecution.attempt,
-      );
     }
-  }
-
-  private createAgentInvocation(
-    execution: ExecutionEntity,
-    stepExecution: StepExecutionEntity,
-    stepConfig: PipelineStepConfig,
-    input: unknown,
-    maxAttempts: number,
-  ): AgentInvocationV1 {
-    const createdAt = new Date().toISOString();
-    const invocationId = `${stepExecution.id}:${stepExecution.attempt}`;
-    const timeoutMs = this.parseDurationMs(stepConfig.timeout);
-
-    return parseAgentInvocation({
-      schemaVersion: "1",
-      invocationId,
-      executionId: execution.id,
-      stepExecutionId: stepExecution.id,
-      stepId: stepConfig.id,
-      target: { agent: stepConfig.agent },
-      input: input as JsonValue,
-      attempt: stepExecution.attempt,
-      createdAt,
-      deadlineAt: timeoutMs
-        ? new Date(Date.parse(createdAt) + timeoutMs).toISOString()
-        : undefined,
-      trace: {
-        traceId: execution.id,
-        correlationId: invocationId,
-      },
-      metadata: {
-        orchestration: {
-          maxAttempts,
-        },
-      },
-    });
-  }
-
-  private async skipStep(
-    execution: ExecutionEntity,
-    stepConfig: PipelineStepConfig,
-  ) {
-    await this.executionService.createStepExecution(
-      execution.id,
-      stepConfig.id,
-      stepConfig.agent,
-      null,
-      1,
-    );
-    await this.executionService.updateStepStatus(
-      execution.id,
-      stepConfig.id,
-      "SKIPPED",
-      null,
-    );
-    await this.notifyGatewayUpdate(execution.id);
-    const pipeline = await this.pipelineService.findOne(execution.pipelineId);
-    if (pipeline) {
-      await this.processExecutionProgress(
-        execution,
-        pipeline.steps as PipelineStepConfig[],
-        stepConfig.id,
-      );
-    }
-  }
-
-  private scheduleStepTimeout(
-    executionId: string,
-    stepConfig: PipelineStepConfig,
-    attempt: number,
-  ) {
-    const timeoutMs = this.parseDurationMs(stepConfig.timeout);
-    if (!timeoutMs) return;
-
-    setTimeout(async () => {
-      try {
-        const execution = await this.executionService.getExecution(executionId);
-        const stepExecution = await this.executionService.getStepExecution(
-          executionId,
-          stepConfig.id,
-        );
-        if (!execution || execution.status !== "RUNNING" || !stepExecution)
-          return;
-        if (
-          stepExecution.status !== "RUNNING" ||
-          stepExecution.attempt !== attempt
-        )
-          return;
-
-        await this.handleStepCompletion(
-          executionId,
-          stepConfig.id,
-          "FAILED",
-          null,
-          `Step timed out after ${stepConfig.timeout}`,
-          attempt,
-        );
-      } catch (err) {
-        console.error(
-          `Failed while enforcing timeout for step [${stepConfig.id}]:`,
-          this.getErrorMessage(err),
-        );
-      }
-    }, timeoutMs);
+    return true;
   }
 
   private isDependencyResolved(
@@ -564,49 +718,6 @@ export class EngineService {
         return JSON.stringify(resolvedValue);
       },
     );
-  }
-
-  private async evaluateStepCondition(
-    execution: ExecutionEntity,
-    stepExecutions: StepExecutionEntity[],
-    stepConfig: PipelineStepConfig,
-  ): Promise<boolean> {
-    if (!stepConfig.condition) return true;
-
-    try {
-      const context = this.buildTemplateContext(
-        execution.input,
-        stepExecutions,
-      );
-      const expression = this.unwrapConditionExpression(stepConfig.condition);
-      const resolvedCondition = expression.replace(
-        /\b(pipeline|steps)(?:\.[a-zA-Z0-9_-]+)+\b/g,
-        (path: string) => {
-          const resolvedValue = this.getValueFromPath(context, path.split("."));
-          return resolvedValue !== undefined
-            ? JSON.stringify(resolvedValue)
-            : "undefined";
-        },
-      );
-
-      console.log(
-        `Evaluating condition [${stepConfig.condition}] -> [${resolvedCondition}]`,
-      );
-
-      const checkFn = new Function(`return (${resolvedCondition});`);
-      return !!checkFn();
-    } catch (err) {
-      console.error(
-        `Failed to evaluate condition [${stepConfig.condition}]:`,
-        err,
-      );
-      return false;
-    }
-  }
-
-  private unwrapConditionExpression(condition: string): string {
-    const match = condition.match(/^\s*\{\{\s*([\s\S]+?)\s*\}\}\s*$/);
-    return match ? match[1] : condition;
   }
 
   private buildTemplateContext(

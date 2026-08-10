@@ -13,6 +13,8 @@
     "start:prod": "node dist/main",
     "pretest": "pnpm --filter @tenvyr/contracts build && pnpm --filter @tenvyr/worker build",
     "test": "jest",
+    "migration:run": "pnpm run build && typeorm -d dist/database/data-source.js migration:run",
+    "migration:revert": "pnpm run build && typeorm -d dist/database/data-source.js migration:revert",
     "pretest:python-worker-loopback": "pnpm --filter @tenvyr/contracts build",
     "test:python-worker-loopback": "jest --config jest.python-worker.config.js --runInBand"
   },

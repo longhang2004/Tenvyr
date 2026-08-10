@@ -1,11 +1,11 @@
-import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { databaseProviders } from './database/database.provider';
-import { repositoryProviders } from './database/repository.providers';
-import { PipelineService } from './services/pipeline.service';
-import { ExecutionService } from './services/execution.service';
-import { KafkaService } from './services/kafka.service';
-import { EngineService } from './services/engine.service';
+import { Module } from "@nestjs/common";
+import { AppController } from "./app.controller";
+import { databaseProviders } from "./database/database.provider";
+import { repositoryProviders } from "./database/repository.providers";
+import { PipelineService } from "./services/pipeline.service";
+import { ExecutionService } from "./services/execution.service";
+import { KafkaService } from "./services/kafka.service";
+import { EngineService } from "./services/engine.service";
 import {
   AGENT_ADAPTER,
   AgentAdapterLifecycle,
@@ -14,8 +14,16 @@ import {
   HttpAgentAdapter,
   HttpAgentCallbackController,
   KafkaAgentAdapter,
-} from './agent-adapters';
-import { AgentResultService } from './services/agent-result.service';
+} from "./agent-adapters";
+import { AgentResultService } from "./services/agent-result.service";
+import { ConditionEvaluatorService } from "./services/condition-evaluator.service";
+import { PipelineValidationService } from "./services/pipeline-validation.service";
+import { ResultInboxService } from "./services/result-inbox.service";
+import { DispatchOutboxService } from "./services/dispatch-outbox.service";
+import { RuntimeRecoveryService } from "./services/runtime-recovery.service";
+import { AgentEventService } from "./services/agent-event.service";
+import { SupervisionConfigService } from "./services/supervision-config.service";
+import { SupervisionService } from "./services/supervision.service";
 
 @Module({
   imports: [],
@@ -24,7 +32,10 @@ import { AgentResultService } from './services/agent-result.service';
     ...databaseProviders,
     ...repositoryProviders,
     PipelineService,
+    ConditionEvaluatorService,
+    PipelineValidationService,
     ExecutionService,
+    ResultInboxService,
     KafkaService,
     KafkaAgentAdapter,
     HttpAgentAdapter,
@@ -39,7 +50,12 @@ import { AgentResultService } from './services/agent-result.service';
     },
     EngineService,
     AgentResultService,
+    AgentEventService,
+    SupervisionConfigService,
+    SupervisionService,
     AgentAdapterLifecycle,
+    DispatchOutboxService,
+    RuntimeRecoveryService,
   ],
   exports: [
     ...databaseProviders,
@@ -49,6 +65,9 @@ import { AgentResultService } from './services/agent-result.service';
     KafkaService,
     EngineService,
     AgentResultService,
+    AgentEventService,
+    ResultInboxService,
+    DispatchOutboxService,
     AGENT_ADAPTER,
   ],
 })

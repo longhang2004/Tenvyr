@@ -128,8 +128,9 @@ describe("legacy compatibility identifiers", () => {
       readRepositoryFile("docker-compose.yml"),
     ) as ComposeConfiguration;
 
+    const legacyDatabase = ["agent", "weave"].join("");
     expect(databaseProvider).toContain(
-      "database: process.env.POSTGRES_DB || 'agentweave'",
+      `database: process.env.POSTGRES_DB || "${legacyDatabase}"`,
     );
     expect(
       environmentExample

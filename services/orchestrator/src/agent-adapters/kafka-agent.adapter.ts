@@ -2,18 +2,20 @@ import {
   AgentResultV1,
   ContractValidationError,
   normalizeLegacyResult,
+  parseAgentEvent,
   parseAgentInvocation,
   parseAgentResult,
 } from "@tenvyr/contracts";
 import { Injectable } from "@nestjs/common";
 import type { EachMessagePayload } from "kafkajs";
 import { ExecutionService } from "../services/execution.service";
+import { EventPayloadTooLargeError } from "../services/agent-event.service";
 import { KafkaService } from "../services/kafka.service";
 import { AgentAdapterError } from "./agent-adapter.errors";
 import type {
   AgentAdapter,
+  AgentAdapterHandlers,
   AgentDispatchReceipt,
-  AgentResultHandler,
   AgentTransportMetadata,
 } from "./agent-adapter.types";
 
@@ -22,32 +24,37 @@ export class KafkaAgentAdapter implements AgentAdapter {
   readonly kind = "kafka";
 
   private started = false;
-  private resultHandler?: AgentResultHandler;
+  private handlers?: AgentAdapterHandlers;
+  private eventTopicSet = new Set<string>();
 
   constructor(
     private readonly kafka: KafkaService,
     private readonly executionService: ExecutionService,
   ) {}
 
-  async start(handler: AgentResultHandler): Promise<void> {
+  async start(handlers: AgentAdapterHandlers): Promise<void> {
     if (this.started) return;
 
-    this.resultHandler = handler;
+    this.handlers = handlers;
     const resultTopics = this.resultTopics();
+    const eventTopics = this.eventTopics();
+    this.eventTopicSet = new Set(eventTopics);
+    const topics = [...new Set([...resultTopics, ...eventTopics])];
     let connected = false;
     try {
       await this.kafka.connect();
       connected = true;
-      await this.kafka.subscribe(resultTopics, async (payload) =>
+      await this.kafka.subscribe(topics, async (payload) =>
         this.handleKafkaMessage(payload),
       );
       this.started = true;
       console.log("Kafka agent adapter started", {
         adapter: this.kind,
         resultTopics,
+        eventTopics,
       });
     } catch (cause) {
-      this.resultHandler = undefined;
+      this.handlers = undefined;
       if (connected) {
         try {
           await this.kafka.disconnect();
@@ -73,7 +80,8 @@ export class KafkaAgentAdapter implements AgentAdapter {
     try {
       await this.kafka.disconnect();
       this.started = false;
-      this.resultHandler = undefined;
+      this.handlers = undefined;
+      this.eventTopicSet = new Set();
     } catch (cause) {
       throw new AgentAdapterError(
         "ADAPTER_STOP_FAILED",
@@ -186,6 +194,55 @@ export class KafkaAgentAdapter implements AgentAdapter {
 
     try {
       payload = JSON.parse(message.value.toString());
+      // Event topics ingest ONLY canonical AgentEventV1 — no legacy event
+      // normalization exists, and routing is by explicit topic membership so
+      // custom ORCHESTRATOR_EVENT_TOPICS cannot be misrouted to result
+      // parsing. Result topics keep the existing behavior (including legacy
+      // result normalization).
+      if (this.eventTopicSet.has(topic)) {
+        const event = parseAgentEvent(payload);
+        console.log("Agent event received from transport", {
+          adapter: this.kind,
+          invocationId: event.invocationId,
+          executionId: event.executionId,
+          stepExecutionId: event.stepExecutionId,
+          eventId: event.eventId,
+          type: event.type,
+          sequence: event.sequence,
+          messageKey: transport.messageKey,
+          topic,
+          partition,
+          offset: message.offset,
+        });
+        if (!this.handlers) {
+          throw new AgentAdapterError(
+            "EVENT_HANDLER_FAILED",
+            this.kind,
+            "Agent event handler is unavailable",
+            {
+              invocationId: event.invocationId,
+              retryable: true,
+            },
+          );
+        }
+        try {
+          await this.handlers.event({ event, transport });
+        } catch (cause) {
+          throw new AgentAdapterError(
+            "EVENT_HANDLER_FAILED",
+            this.kind,
+            "Agent event handler failed",
+            {
+              invocationId: event.invocationId,
+              // Oversized payloads are permanent poison: ack, never redeliver.
+              retryable: !(cause instanceof EventPayloadTooLargeError),
+              cause,
+            },
+          );
+        }
+        return;
+      }
+
       const result = await this.normalizeResult(payload, message.timestamp);
       if (!result) return;
 
@@ -201,7 +258,7 @@ export class KafkaAgentAdapter implements AgentAdapter {
         offset: message.offset,
       });
 
-      if (!this.resultHandler) {
+      if (!this.handlers) {
         throw new AgentAdapterError(
           "RESULT_HANDLER_FAILED",
           this.kind,
@@ -214,7 +271,7 @@ export class KafkaAgentAdapter implements AgentAdapter {
       }
 
       try {
-        await this.resultHandler({ result, transport });
+        await this.handlers.result({ result, transport });
       } catch (cause) {
         throw new AgentAdapterError(
           "RESULT_HANDLER_FAILED",
@@ -229,6 +286,12 @@ export class KafkaAgentAdapter implements AgentAdapter {
       }
     } catch (error) {
       this.logInboundError(error, transport, payload);
+      // KafkaJS only has a chance to redeliver when the handler rejects. Schema
+      // failures are poison records and are logged/acknowledged; durable result
+      // application failures are retryable and must escape this callback.
+      if (!(error instanceof AgentAdapterError)) return;
+      if (!error.retryable) return;
+      throw error;
     }
   }
 
@@ -283,13 +346,24 @@ export class KafkaAgentAdapter implements AgentAdapter {
     });
   }
 
-  private resultTopics(): string[] {
-    const agents = (
-      process.env.ORCHESTRATOR_AGENT_NAMES || "code-reviewer,observability"
-    )
+  /**
+   * agentweave.agent.<agent>.event is a compatibility wire identifier (not
+   * active product branding), consistent with the task/result topic
+   * convention. ORCHESTRATOR_EVENT_TOPICS allows explicit additions without
+   * overloading result topics.
+   */
+  private eventTopics(): string[] {
+    const configured = (process.env.ORCHESTRATOR_EVENT_TOPICS ?? "")
       .split(",")
-      .map((agent) => agent.trim())
+      .map((topic) => topic.trim())
       .filter(Boolean);
+    return [
+      ...this.agentNames().map((agent) => `agentweave.agent.${agent}.event`),
+      ...configured,
+    ];
+  }
+
+  private resultTopics(): string[] {
     const explicitTopics = (process.env.ORCHESTRATOR_RESULT_TOPICS || "")
       .split(",")
       .map((topic) => topic.trim())
@@ -297,10 +371,17 @@ export class KafkaAgentAdapter implements AgentAdapter {
 
     return Array.from(
       new Set([
-        ...agents.map((agent) => `agentweave.agent.${agent}.result`),
+        ...this.agentNames().map((agent) => `agentweave.agent.${agent}.result`),
         ...explicitTopics,
       ]),
     );
+  }
+
+  private agentNames(): string[] {
+    return (process.env.ORCHESTRATOR_AGENT_NAMES || "code-reviewer,observability")
+      .split(",")
+      .map((agent) => agent.trim())
+      .filter(Boolean);
   }
 
   private kafkaTimestamp(timestamp: string): string {

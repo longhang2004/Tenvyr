@@ -90,6 +90,20 @@ describe("HttpAgentCallbackController", () => {
       400,
     ],
     [
+      "ambiguous callback body",
+      new AgentAdapterError("CALLBACK_AMBIGUOUS", "http", "ambiguous", {
+        retryable: false,
+      }),
+      400,
+    ],
+    [
+      "event handler failure",
+      new AgentAdapterError("EVENT_HANDLER_FAILED", "http", "db down", {
+        retryable: true,
+      }),
+      503,
+    ],
+    [
       "invalid result contract",
       new ContractValidationError("AgentResultV1", [
         { path: "/", message: "invalid" },

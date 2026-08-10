@@ -3,6 +3,7 @@ import {
   type AgentInvocationV1,
   type AgentResultV1,
 } from "@tenvyr/contracts";
+import { EventPayloadTooLargeError } from "../services/agent-event.service";
 import {
   AgentTransportConfigService,
   parseAgentTransportConfiguration,
@@ -102,8 +103,9 @@ describe("HttpAgentAdapter", () => {
   describe("lifecycle", () => {
     it("exposes a stable kind and starts/stops idempotently", async () => {
       expect(adapter.kind).toBe("http");
-      await adapter.start(handler);
-      await adapter.start(handler);
+      const handlers = { result: handler, event: jest.fn() };
+      await adapter.start(handlers);
+      await adapter.start(handlers);
       await adapter.stop();
       await adapter.stop();
       await expect(adapter.invoke(invocation)).rejects.toMatchObject({
@@ -112,17 +114,20 @@ describe("HttpAgentAdapter", () => {
     });
 
     it("rejects a different handler while already started", async () => {
-      await adapter.start(handler);
+      await adapter.start({ result: handler, event: jest.fn() });
 
-      await expect(adapter.start(jest.fn())).rejects.toMatchObject({
+      await expect(adapter.start({ result: jest.fn(), event: jest.fn() })).rejects.toMatchObject({
         code: "ADAPTER_START_FAILED",
       });
     });
   });
 
   describe("outbound", () => {
+    let eventHandler: jest.Mock;
+
     beforeEach(async () => {
-      await adapter.start(handler);
+      eventHandler = jest.fn().mockResolvedValue(undefined);
+      await adapter.start({ result: handler, event: eventHandler });
     });
 
     it("submits the canonical callback request with authentication and idempotency headers", async () => {
@@ -181,7 +186,7 @@ describe("HttpAgentAdapter", () => {
         ),
       );
       const noAuthAdapter = new HttpAgentAdapter(config);
-      await noAuthAdapter.start(handler);
+      await noAuthAdapter.start({ result: handler, event: jest.fn() });
 
       await noAuthAdapter.invoke(invocation);
 
@@ -358,8 +363,11 @@ describe("HttpAgentAdapter", () => {
       ...overrides,
     });
 
+    let eventHandler: jest.Mock;
+
     beforeEach(async () => {
-      await adapter.start(handler);
+      eventHandler = jest.fn().mockResolvedValue(undefined);
+      await adapter.start({ result: handler, event: eventHandler });
     });
 
     it("authenticates, validates, and delivers a canonical result with HTTP metadata", async () => {
@@ -385,6 +393,34 @@ describe("HttpAgentAdapter", () => {
       );
 
       expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("routes an in-flight duplicate through the durable handler", async () => {
+      let resolveHandler!: (value: unknown) => void;
+      handler.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveHandler = resolve;
+          }),
+      );
+
+      const first = adapter.handleCallback(callback());
+      // A concurrent retry with the same deliveryId lands while the first
+      // delivery is still in-flight. It must not be rejected: the durable
+      // ResultInbox is the authoritative deduplicator, so both deliveries are
+      // accepted and the worker stops retrying.
+      const second = adapter.handleCallback(callback());
+      await expect(second).resolves.toBe("processed");
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      resolveHandler(undefined);
+      await expect(first).resolves.toBe("processed");
+
+      // Once the delivery completed, a later replay is a fast-path duplicate.
+      await expect(adapter.handleCallback(callback())).resolves.toBe(
+        "duplicate",
+      );
+      expect(handler).toHaveBeenCalledTimes(2);
     });
 
     it.each([
@@ -470,6 +506,245 @@ describe("HttpAgentAdapter", () => {
       const logged = JSON.stringify([...log.mock.calls, ...error.mock.calls]);
       expect(logged).not.toContain(JSON.stringify(result));
       expect(logged).not.toContain(request.signature);
+    });
+
+    it("delivers a signed canonical AgentEvent to the event handler with safe metadata", async () => {
+      const eventBody = {
+        schemaVersion: "1",
+        eventId: "event-1",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 3,
+        type: "progress",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: { stage: "indexing" },
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(eventBody));
+      const request = callback({
+        deliveryId: "delivery-event-1",
+        rawBody: raw,
+        signature: createHttpCallbackSignature(
+          "callback-secret",
+          timestamp,
+          "delivery-event-1",
+          raw,
+        ),
+      });
+
+      await expect(adapter.handleCallback(request)).resolves.toBe("processed");
+
+      expect(eventHandler).toHaveBeenCalledWith({
+        event: expect.objectContaining({
+          eventId: "event-1",
+          sequence: 3,
+          type: "progress",
+        }),
+        transport: expect.objectContaining({
+          adapter: "http",
+          deliveryId: "delivery-event-1",
+          keyId: "security-agent-v1",
+        }),
+      });
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("rejects a signed body that matches both result and event shapes", async () => {
+      const ambiguous = {
+        schemaVersion: "1",
+        status: "succeeded",
+        completedAt: "2026-08-10T00:00:00.000Z",
+        eventId: "event-1",
+        sequence: 1,
+        type: "progress",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: {},
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(ambiguous));
+      const request = callback({
+        deliveryId: "delivery-ambiguous",
+        rawBody: raw,
+        signature: createHttpCallbackSignature(
+          "callback-secret",
+          timestamp,
+          "delivery-ambiguous",
+          raw,
+        ),
+      });
+
+      await expect(adapter.handleCallback(request)).rejects.toMatchObject({
+        code: "CALLBACK_AMBIGUOUS",
+        retryable: false,
+      });
+      expect(handler).not.toHaveBeenCalled();
+      expect(eventHandler).not.toHaveBeenCalled();
+    });
+
+    it("rejects an invalid AgentEvent as a bad request", async () => {
+      const invalid = {
+        schemaVersion: "1",
+        eventId: "event-1",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: "not-a-number",
+        type: "progress",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: {},
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(invalid));
+      const request = callback({
+        deliveryId: "delivery-invalid",
+        rawBody: raw,
+        signature: createHttpCallbackSignature(
+          "callback-secret",
+          timestamp,
+          "delivery-invalid",
+          raw,
+        ),
+      });
+
+      await expect(adapter.handleCallback(request)).rejects.toBeInstanceOf(
+        ContractValidationError,
+      );
+      expect(eventHandler).not.toHaveBeenCalled();
+    });
+
+    it("rejects an event with an invalid signature", async () => {
+      const eventBody = {
+        schemaVersion: "1",
+        eventId: "event-1",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 1,
+        type: "heartbeat",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: {},
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(eventBody));
+      const request = callback({
+        deliveryId: "delivery-bad-signature",
+        rawBody: raw,
+        signature: "v1=deadbeef",
+      });
+
+      await expect(adapter.handleCallback(request)).rejects.toMatchObject({
+        code: "CALLBACK_UNAUTHORIZED",
+      });
+      expect(eventHandler).not.toHaveBeenCalled();
+    });
+
+    it("propagates a durable event handler failure as retryable so the worker retries", async () => {
+      const eventBody = {
+        schemaVersion: "1",
+        eventId: "event-1",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 1,
+        type: "heartbeat",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: {},
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(eventBody));
+      const request = callback({
+        deliveryId: "delivery-db-down",
+        rawBody: raw,
+        signature: createHttpCallbackSignature(
+          "callback-secret",
+          timestamp,
+          "delivery-db-down",
+          raw,
+        ),
+      });
+      eventHandler.mockRejectedValueOnce(new Error("database unavailable"));
+
+      await expect(adapter.handleCallback(request)).rejects.toMatchObject({
+        code: "EVENT_HANDLER_FAILED",
+        retryable: true,
+      });
+      // The replay-cache entry must not be marked completed before durable
+      // handling succeeds: the retry re-runs the handler instead of getting a
+      // fast-path duplicate ack.
+      await expect(adapter.handleCallback(request)).resolves.toBe("processed");
+      expect(eventHandler).toHaveBeenCalledTimes(2);
+    });
+
+    it("permanently rejects an oversized event payload (non-retryable)", async () => {
+      const eventBody = {
+        schemaVersion: "1",
+        eventId: "event-oversized",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 1,
+        type: "progress",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: { blob: "x".repeat(70 * 1024) },
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(eventBody));
+      const request = callback({
+        deliveryId: "delivery-oversized",
+        rawBody: raw,
+        signature: createHttpCallbackSignature(
+          "callback-secret",
+          timestamp,
+          "delivery-oversized",
+          raw,
+        ),
+      });
+      eventHandler.mockRejectedValueOnce(
+        new EventPayloadTooLargeError(65536),
+      );
+
+      await expect(adapter.handleCallback(request)).rejects.toMatchObject({
+        code: "EVENT_HANDLER_FAILED",
+        retryable: false,
+      });
+    });
+
+    it("deduplicates an event replay across a simulated replay-cache reset through PostgreSQL", async () => {
+      const eventBody = {
+        schemaVersion: "1",
+        eventId: "event-1",
+        invocationId: "step-execution-1:1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 1,
+        type: "progress",
+        occurredAt: "2026-08-10T00:00:00.000Z",
+        payload: { stage: "indexing" },
+        trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
+      };
+      const raw = Buffer.from(JSON.stringify(eventBody));
+      const request = callback({
+        deliveryId: "delivery-replay",
+        rawBody: raw,
+        signature: createHttpCallbackSignature(
+          "callback-secret",
+          timestamp,
+          "delivery-replay",
+          raw,
+        ),
+      });
+
+      await adapter.handleCallback(request);
+      // Simulate a process restart: the in-memory replay cache is gone, the
+      // durable AgentEventService still sees the same delivery and dedupes.
+      adapter.stop();
+      await adapter.start({ result: handler, event: eventHandler });
+      await expect(adapter.handleCallback(request)).resolves.toBe("processed");
+      expect(eventHandler).toHaveBeenCalledTimes(2);
     });
   });
 });

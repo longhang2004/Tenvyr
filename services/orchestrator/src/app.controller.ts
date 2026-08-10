@@ -4,11 +4,14 @@ import {
   Post,
   Body,
   Param,
+  Query,
+  BadRequestException,
   NotFoundException,
 } from "@nestjs/common";
 import { PipelineService } from "./services/pipeline.service";
 import { ExecutionService } from "./services/execution.service";
 import { EngineService } from "./services/engine.service";
+import { AgentEventService } from "./services/agent-event.service";
 import * as yaml from "js-yaml";
 
 @Controller()
@@ -17,6 +20,7 @@ export class AppController {
     private pipelineService: PipelineService,
     private executionService: ExecutionService,
     private engineService: EngineService,
+    private eventService: AgentEventService,
   ) {}
 
   @Get("health")
@@ -127,7 +131,13 @@ export class AppController {
       throw new NotFoundException(`Execution not found`);
     }
 
-    const steps = await this.executionService.getStepExecutions(id);
+    const logicalSteps = await this.executionService.getStepExecutions(id);
+    const steps = await Promise.all(
+      logicalSteps.map(async (step) => ({
+        ...step,
+        attempts: await this.executionService.getStepAttempts(step.id),
+      })),
+    );
 
     return {
       success: true,
@@ -136,6 +146,69 @@ export class AppController {
         steps,
       },
     };
+  }
+
+  @Get("executions/:id/events")
+  async getExecutionEvents(
+    @Param("id") id: string,
+    @Query("stepAttemptId") stepAttemptId?: string,
+    @Query("type") type?: string,
+    @Query("limit") limit?: string,
+    @Query("afterReceivedAt") afterReceivedAt?: string,
+    @Query("afterId") afterId?: string,
+  ) {
+    const execution = await this.executionService.getExecution(id);
+    if (!execution) {
+      throw new NotFoundException(`Execution not found`);
+    }
+    const requested = limit === undefined ? 50 : Number(limit);
+    const bounded = Number.isInteger(requested)
+      ? Math.min(Math.max(requested, 1), 200)
+      : 50;
+    if ((afterReceivedAt === undefined) !== (afterId === undefined)) {
+      throw new BadRequestException(
+        `afterReceivedAt and afterId must be provided together`,
+      );
+    }
+    let after: { receivedAt: Date; id: string } | undefined;
+    if (afterReceivedAt !== undefined && afterId !== undefined) {
+      const parsed = new Date(afterReceivedAt);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException(
+          `afterReceivedAt must be an ISO-8601 timestamp`,
+        );
+      }
+      after = { receivedAt: parsed, id: afterId };
+    }
+    const page = await this.eventService.list(id, {
+      stepAttemptId,
+      type,
+      limit: bounded,
+      after,
+    });
+    return {
+      success: true,
+      data: {
+        events: page.events,
+        next: page.next,
+      },
+    };
+  }
+
+  @Post("executions/:id/cancel")
+  async cancelExecution(@Param("id") id: string) {
+    try {
+      const execution = await this.engineService.cancelExecution(id);
+      return { success: true, data: execution };
+    } catch (err) {
+      if (this.getErrorMessage(err).includes("not found")) {
+        throw new NotFoundException("Execution not found");
+      }
+      return {
+        success: false,
+        error: `Failed to cancel execution: ${this.getErrorMessage(err)}`,
+      };
+    }
   }
 
   private getErrorMessage(err: unknown): string {

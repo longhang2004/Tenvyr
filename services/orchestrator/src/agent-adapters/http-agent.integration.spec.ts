@@ -97,7 +97,7 @@ describe("HTTP agent loopback integration", () => {
     await app.listen(callbackPort, "127.0.0.1");
     adapter = module.get(HttpAgentAdapter);
     resultHandler = jest.fn().mockResolvedValue(undefined);
-    await adapter.start(resultHandler);
+    await adapter.start({ result: resultHandler, event: jest.fn() });
   });
 
   afterAll(async () => {

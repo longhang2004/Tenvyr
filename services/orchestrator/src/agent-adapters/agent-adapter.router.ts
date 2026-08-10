@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AgentAdapterError } from './agent-adapter.errors';
-import type { AgentAdapter, AgentDispatchReceipt, AgentResultHandler } from './agent-adapter.types';
+import type { AgentAdapter, AgentAdapterHandlers, AgentDispatchReceipt } from './agent-adapter.types';
 import { AgentTransportConfigService } from './agent-transport-config.service';
 import { HttpAgentAdapter } from './http-agent.adapter';
 import { KafkaAgentAdapter } from './kafka-agent.adapter';
@@ -17,14 +17,14 @@ export class AgentAdapterRouter implements AgentAdapter {
     private readonly transportConfig: AgentTransportConfigService,
   ) {}
 
-  async start(handler: AgentResultHandler): Promise<void> {
+  async start(handlers: AgentAdapterHandlers): Promise<void> {
     if (this.started) return;
 
     let kafkaStarted = false;
     try {
-      await this.kafkaAdapter.start(handler);
+      await this.kafkaAdapter.start(handlers);
       kafkaStarted = true;
-      await this.httpAdapter.start(handler);
+      await this.httpAdapter.start(handlers);
       this.started = true;
     } catch (cause) {
       if (kafkaStarted) {
