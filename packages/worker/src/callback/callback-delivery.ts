@@ -42,6 +42,22 @@ type DeliveryInput = {
   signal?: AbortSignal;
 };
 
+type SignedBodyDeliveryInput = {
+  agent: string;
+  runId: string;
+  invocationId: string;
+  /** Log subject, e.g. "Agent callback" or "Agent event". */
+  subject: string;
+  /** Exact bytes to POST; built once by the caller and reused across retries. */
+  rawBody: Buffer<ArrayBuffer>;
+  callbackUrl: string;
+  keyId: string;
+  secret: string;
+  config: CallbackDeliveryConfig;
+  logger: WorkerLogger;
+  signal?: AbortSignal;
+};
+
 type DeliveryDependencies = {
   id?: () => string;
   now?: () => number;
@@ -63,6 +79,38 @@ export async function deliverCallback(
   input: DeliveryInput,
   dependencies: DeliveryDependencies = {},
 ): Promise<CallbackDeliveryOutcome> {
+  const rawBody = Buffer.from(
+    JSON.stringify(asJsonValue(input.result)),
+    "utf8",
+  );
+  return deliverSignedBody(
+    {
+      agent: input.agent,
+      runId: input.runId,
+      invocationId: input.result.invocationId,
+      subject: "Agent callback",
+      rawBody,
+      callbackUrl: input.callbackUrl,
+      keyId: input.keyId,
+      secret: input.secret,
+      config: input.config,
+      logger: input.logger,
+      signal: input.signal,
+    },
+    dependencies,
+  );
+}
+
+/**
+ * Deliver an already-serialized body with the same HMAC signing, retry,
+ * backoff, and failure classification as the AgentResult callback. Each call
+ * is one delivery operation with its own deliveryId; the caller-provided
+ * rawBody is reused verbatim across retry attempts.
+ */
+export async function deliverSignedBody(
+  input: SignedBodyDeliveryInput,
+  dependencies: DeliveryDependencies = {},
+): Promise<CallbackDeliveryOutcome> {
   const id = dependencies.id ?? randomUUID;
   const now = dependencies.now ?? Date.now;
   const random = dependencies.random ?? Math.random;
@@ -70,10 +118,6 @@ export async function deliverCallback(
   const fetchRequest = dependencies.fetch ?? fetch;
   const logger = safeLogger(input.logger);
   const deliveryId = id();
-  const rawBody = Buffer.from(
-    JSON.stringify(asJsonValue(input.result)),
-    "utf8",
-  );
   const callbackHost = new URL(input.callbackUrl).host;
   let lastStatus: number | undefined;
   let lastReason = "delivery-failed";
@@ -91,7 +135,7 @@ export async function deliverCallback(
       input.secret,
       timestamp,
       deliveryId,
-      rawBody,
+      input.rawBody,
     );
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -117,17 +161,17 @@ export async function deliverCallback(
           "X-AgentWeave-Signature": signature,
           "User-Agent": "Tenvyr-Worker/0.1.0",
         },
-        body: rawBody,
+        body: input.rawBody,
       });
       lastStatus = response.status;
       try {
         await readLimitedResponse(response, input.config.maxResponseBytes);
       } catch {
         lastReason = "response-too-large";
-        logger.error("Agent callback delivery failed", {
+        logger.error(`${input.subject} delivery failed`, {
           agent: input.agent,
           runId: input.runId,
-          invocationId: input.result.invocationId,
+          invocationId: input.invocationId,
           deliveryId,
           callbackHost,
           attempt,
@@ -146,10 +190,10 @@ export async function deliverCallback(
 
       const classification = classifyCallbackResponse(response.status);
       if (classification === "delivered") {
-        logger.info("Agent callback delivered", {
+        logger.info(`${input.subject} delivered`, {
           agent: input.agent,
           runId: input.runId,
-          invocationId: input.result.invocationId,
+          invocationId: input.invocationId,
           deliveryId,
           callbackHost,
           attempt,

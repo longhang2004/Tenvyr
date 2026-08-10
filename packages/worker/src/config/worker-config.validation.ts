@@ -13,6 +13,7 @@ export type ParsedWorkerConfig<TInput, TOutput> = TenvyrWorkerConfig<
   callbackDelivery: Required<
     NonNullable<TenvyrWorkerConfig<TInput, TOutput>["callbackDelivery"]>
   >;
+  events: Required<NonNullable<TenvyrWorkerConfig<TInput, TOutput>["events"]>>;
   callbackPolicy: Required<
     TenvyrWorkerConfig<TInput, TOutput>["callbackPolicy"]
   >;
@@ -108,6 +109,16 @@ export function parseWorkerConfig<TInput, TOutput>(
         "Callback request timeout",
       ),
     },
+    events: {
+      enabled: config.events?.enabled === true,
+      // Only meaningful when events are enabled; still validated when provided.
+      heartbeatIntervalMs: boundedPositiveInteger(
+        config.events?.heartbeatIntervalMs ?? 60_000,
+        "Event heartbeat interval",
+        1000,
+        3_600_000,
+      ),
+    },
     server: {
       maxRequestBytes: positiveInteger(
         config.server?.maxRequestBytes ?? 1024 * 1024,
@@ -177,6 +188,23 @@ function nonEmpty(value: unknown, field: string): string {
 function positiveInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw invalid(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function boundedPositiveInteger(
+  value: unknown,
+  field: string,
+  min: number,
+  max: number,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < min ||
+    value > max
+  ) {
+    throw invalid(`${field} must be an integer between ${min} and ${max}`);
   }
   return value;
 }

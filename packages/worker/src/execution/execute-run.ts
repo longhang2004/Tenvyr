@@ -11,6 +11,7 @@ import type {
   WorkerLogger,
 } from "../public/types";
 import { runLogger } from "../observability/safe-logger";
+import type { RunEventEmitter } from "../events/event-emitter";
 import {
   createExecutionContext,
   isStructuredSuccess,
@@ -25,6 +26,7 @@ type ExecuteAgentInput<TInput, TOutput> = {
   logger: WorkerLogger;
   now?: () => number;
   shutdownSignal?: AbortSignal;
+  eventEmitter?: RunEventEmitter;
 };
 
 type HandlerOutcome<TOutput> =
@@ -39,6 +41,7 @@ export async function executeAgent<TInput, TOutput>({
   logger,
   now = Date.now,
   shutdownSignal,
+  eventEmitter,
 }: ExecuteAgentInput<TInput, TOutput>): Promise<AgentResultV1> {
   const startedAt = new Date(now()).toISOString();
   const controller = new AbortController();
@@ -69,6 +72,7 @@ export async function executeAgent<TInput, TOutput>({
     runId,
     signal: controller.signal,
     logger: scopedLogger,
+    eventEmitter,
   });
   const handler: Promise<HandlerOutcome<TOutput>> = Promise.resolve()
     .then(() => agent.execute(context, input))

@@ -50,6 +50,22 @@ export interface AgentExecutionContext {
     value?: AgentExecutionSuccess<TOutput>,
   ): AgentExecutionSuccess<TOutput>;
   fail(options: AgentFailureOptions): never;
+  /** Emit a progress event for this run (no-op when events are disabled). */
+  progress(payload: Record<string, JsonValue>): void;
+  /** Emit a log event; a string becomes `{ message }`. No-op when events are disabled. */
+  log(message: string): void;
+  log(payload: Record<string, JsonValue>): void;
+  /** Emit an artifact event carrying the artifact descriptor. No-op when events are disabled. */
+  artifact(metadata: Record<string, JsonValue>): void;
+  /**
+   * Emit an agent event restricted to `progress`, `log`, or `artifact`.
+   * System-owned types (accepted, heartbeat, completed, failed) are rejected.
+   * No-op when events are disabled.
+   */
+  event(
+    type: "progress" | "log" | "artifact",
+    payload: Record<string, JsonValue>,
+  ): void;
 }
 
 export type AgentDefinition<TInput = unknown, TOutput = unknown> = {
@@ -98,6 +114,10 @@ export type TenvyrWorkerConfig<TInput = unknown, TOutput = unknown> = {
     maxDelayMs?: number;
     jitterRatio?: number;
     requestTimeoutMs?: number;
+  };
+  events?: {
+    enabled?: boolean;
+    heartbeatIntervalMs?: number;
   };
   server?: {
     maxRequestBytes?: number;

@@ -10,14 +10,19 @@ import {
   parseAgentResult,
   parseHttpAgentRunAccepted,
   parseHttpAgentRunRequest,
+  type AgentEventV1,
   type AgentInvocationV1,
   type AgentResultV1,
   type HttpAgentRunRequestV1,
 } from "@tenvyr/contracts";
 import { authenticateBearer } from "../auth/bearer-auth";
 import { validateCallbackUrl } from "../auth/callback-policy";
-import { deliverCallback } from "../callback/callback-delivery";
+import {
+  deliverCallback,
+  deliverSignedBody,
+} from "../callback/callback-delivery";
 import type { ParsedWorkerConfig } from "../config/worker-config.validation";
+import { RunEventEmitter } from "../events/event-emitter";
 import { executeAgent } from "../execution/execute-run";
 import { errorResponse, jsonResponse } from "../http/response";
 import { readRequestBody } from "../http/request-body";
@@ -366,12 +371,14 @@ export class TenvyrWorkerRuntime<TInput, TOutput> implements TenvyrWorker {
     );
     jsonResponse(response, 202, accepted);
     this.store.updateState(record, "queued", Date.now());
+    const emitter = this.createRunEmitter(record, runRequest);
+    this.emitAcceptedEvent(emitter, record);
     const enqueued = this.scheduler.enqueue({
-      run: async () => this.executeRun(record, runRequest),
-      cancel: async () => this.cancelQueuedRun(record, runRequest),
+      run: async () => this.executeRun(record, runRequest, emitter),
+      cancel: async () => this.cancelQueuedRun(record, runRequest, emitter),
     });
     if (!enqueued) {
-      await this.cancelQueuedRun(record, runRequest);
+      await this.cancelQueuedRun(record, runRequest, emitter);
     }
   }
 
@@ -397,10 +404,19 @@ export class TenvyrWorkerRuntime<TInput, TOutput> implements TenvyrWorker {
   private async executeRun(
     record: RunRecord,
     request: HttpAgentRunRequestV1,
+    emitter: RunEventEmitter,
   ): Promise<void> {
     this.store.updateState(record, "running", Date.now());
     const controller = new AbortController();
     this.executionControllers.add(controller);
+    let heartbeat: NodeJS.Timeout | undefined;
+    if (emitter.enabled) {
+      heartbeat = setInterval(
+        () => emitter.emit("heartbeat", {}),
+        this.config.events.heartbeatIntervalMs,
+      );
+      heartbeat.unref();
+    }
     let result: AgentResultV1;
     try {
       result = await executeAgent({
@@ -410,19 +426,28 @@ export class TenvyrWorkerRuntime<TInput, TOutput> implements TenvyrWorker {
         timeoutMs: this.config.execution.timeoutMs,
         logger: this.config.logger ?? noOpLogger,
         shutdownSignal: controller.signal,
+        eventEmitter: emitter,
       });
     } finally {
       this.executionControllers.delete(controller);
+      if (heartbeat) clearInterval(heartbeat);
     }
-    this.trackCallback(this.deliverResult(record, request, result));
+    // The terminal event is chained AFTER the AgentResult callback completes so
+    // that event delivery can never prevent or delay the terminal callback.
+    const terminal = this.deliverResult(record, request, result).then(() => {
+      this.emitTerminalEvent(emitter, result);
+    });
+    this.trackCallback(terminal);
   }
 
   private async cancelQueuedRun(
     record: RunRecord,
     request: HttpAgentRunRequestV1,
+    emitter: RunEventEmitter,
   ): Promise<void> {
     const result = shutdownResult(request.invocation);
     await this.deliverResult(record, request, result);
+    this.emitTerminalEvent(emitter, result);
   }
 
   private async deliverResult(
@@ -474,6 +499,150 @@ export class TenvyrWorkerRuntime<TInput, TOutput> implements TenvyrWorker {
           {
             agent: this.agentName,
             invocationId: result.invocationId,
+            runId: record.runId,
+            deliveryId: outcome.deliveryId,
+            attempts: outcome.attempts,
+            callbackHost: new URL(request.resultDelivery.callbackUrl).host,
+            ...(outcome.httpStatus === undefined
+              ? {}
+              : { httpStatus: outcome.httpStatus }),
+            reason: outcome.reason,
+          },
+          signal,
+        );
+      }
+    } finally {
+      this.callbackControllers.delete(controller);
+    }
+  }
+
+  private createRunEmitter(
+    record: RunRecord,
+    request: HttpAgentRunRequestV1,
+  ): RunEventEmitter {
+    return new RunEventEmitter({
+      invocation: request.invocation,
+      runId: record.runId,
+      enabled: this.config.events.enabled,
+      logger: this.config.logger ?? noOpLogger,
+      deliver: (event, rawBody) => {
+        this.trackCallback(this.deliverEvent(record, request, event, rawBody));
+      },
+    });
+  }
+
+  private emitAcceptedEvent(
+    emitter: RunEventEmitter,
+    record: RunRecord,
+  ): void {
+    try {
+      emitter.emit("accepted", { acceptedAt: record.acceptedAt });
+    } catch (error) {
+      safeLogger(this.config.logger ?? noOpLogger).error(
+        "Failed to emit accepted agent event",
+        {
+          agent: this.agentName,
+          invocationId: record.invocationId,
+          runId: record.runId,
+          errorName: error instanceof Error ? error.name : typeof error,
+        },
+      );
+    }
+  }
+
+  private emitTerminalEvent(
+    emitter: RunEventEmitter,
+    result: AgentResultV1,
+  ): void {
+    try {
+      if (result.status === "succeeded") {
+        emitter.emit("completed", { status: result.status });
+        return;
+      }
+      emitter.emit("failed", {
+        status: result.status,
+        ...(result.error
+          ? {
+              code: result.error.code,
+              message: result.error.message,
+              retryable: result.error.retryable,
+            }
+          : {}),
+      });
+    } catch (error) {
+      safeLogger(this.config.logger ?? noOpLogger).error(
+        "Failed to emit terminal agent event",
+        {
+          agent: this.agentName,
+          invocationId: result.invocationId,
+          errorName: error instanceof Error ? error.name : typeof error,
+        },
+      );
+    }
+  }
+
+  private async deliverEvent(
+    record: RunRecord,
+    request: HttpAgentRunRequestV1,
+    event: AgentEventV1,
+    rawBody: Buffer<ArrayBuffer>,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const signal = AbortSignal.any([
+      controller.signal,
+      this.shutdownController.signal,
+    ]);
+    this.callbackControllers.add(controller);
+    try {
+      const keyId = request.resultDelivery.authentication.keyId;
+      const outcome = await deliverSignedBody({
+        agent: this.agentName,
+        runId: record.runId,
+        invocationId: event.invocationId,
+        subject: "Agent event",
+        rawBody,
+        callbackUrl: request.resultDelivery.callbackUrl,
+        keyId,
+        secret: this.config.callbackAuthentication.keys[keyId],
+        config: {
+          ...this.config.callbackDelivery,
+          maxResponseBytes: this.config.callbackPolicy.maxResponseBytes,
+        },
+        logger: this.config.logger ?? noOpLogger,
+        signal,
+      });
+      if (!outcome.delivered) {
+        const logger = safeLogger(this.config.logger ?? noOpLogger);
+        if (outcome.reason === "worker-shutdown") {
+          logger.warn(
+            "Agent event delivery skipped during forced Worker shutdown",
+            {
+              agent: this.agentName,
+              invocationId: event.invocationId,
+              runId: record.runId,
+              eventId: event.eventId,
+              deliveryId: outcome.deliveryId,
+            },
+          );
+        } else {
+          logger.warn("Agent event delivery failed", {
+            agent: this.agentName,
+            invocationId: event.invocationId,
+            runId: record.runId,
+            eventId: event.eventId,
+            deliveryId: outcome.deliveryId,
+            attempts: outcome.attempts,
+            callbackHost: new URL(request.resultDelivery.callbackUrl).host,
+            ...(outcome.httpStatus === undefined
+              ? {}
+              : { httpStatus: outcome.httpStatus }),
+            reason: outcome.reason,
+          });
+        }
+        await this.notifyCallbackDeliveryFailed(
+          {
+            agent: this.agentName,
+            invocationId: event.invocationId,
             runId: record.runId,
             deliveryId: outcome.deliveryId,
             attempts: outcome.attempts,

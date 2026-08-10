@@ -160,6 +160,40 @@ signal. After the grace deadline, the Worker stops awaiting that handler,
 selects `cancelled`, and prevents the handler's late completion from producing
 another result.
 
+## Agent events
+
+Events are strictly opt-in. Set `events.enabled: true` and, optionally,
+`events.heartbeatIntervalMs` (default `60_000`, bounded `1000`–`3_600_000`).
+When disabled, every emission is a no-op with zero behavioral change.
+
+The Worker runtime emits lifecycle events automatically:
+
+- `accepted` at sequence `0` when the run is accepted;
+- `heartbeat` on the configured interval while the handler is executing;
+- `completed` or `failed` after the terminal `AgentResult` callback completes,
+  so event delivery can never prevent or delay the terminal result.
+
+Agent code emits operational events through the context:
+
+- `context.progress(payload)`, `context.log(messageOrPayload)`,
+  `context.artifact(metadata)` — convenience emitters;
+- `context.event(type, payload)` — restricted to `progress`, `log`, or
+  `artifact`; system-owned types (`accepted`, `heartbeat`, `completed`,
+  `failed`) are rejected.
+
+Per run, `eventId` is deterministic (`${invocationId}:${sequence}`) with a
+monotonic sequence counter, and each event body is built exactly once and
+reused across delivery retries. Payloads must be JSON objects within the
+canonical 64 KiB limit.
+
+Events are delivered through the same HMAC-signed callback machinery as
+results: identical `X-AgentWeave-*` headers, a per-delivery `deliveryId`, a
+stable prebuilt body on every retry, and the same bounded retry policy.
+Delivery failures are logged without secrets, routed to
+`onCallbackDeliveryFailed`, and never raise into the run. Callback state is
+worker-local and process-local — a restart forgets undelivered events; the
+Orchestrator's acceptance is the durable record.
+
 ## Configuration
 
 Required values:
