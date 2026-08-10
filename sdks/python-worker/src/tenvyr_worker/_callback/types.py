@@ -66,7 +66,7 @@ class CallbackDeliveryRequest:
     callback_url: str
     key_id: str
     secret: str = field(repr=False)
-    result: object = field(repr=False)
+    result: object | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

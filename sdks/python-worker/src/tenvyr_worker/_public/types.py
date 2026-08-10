@@ -22,6 +22,16 @@ class WorkerAddress:
 
 
 @runtime_checkable
+class EventEmitter(Protocol):
+    """Per-run agent event emitter surface (implementation is internal)."""
+
+    @property
+    def enabled(self) -> bool: ...
+
+    def emit(self, type: str, payload: Mapping[str, object]) -> None: ...
+
+
+@runtime_checkable
 class WorkerLogger(Protocol):
     def debug(
         self, message: str, context: Mapping[str, object] | None = None

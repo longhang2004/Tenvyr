@@ -1,4 +1,9 @@
-from .delivery import create_callback_session, deliver_callback, serialize_result
+from .delivery import (
+    create_callback_session,
+    deliver_callback,
+    deliver_signed_body,
+    serialize_result,
+)
 from .hooks import notify_callback_delivery_failed
 from .retry import classify_callback_response
 from .signer import create_callback_signature
@@ -19,6 +24,7 @@ __all__ = [
     "create_callback_session",
     "create_callback_signature",
     "deliver_callback",
+    "deliver_signed_body",
     "make_callback_delivery_failed_event",
     "notify_callback_delivery_failed",
     "serialize_result",

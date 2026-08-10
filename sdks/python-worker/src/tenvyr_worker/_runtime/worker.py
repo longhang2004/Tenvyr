@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -13,7 +15,11 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, web
 
-from .._callback.delivery import create_callback_session, deliver_callback
+from .._callback.delivery import (
+    create_callback_session,
+    deliver_callback,
+    deliver_signed_body,
+)
 from .._callback.hooks import notify_callback_delivery_failed
 from .._callback.types import (
     CallbackDeliveryRequest,
@@ -29,7 +35,11 @@ from .._http.server import (
     json_response,
     read_request_body,
 )
-from .._protocol.json_value import JsonValue
+from .._protocol.json_value import (
+    JsonCompatibilityError,
+    JsonValue,
+    to_json_value,
+)
 from .._protocol.validation import (
     ContractValidationError,
     loads_json,
@@ -39,7 +49,7 @@ from .._protocol.validation import (
 )
 from .._public.config import TenvyrWorkerConfig
 from .._public.types import WorkerAddress, WorkerLifecycleState, WorkerLogger
-from .canonical_json import request_fingerprint
+from .canonical_json import canonical_json, request_fingerprint
 from .execution import execute_agent
 from .idempotency import (
     IdempotencyCapacityError,
@@ -49,6 +59,117 @@ from .idempotency import (
 )
 from .safe_logger import NO_OP_LOGGER, safe_logger
 from .scheduler import RunScheduler
+
+MAX_EVENT_PAYLOAD_BYTES = 64 * 1024
+
+
+class RunEventEmitter:
+    """Per-invocation event machinery with a monotonic sequence counter.
+
+    ``eventId`` is deterministic (``{invocationId}:{sequence}``) and stable
+    across delivery retries. ``occurredAt`` is captured once per event and the
+    canonical body is built once here and reused by the delivery layer. When
+    disabled, all emissions are no-ops. Mirrors
+    ``packages/worker/src/events/event-emitter.ts``.
+    """
+
+    def __init__(
+        self,
+        *,
+        invocation: Mapping[str, object],
+        run_id: str,
+        enabled: bool,
+        logger: WorkerLogger,
+        deliver: Callable[[dict[str, JsonValue], bytes], None],
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        self.enabled = enabled
+        self._invocation = invocation
+        self._run_id = run_id
+        self._logger = safe_logger(logger)
+        self._deliver = deliver
+        self._now = now
+        self._sequence = 0
+        self._debug_noted = False
+
+        target = cast(Mapping[str, object], invocation["target"])
+        trace = cast(Mapping[str, object], invocation["trace"])
+        self._agent = cast(str, target["agent"])
+        self._invocation_id = cast(str, invocation["invocationId"])
+        self._execution_id = cast(str, invocation["executionId"])
+        self._step_execution_id = cast(str, invocation["stepExecutionId"])
+        self._trace_id = cast(str, trace["traceId"])
+        self._correlation_id = cast(str, trace["correlationId"])
+
+    def emit(self, type: str, payload: Mapping[str, object]) -> None:
+        """Create and deliver one event (no-op when disabled)."""
+        if not self.enabled:
+            if not self._debug_noted:
+                self._debug_noted = True
+                self._logger.debug(
+                    "Agent events are disabled; ignoring event emission",
+                    {
+                        "agent": self._agent,
+                        "invocation_id": self._invocation_id,
+                        "run_id": self._run_id,
+                        "event_type": type,
+                    },
+                )
+            return
+        validated = validate_event_payload(payload)
+        sequence = self._sequence
+        self._sequence += 1
+        event: dict[str, JsonValue] = {
+            "schemaVersion": "1",
+            "eventId": f"{self._invocation_id}:{sequence}",
+            "invocationId": self._invocation_id,
+            "executionId": self._execution_id,
+            "stepExecutionId": self._step_execution_id,
+            "sequence": sequence,
+            "type": type,
+            "occurredAt": _timestamp(self._now()),
+            "payload": validated,
+            "trace": {
+                "traceId": self._trace_id,
+                "correlationId": self._correlation_id,
+            },
+            "metadata": {"runId": self._run_id},
+        }
+        raw_body = json.dumps(
+            event,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        self._deliver(event, raw_body)
+
+
+def validate_event_payload(payload: object) -> dict[str, JsonValue]:
+    """Validate and normalize an event payload to finite canonical JSON.
+
+    Raises ``TypeError`` for non-object or non-JSON payloads and ``ValueError``
+    when the canonical serialized payload exceeds the 64 KiB limit.
+    """
+    if (
+        payload is None
+        or isinstance(payload, (str, bytes, list))
+        or not isinstance(payload, dict)
+    ):
+        raise TypeError("Agent event payload must be a JSON object")
+    try:
+        converted = to_json_value(payload)
+    except JsonCompatibilityError as error:
+        raise TypeError(
+            f"Agent event payload is not valid JSON: {error.message}"
+        ) from None
+    if not isinstance(converted, dict):
+        raise TypeError("Agent event payload must be a JSON object")
+    size = len(canonical_json(converted).encode("utf-8"))
+    if size > MAX_EVENT_PAYLOAD_BYTES:
+        raise ValueError(
+            f"Agent event payload exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte limit"
+        )
+    return converted
 
 
 class WorkerRuntime:
@@ -324,7 +445,9 @@ class WorkerRuntime:
                     "Worker idempotency capacity is full",
                 )
             self._store.update_state(record, RunState.QUEUED, now=now)
-            scheduled = _ScheduledSubmission(self, record, run_request)
+            emitter = self._create_run_emitter(record, run_request)
+            self._emit_accepted_event(emitter, record)
+            scheduled = _ScheduledSubmission(self, record, run_request, emitter)
             try:
                 enqueued = self._scheduler.enqueue(scheduled)
             except Exception:
@@ -339,26 +462,58 @@ class WorkerRuntime:
         return json_response(202, accepted)
 
     async def _execute_submission(
-        self, record: RunRecord, request: dict[str, JsonValue]
+        self,
+        record: RunRecord,
+        request: dict[str, JsonValue],
+        emitter: RunEventEmitter,
     ) -> None:
         self._store.update_state(record, RunState.RUNNING, now=time.time())
         invocation = cast(dict[str, JsonValue], request["invocation"])
-        result = await execute_agent(
-            agent=self._config.agent,
-            invocation=invocation,
-            run_id=record.run_id,
-            timeout_seconds=self._config.execution_timeout_seconds,
-            logger=self._logger,
-            shutdown_event=self._force_stop,
-        )
-        self._track_callback(self._deliver_result(record, request, result))
+        heartbeat_task: asyncio.Task[None] | None = None
+        if emitter.enabled:
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(emitter),
+                name=f"tenvyr-worker-heartbeat-{record.run_id}",
+            )
+        try:
+            result = await execute_agent(
+                agent=self._config.agent,
+                invocation=invocation,
+                run_id=record.run_id,
+                timeout_seconds=self._config.execution_timeout_seconds,
+                logger=self._logger,
+                shutdown_event=self._force_stop,
+                event_emitter=emitter,
+            )
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
+        # The terminal event is chained AFTER the AgentResult callback completes
+        # so that event delivery can never prevent or delay the terminal
+        # callback.
+        self._track_callback(self._complete_run(record, request, result, emitter))
+
+    async def _complete_run(
+        self,
+        record: RunRecord,
+        request: dict[str, JsonValue],
+        result: dict[str, JsonValue],
+        emitter: RunEventEmitter,
+    ) -> None:
+        await self._deliver_result(record, request, result)
+        self._emit_terminal_event(emitter, result)
 
     async def _cancel_queued(
-        self, record: RunRecord, request: dict[str, JsonValue]
+        self,
+        record: RunRecord,
+        request: dict[str, JsonValue],
+        emitter: RunEventEmitter,
     ) -> None:
         invocation = cast(dict[str, JsonValue], request["invocation"])
         self._track_callback(
-            self._deliver_result(record, request, _shutdown_result(invocation))
+            self._complete_run(record, request, _shutdown_result(invocation), emitter)
         )
 
     def _track_callback(self, work: Any) -> None:
@@ -448,6 +603,190 @@ class WorkerRuntime:
                 stop_signal=self._force_stop,
             )
 
+    def _create_run_emitter(
+        self, record: RunRecord, request: dict[str, JsonValue]
+    ) -> RunEventEmitter:
+        invocation = cast(dict[str, JsonValue], request["invocation"])
+        loop = asyncio.get_running_loop()
+
+        def deliver_sync(event: dict[str, JsonValue], raw_body: bytes) -> None:
+            try:
+                loop.call_soon_threadsafe(
+                    self._schedule_event_delivery, record, request, event, raw_body
+                )
+            except Exception:
+                self._logger.error(
+                    "Failed to schedule agent event delivery",
+                    {
+                        "agent": self.agent_name,
+                        "invocation_id": event["invocationId"],
+                        "run_id": record.run_id,
+                        "event_id": event["eventId"],
+                    },
+                )
+
+        return RunEventEmitter(
+            invocation=invocation,
+            run_id=record.run_id,
+            enabled=self._config.events_enabled,
+            logger=self._logger,
+            deliver=deliver_sync,
+        )
+
+    def _schedule_event_delivery(
+        self,
+        record: RunRecord,
+        request: dict[str, JsonValue],
+        event: dict[str, JsonValue],
+        raw_body: bytes,
+    ) -> None:
+        try:
+            self._track_callback(self._deliver_event(record, request, event, raw_body))
+        except Exception:
+            self._logger.error(
+                "Failed to schedule agent event delivery",
+                {
+                    "agent": self.agent_name,
+                    "invocation_id": event["invocationId"],
+                    "run_id": record.run_id,
+                    "event_id": event["eventId"],
+                },
+            )
+
+    def _emit_accepted_event(self, emitter: RunEventEmitter, record: RunRecord) -> None:
+        try:
+            emitter.emit("accepted", {"acceptedAt": record.accepted_at})
+        except Exception:
+            self._logger.error(
+                "Failed to emit accepted agent event",
+                {
+                    "agent": self.agent_name,
+                    "invocation_id": record.invocation_id,
+                    "run_id": record.run_id,
+                },
+            )
+
+    def _emit_terminal_event(
+        self, emitter: RunEventEmitter, result: dict[str, JsonValue]
+    ) -> None:
+        try:
+            status = cast(str, result["status"])
+            if status == "succeeded":
+                emitter.emit("completed", {"status": status})
+                return
+            payload: dict[str, object] = {"status": status}
+            error = cast(dict[str, JsonValue] | None, result.get("error"))
+            if error is not None:
+                payload["code"] = error["code"]
+                payload["message"] = error["message"]
+                payload["retryable"] = error["retryable"]
+            emitter.emit("failed", payload)
+        except Exception:
+            self._logger.error(
+                "Failed to emit terminal agent event",
+                {
+                    "agent": self.agent_name,
+                    "invocation_id": result["invocationId"],
+                },
+            )
+
+    async def _heartbeat_loop(self, emitter: RunEventEmitter) -> None:
+        while True:
+            await asyncio.sleep(self._config.event_heartbeat_interval_seconds)
+            try:
+                emitter.emit("heartbeat", {})
+            except Exception:
+                self._logger.warning(
+                    "Failed to emit heartbeat agent event",
+                    {"agent": self.agent_name},
+                )
+
+    async def _deliver_event(
+        self,
+        record: RunRecord,
+        request: dict[str, JsonValue],
+        event: dict[str, JsonValue],
+        raw_body: bytes,
+    ) -> None:
+        session = self._session
+        if session is None:
+            return
+        delivery = cast(dict[str, JsonValue], request["resultDelivery"])
+        authentication = cast(dict[str, JsonValue], delivery["authentication"])
+        key_id = cast(str, authentication["keyId"])
+        callback_url = cast(str, delivery["callbackUrl"])
+        event_id = cast(str, event["eventId"])
+        invocation_id = cast(str, event["invocationId"])
+        try:
+            outcome = await deliver_signed_body(
+                session,
+                CallbackDeliveryRequest(
+                    agent=self.agent_name,
+                    invocation_id=invocation_id,
+                    run_id=record.run_id,
+                    callback_url=callback_url,
+                    key_id=key_id,
+                    secret=self._config.callback_keys[key_id],
+                ),
+                cast(CallbackDeliverySettings, self._config),
+                subject="Agent event",
+                raw_body=raw_body,
+                logger=self._logger,
+                stop_signal=self._force_stop,
+            )
+        except Exception:
+            self._logger.error(
+                "Agent event delivery failed unexpectedly",
+                {
+                    "agent": self.agent_name,
+                    "invocation_id": invocation_id,
+                    "run_id": record.run_id,
+                    "event_id": event_id,
+                },
+            )
+            await notify_callback_delivery_failed(
+                self._config.on_callback_delivery_failed,
+                make_callback_delivery_failed_event(
+                    agent=self.agent_name,
+                    invocation_id=invocation_id,
+                    run_id=record.run_id,
+                    delivery_id="unavailable",
+                    attempts=0,
+                    callback_host=urlsplit(callback_url).netloc,
+                    reason="unexpected-delivery-error",
+                ),
+                logger=self._logger,
+                stop_signal=self._force_stop,
+            )
+            return
+        if not outcome.delivered:
+            if outcome.reason == "worker-shutdown":
+                self._logger.warning(
+                    "Agent event delivery skipped during forced Worker shutdown",
+                    {
+                        "agent": self.agent_name,
+                        "invocation_id": invocation_id,
+                        "run_id": record.run_id,
+                        "event_id": event_id,
+                        "delivery_id": outcome.delivery_id,
+                    },
+                )
+            await notify_callback_delivery_failed(
+                self._config.on_callback_delivery_failed,
+                make_callback_delivery_failed_event(
+                    agent=self.agent_name,
+                    invocation_id=invocation_id,
+                    run_id=record.run_id,
+                    delivery_id=outcome.delivery_id,
+                    attempts=outcome.attempts,
+                    callback_host=urlsplit(callback_url).netloc,
+                    reason=outcome.reason or "delivery-failed",
+                    http_status=outcome.http_status,
+                ),
+                logger=self._logger,
+                stop_signal=self._force_stop,
+            )
+
     async def _shutdown(self, grace_seconds: float) -> None:
         async with self._submission_lock:
             self._accepting = False
@@ -502,16 +841,20 @@ class _ScheduledSubmission:
         worker: WorkerRuntime,
         record: RunRecord,
         request: dict[str, JsonValue],
+        emitter: RunEventEmitter,
     ) -> None:
         self._worker = worker
         self._record = record
         self._request = request
+        self._emitter = emitter
 
     async def run(self) -> None:
-        await self._worker._execute_submission(self._record, self._request)
+        await self._worker._execute_submission(
+            self._record, self._request, self._emitter
+        )
 
     async def cancel(self) -> None:
-        await self._worker._cancel_queued(self._record, self._request)
+        await self._worker._cancel_queued(self._record, self._request, self._emitter)
 
 
 def _acceptance(record: RunRecord) -> dict[str, JsonValue]:

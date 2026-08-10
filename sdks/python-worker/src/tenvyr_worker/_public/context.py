@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Generic, NoReturn, TypeVar
 
 from .errors import AgentExecutionError, AgentFailureOptions
-from .types import WorkerLogger
+from .types import EventEmitter, WorkerLogger
 
 OutputT = TypeVar("OutputT")
 
@@ -35,6 +35,7 @@ class AgentExecutionSuccess(Generic[OutputT]):
 class AgentExecutionContext:
     __slots__ = (
         "_async_cancelled",
+        "_emitter",
         "_invocation",
         "_logger",
         "_run_id",
@@ -47,12 +48,14 @@ class AgentExecutionContext:
         invocation: Mapping[str, object],
         run_id: str,
         logger: WorkerLogger,
+        _emitter: EventEmitter | None = None,
         _thread_cancelled: threading.Event | None = None,
         _async_cancelled: asyncio.Event | None = None,
     ) -> None:
         self._invocation = MappingProxyType(dict(invocation))
         self._run_id = run_id
         self._logger = logger
+        self._emitter = _emitter
         self._thread_cancelled = _thread_cancelled or threading.Event()
         self._async_cancelled = _async_cancelled or asyncio.Event()
 
@@ -112,6 +115,39 @@ class AgentExecutionContext:
                 details=details,
             )
         )
+
+    def progress(self, payload: Mapping[str, object]) -> None:
+        """Emit a progress event for this run (no-op when events are disabled)."""
+        if self._emitter is not None:
+            self._emitter.emit("progress", payload)
+
+    def log(self, message_or_payload: str | Mapping[str, object]) -> None:
+        """Emit a log event; a string becomes ``{"message": ...}``."""
+        payload: Mapping[str, object] = (
+            {"message": message_or_payload}
+            if isinstance(message_or_payload, str)
+            else message_or_payload
+        )
+        if self._emitter is not None:
+            self._emitter.emit("log", payload)
+
+    def artifact(self, metadata: Mapping[str, object]) -> None:
+        """Emit an artifact event carrying the artifact descriptor."""
+        if self._emitter is not None:
+            self._emitter.emit("artifact", metadata)
+
+    def event(self, type: str, payload: Mapping[str, object]) -> None:
+        """Emit an event restricted to ``progress``, ``log``, or ``artifact``.
+
+        System-owned types (accepted, heartbeat, completed, failed) are
+        rejected. No-op when events are disabled.
+        """
+        if type not in ("progress", "log", "artifact"):
+            raise ValueError(
+                f'Agent events of type "{type}" are reserved for the Worker runtime'
+            )
+        if self._emitter is not None:
+            self._emitter.emit(type, payload)
 
     def _cancel(self) -> None:
         self._thread_cancelled.set()

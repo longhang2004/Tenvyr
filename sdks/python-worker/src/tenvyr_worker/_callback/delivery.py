@@ -112,7 +112,92 @@ async def deliver_callback(
         )
         _log_outcome(logger, request, outcome)
         return outcome
+    return await _deliver_raw_body(
+        session,
+        request,
+        settings,
+        subject="Agent callback",
+        raw_body=raw_body,
+        logger=logger,
+        stop_signal=stop_signal,
+        delivery_id_factory=delivery_id_factory,
+        now=now,
+        random_value=random_value,
+        sleep=sleep,
+    )
 
+
+async def deliver_signed_body(
+    session: ClientSession,
+    request: CallbackDeliveryRequest,
+    settings: CallbackDeliverySettings,
+    *,
+    subject: str,
+    raw_body: bytes,
+    logger: CallbackLogger | None = None,
+    stop_signal: StopSignal | None = None,
+    delivery_id_factory: Callable[[], str] = lambda: str(uuid.uuid4()),
+    now: Callable[[], float] = time.time,
+    random_value: Callable[[], float] = random.random,
+    sleep: _Sleep = asyncio.sleep,
+    failure_level: str = "warning",
+) -> CallbackDeliveryOutcome:
+    """Deliver an already-serialized body with the same HMAC signing, retry,
+    backoff, and failure classification as the AgentResult callback.
+
+    Each call is one delivery operation with its own deliveryId; the
+    caller-provided ``raw_body`` is reused verbatim across retry attempts.
+    """
+    delivery_id = delivery_id_factory()
+    try:
+        validate_callback_url(
+            request.callback_url,
+            settings._normalized_callback_origins,
+            allow_insecure_http=settings.allow_insecure_http,
+        )
+    except (TypeError, ValueError):
+        outcome = CallbackDeliveryOutcome(
+            delivered=False,
+            delivery_id=delivery_id,
+            attempts=0,
+            reason="callback-policy-rejected",
+        )
+        _log_outcome(
+            logger, request, outcome, subject=subject, failure_level=failure_level
+        )
+        return outcome
+    return await _deliver_raw_body(
+        session,
+        request,
+        settings,
+        subject=subject,
+        raw_body=raw_body,
+        logger=logger,
+        stop_signal=stop_signal,
+        delivery_id_factory=delivery_id_factory,
+        now=now,
+        random_value=random_value,
+        sleep=sleep,
+        failure_level=failure_level,
+    )
+
+
+async def _deliver_raw_body(
+    session: ClientSession,
+    request: CallbackDeliveryRequest,
+    settings: CallbackDeliverySettings,
+    *,
+    subject: str,
+    raw_body: bytes,
+    logger: CallbackLogger | None = None,
+    stop_signal: StopSignal | None = None,
+    delivery_id_factory: Callable[[], str] = lambda: str(uuid.uuid4()),
+    now: Callable[[], float] = time.time,
+    random_value: Callable[[], float] = random.random,
+    sleep: _Sleep = asyncio.sleep,
+    failure_level: str = "error",
+) -> CallbackDeliveryOutcome:
+    delivery_id = delivery_id_factory()
     last_status: int | None = None
     last_reason = "delivery-failed"
     for attempt in range(1, settings.callback_max_attempts + 1):
@@ -157,7 +242,9 @@ async def deliver_callback(
                 reason="response-too-large",
                 http_status=last_status,
             )
-            _log_outcome(logger, request, outcome)
+            _log_outcome(
+                logger, request, outcome, subject=subject, failure_level=failure_level
+            )
             return outcome
         except TimeoutError:
             last_reason = "request-timeout"
@@ -174,7 +261,13 @@ async def deliver_callback(
                     attempts=attempt,
                     http_status=status,
                 )
-                _log_outcome(logger, request, outcome)
+                _log_outcome(
+                    logger,
+                    request,
+                    outcome,
+                    subject=subject,
+                    failure_level=failure_level,
+                )
                 return outcome
             last_reason = (
                 "retryable-http-status"
@@ -189,7 +282,13 @@ async def deliver_callback(
                     reason=last_reason,
                     http_status=status,
                 )
-                _log_outcome(logger, request, outcome)
+                _log_outcome(
+                    logger,
+                    request,
+                    outcome,
+                    subject=subject,
+                    failure_level=failure_level,
+                )
                 return outcome
 
         if attempt == settings.callback_max_attempts:
@@ -200,7 +299,9 @@ async def deliver_callback(
                 reason=last_reason,
                 http_status=last_status,
             )
-            _log_outcome(logger, request, outcome)
+            _log_outcome(
+                logger, request, outcome, subject=subject, failure_level=failure_level
+            )
             return outcome
 
         delay = retry_after_delay_seconds(
@@ -230,7 +331,9 @@ async def deliver_callback(
                 reason="backoff-failed",
                 http_status=last_status,
             )
-            _log_outcome(logger, request, outcome)
+            _log_outcome(
+                logger, request, outcome, subject=subject, failure_level=failure_level
+            )
             return outcome
 
     raise AssertionError("callback attempt loop did not return")
@@ -321,6 +424,9 @@ def _log_outcome(
     logger: CallbackLogger | None,
     request: CallbackDeliveryRequest,
     outcome: CallbackDeliveryOutcome,
+    *,
+    subject: str = "Agent callback",
+    failure_level: str = "error",
 ) -> None:
     if logger is None:
         return
@@ -335,12 +441,12 @@ def _log_outcome(
     }
     if outcome.http_status is not None:
         context["http_status"] = outcome.http_status
-    method_name = "info" if outcome.delivered else "error"
+    method_name = "info" if outcome.delivered else failure_level
     try:
         returned = getattr(logger, method_name)(
-            "Agent callback delivered"
+            f"{subject} delivered"
             if outcome.delivered
-            else "Agent callback delivery failed",
+            else f"{subject} delivery failed",
             context,
         )
         if inspect.iscoroutine(returned):

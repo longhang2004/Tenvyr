@@ -42,6 +42,9 @@ class TenvyrWorkerConfig(Generic[InputT, OutputT]):
     callback_jitter_ratio: float = 0.2
     callback_request_timeout_seconds: float = 10
 
+    events_enabled: bool = False
+    event_heartbeat_interval_seconds: float = 60.0
+
     max_request_bytes: int = 1024 * 1024
     shutdown_grace_seconds: float = 30
 
@@ -104,6 +107,14 @@ class TenvyrWorkerConfig(Generic[InputT, OutputT]):
         _positive_duration(
             self.callback_request_timeout_seconds, "callback request timeout"
         )
+        if type(self.events_enabled) is not bool:
+            raise _invalid("events_enabled must be boolean")
+        _bounded_duration(
+            self.event_heartbeat_interval_seconds,
+            "event heartbeat interval",
+            minimum=1.0,
+            maximum=3600.0,
+        )
         _positive_int(self.max_request_bytes, "request-size limit")
         _positive_duration(self.shutdown_grace_seconds, "shutdown grace period")
         if self.callback_initial_delay_seconds > self.callback_max_delay_seconds:
@@ -150,6 +161,20 @@ def _ratio(value: object, field_name: str) -> None:
     number = cast(int | float, value)
     if not math.isfinite(number) or number < 0 or number > 1:
         raise _invalid(f"{field_name} must be between 0 and 1")
+
+
+def _bounded_duration(
+    value: object, field_name: str, *, minimum: float, maximum: float
+) -> None:
+    if type(value) not in (int, float):
+        raise _invalid(
+            f"{field_name} must be between {minimum:g} and {maximum:g} seconds"
+        )
+    number = cast(int | float, value)
+    if not math.isfinite(number) or number < minimum or number > maximum:
+        raise _invalid(
+            f"{field_name} must be between {minimum:g} and {maximum:g} seconds"
+        )
 
 
 def _invalid(message: str) -> ValueError:

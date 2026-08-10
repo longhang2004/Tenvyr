@@ -14,7 +14,7 @@ from .._protocol.validation import ContractValidationError, parse_agent_result
 from .._public.agent import AgentDefinition, parse_value
 from .._public.context import AgentExecutionContext, AgentExecutionSuccess
 from .._public.errors import AgentExecutionError, AgentFailureOptions
-from .._public.types import WorkerLogger
+from .._public.types import EventEmitter, WorkerLogger
 from .safe_logger import NO_OP_LOGGER, bound_logger
 
 _HandlerResult = object
@@ -28,6 +28,7 @@ async def execute_agent(
     timeout_seconds: float,
     logger: WorkerLogger = NO_OP_LOGGER,
     shutdown_event: asyncio.Event | None = None,
+    event_emitter: EventEmitter | None = None,
     now: Callable[[], float] = time.time,
 ) -> dict[str, JsonValue]:
     """Execute one validated invocation and return a validated AgentResultV1."""
@@ -67,6 +68,7 @@ async def execute_agent(
         invocation=invocation,
         run_id=run_id,
         logger=scoped_logger,
+        _emitter=event_emitter,
     )
     is_async_handler = _is_async_callable(agent.execute)
     handler_task = asyncio.create_task(
