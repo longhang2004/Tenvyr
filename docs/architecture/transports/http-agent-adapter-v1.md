@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-07-28
+last_verified: 2026-08-10
 sources:
   - services/orchestrator/src/agent-adapters/http-agent.adapter.ts
   - services/orchestrator/src/agent-adapters/http-callback-auth.ts
@@ -56,10 +56,17 @@ The callback route is:
 POST /internal/agent-callbacks/http/:agent
 ```
 
-Its body is exactly one JSON serialization of `AgentResultV1`. A processed or
+Its body is exactly one JSON serialization of `AgentResultV1` or
+`AgentEventV1` — both travel over the same HMAC scheme. A processed or
 duplicate delivery returns `204`. Authentication failures return `401`;
 invalid JSON/contracts return `400`; unavailable handling returns `503`; and a
-result-handler failure returns `500`.
+handler failure returns `500`.
+
+After authentication and signature verification, the adapter discriminates
+the shape explicitly: a canonical `AgentResultV1` carries `status` +
+`completedAt`, while a canonical `AgentEventV1` carries `eventId` +
+`sequence` + `type`. A payload that matches both shapes is rejected as
+`CALLBACK_AMBIGUOUS` (non-retryable, `400`) rather than guessed at.
 
 ## Authentication
 
@@ -101,12 +108,16 @@ submissions with that key; the adapter adds no retry loop.
 
 Callbacks are deduplicated by `agent + keyId + deliveryId` in a bounded
 in-memory TTL cache. In-flight duplicates and completed duplicates return
-`204` without calling the result handler twice. Handler failure removes the
-reservation so the remote agent can retry. `AgentResultService` and
-`EngineService` remain the semantic duplicate/stale-result guards.
+`204` without calling the application handler twice. Handler failure removes the
+reservation so the remote agent can retry. The cache is an optimization only:
+`AgentResultService`/`EngineService` and the durable `agent_events` identity
+constraints remain the authoritative duplicate/conflict guards across
+restarts and replicas.
 
 The replay cache is not durable. Restarting the Orchestrator forgets delivery
-IDs.
+IDs; PostgreSQL deduplication (the `ResultInbox` for results, the unique
+`(stepAttemptId, eventId)`/`(stepAttemptId, sequence)` event identity for
+events) makes the replay of an already-recorded delivery harmless.
 
 ## Configuration
 
@@ -158,7 +169,8 @@ tokens, secrets, or transport kind.
 ## Lifecycle
 
 `AgentAdapterLifecycle` starts one `AgentAdapterRouter`. The router registers
-the same result handler with `KafkaAgentAdapter` and `HttpAgentAdapter`, and it
+the same application handler seam — result and event — with
+`KafkaAgentAdapter` and `HttpAgentAdapter`, and it
 cleans up Kafka if HTTP startup fails. On shutdown it best-effort stops both.
 
 `HttpAgentAdapter.start()` installs the handler and replay cleanup timer.
@@ -169,8 +181,11 @@ Neither concrete adapter nor the router owns independent Nest lifecycle hooks.
 
 Connection failures, timeouts, HTTP `408`, HTTP `429`, and HTTP `5xx` are
 retryable. HTTP `400`, `401`, `403`, `404`, malformed acceptance bodies,
-invocation mismatch, oversized responses, and invalid local configuration are
-non-retryable. The adapter performs no automatic retry or Kafka fallback.
+invocation mismatch, oversized responses, invalid local configuration, and
+`CALLBACK_AMBIGUOUS` (a body matching both result and event shapes) are
+non-retryable. Handler failures are retryable (`RESULT_HANDLER_FAILED`,
+`EVENT_HANDLER_FAILED`) so the remote agent's retry can succeed. The adapter
+performs no automatic retry or Kafka fallback.
 
 Contract failures remain `ContractValidationError`. Transport, protocol,
 lifecycle, and callback failures use safe `AgentAdapterError` codes while
@@ -198,6 +213,7 @@ sequenceDiagram
     participant Remote as Remote HTTP Agent
     participant Callback as Callback Controller
     participant Result as AgentResultService
+    participant Events as AgentEventService
 
     Engine->>Router: invoke(AgentInvocationV1)
     Router->>HTTP: invoke(invocation)
@@ -205,16 +221,22 @@ sequenceDiagram
     Remote-->>HTTP: 202 HttpAgentRunAcceptedV1
     HTTP-->>Engine: AgentDispatchReceipt
 
-    Remote->>Callback: signed AgentResultV1
-    Callback->>HTTP: verify and deliver
-    HTTP->>Result: AgentResultMessage
-    Result-->>Callback: processed
+    Remote->>Callback: signed AgentResultV1 or AgentEventV1
+    Callback->>HTTP: verify signature and discriminate shape
+    alt result shape
+        HTTP->>Result: AgentResultMessage
+        Result-->>Callback: processed
+    else event shape
+        HTTP->>Events: AgentEventMessage
+        Events-->>Callback: processed
+    end
     Callback-->>Remote: 204 No Content
 ```
 
 ## Known limitations
 
-- No result polling, status lookup, cancellation, or event streaming.
+- No result polling, status lookup, cancellation, or event streaming; events
+  arrive as signed callbacks exactly like results.
 - No persistent callback inbox or durable replay cache.
 - Remote agents own submission idempotency and callback retry policy.
 - No automatic fallback, health routing, discovery, or load balancing.

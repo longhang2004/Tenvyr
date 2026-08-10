@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-07-28
+last_verified: 2026-08-10
 sources:
   - .env.example
   - docker-compose.yml
@@ -12,6 +12,7 @@ sources:
   - services/gateway/src/app.controller.ts
   - services/orchestrator/src/agent-adapters/agent-transport-config.service.ts
   - services/orchestrator/src/database/database.provider.ts
+  - services/orchestrator/src/database/data-source.ts
   - services/orchestrator/src/services/kafka.service.ts
   - services/agent-runner/src/main/resources/application.yml
   - services/agent-runner/src/main/java/com/agentweave/runner/service/LlmService.java
@@ -26,17 +27,19 @@ Values below are variable names and source defaults, never production secret val
 
 ## Orchestrator
 
-| Variable                             | Requirement and default                                                                            |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `ORCHESTRATOR_PORT`                  | Optional; defaults to `3001`. The service does not read generic `PORT`.                            |
-| `POSTGRES_HOST`, `POSTGRES_PORT`     | Optional; default `localhost`, `5432`.                                                             |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD` | Optional; both default to `postgres` for local development. Supply secrets outside source control. |
-| `POSTGRES_DB`                        | Optional; legacy compatibility default `agentweave`.                                               |
-| `KAFKA_BROKERS`                      | Optional comma-separated brokers; defaults to `localhost:9092`.                                    |
-| `KAFKA_CLIENT_ID`                    | Optional; legacy compatibility default `agentweave-orchestrator`.                                  |
-| `GATEWAY_URL`                        | Optional; defaults to `http://localhost:3000`.                                                     |
-| `ORCHESTRATOR_AGENT_NAMES`           | Optional; defaults to `code-reviewer,observability`.                                               |
-| `ORCHESTRATOR_RESULT_TOPICS`         | Optional comma-separated additional result topics; empty by default.                               |
+| Variable                             | Requirement and default                                                                                     |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `ORCHESTRATOR_PORT`                  | Optional; defaults to `3001`. The service does not read generic `PORT`.                                     |
+| `POSTGRES_HOST`, `POSTGRES_PORT`     | Optional; default `localhost`, `5432`.                                                                      |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD` | Optional; both default to `postgres` for local development. Supply secrets outside source control.          |
+| `POSTGRES_DB`                        | Optional; uses the persistent compatibility default recorded in `.env.example`.                             |
+| `TENVYR_DB_MIGRATIONS`               | Optional; migrations run by default. Exact `false` disables startup migration execution.                    |
+| `TENVYR_DB_SYNCHRONIZE`              | Disposable development only; exact `true` works only with `NODE_ENV=development`. Always off in production. |
+| `KAFKA_BROKERS`                      | Optional comma-separated brokers; defaults to `localhost:9092`.                                             |
+| `KAFKA_CLIENT_ID`                    | Optional; legacy compatibility default `agentweave-orchestrator`.                                           |
+| `GATEWAY_URL`                        | Optional; defaults to `http://localhost:3000`.                                                              |
+| `ORCHESTRATOR_AGENT_NAMES`           | Optional; defaults to `code-reviewer,observability`.                                                        |
+| `ORCHESTRATOR_RESULT_TOPICS`         | Optional comma-separated additional result topics; empty by default.                                        |
 
 HTTP agent transport is disabled when `AGENT_TRANSPORT_CONFIG` is absent or blank. When present, it must be a JSON object keyed by exact agent name. Each entry selects `kafka` or `http`; HTTP entries contain the submit URL, time/size limits, and names of environment variables holding bearer/callback secrets.
 

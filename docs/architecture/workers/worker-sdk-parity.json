@@ -121,6 +121,14 @@
       "shared_test_or_fixture": "five canonical schemas and package allowlist verifiers",
       "intentional_difference": "Python uses wheel, sdist, py.typed, and importlib.resources.",
       "reason": "The Python verifier passed wheel/sdist allowlists, external-venv install, example smoke, and the dedicated cross-language loopback."
+    },
+    {
+      "feature": "Agent events (Milestone 1)",
+      "typescript_status": "implemented",
+      "python_status": "implemented",
+      "shared_test_or_fixture": "packages/worker/test/events.spec.ts; sdks/python-worker/tests/test_events.py",
+      "intentional_difference": "heartbeatIntervalMs (ms) vs event_heartbeat_interval_seconds (seconds); config spelling is snake_case in Python",
+      "reason": "Per-invocation monotonic sequence, deterministic eventId invocationId:sequence, opt-in events.enabled, lifecycle accepted/heartbeat/completed/failed after the result callback, restricted public progress/log/artifact API, HMAC delivery with bounded retries, event failure isolated from the terminal result"
     }
   ],
   "sharedConformanceCaseCount": 73,

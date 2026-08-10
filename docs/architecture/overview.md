@@ -4,12 +4,14 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-07-28
+last_verified: 2026-08-10
 sources:
   - services/gateway/src/app.controller.ts
   - services/gateway/src/socket.gateway.ts
   - services/orchestrator/src/services/engine.service.ts
   - services/orchestrator/src/services/agent-result.service.ts
+  - services/orchestrator/src/services/agent-event.service.ts
+  - services/orchestrator/src/services/supervision.service.ts
   - services/orchestrator/src/agent-adapters/agent-adapter.router.ts
   - frontend/src/app/dashboard/page.tsx
   - services/orchestrator/src/services/engine.service.spec.ts
@@ -50,6 +52,22 @@ asynchronously and posts one signed `AgentResultV1` callback. Both transports
 converge at `AgentResultService`; transport metadata does not drive business
 state.
 
+## Operational events and supervision
+
+Workers can also emit `AgentEventV1` operational events (`accepted`,
+`progress`, `log`, `heartbeat`, `artifact`, `completed`, `failed`) over the
+same signed callback channel or Kafka event topics. The Orchestrator stores
+them as durable evidence per attempt, projects server-received liveness fields
+(`acceptedAt`, last-event/heartbeat/progress timestamps), and exposes them
+through `GET /executions/:id/events`. Deterministic, opt-in supervision
+(`ORCHESTRATOR_SUPERVISION_CONFIG`) can terminalize attempts whose agent never
+accepted or stopped heartbeating, using the persisted timestamps plus
+configured durations. The authority split is unchanged: `AgentResult` remains
+the only terminal authority; events are evidence that can never terminalize an
+attempt by themselves. See the
+[control plane](./control-plane.md#agentevents-and-supervision) for the full
+semantics.
+
 ## Gateway and frontend
 
 The Gateway exposes health, pipeline, execution, and internal execution-update
@@ -78,7 +96,9 @@ capabilities such as traces, artifact lineage, or policy controls.
 ## Current limitations
 
 There is no durable Worker queue, callback outbox, or Worker idempotency store.
-The HTTP callback replay cache is also in memory. `AgentEventV1` is defined but
-no event stream, event store, or replay system is implemented. OpenTelemetry,
+The HTTP callback replay cache is also in memory. Worker-local event delivery
+is likewise process-local; only Orchestrator-accepted events are durable
+PostgreSQL evidence, and heartbeat supervision applies only to explicitly
+configured agents. OpenTelemetry,
 W3C propagation, artifact lineage, a policy engine, dynamic agent discovery,
 and framework-specific integrations remain outside the current architecture.

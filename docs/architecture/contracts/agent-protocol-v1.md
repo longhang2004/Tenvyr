@@ -3,7 +3,7 @@ title: Agent Protocol v1
 status: current
 audience:
   - developer
-last_verified: 2026-07-28
+last_verified: 2026-08-10
 sources:
   - contracts/schemas
   - packages/contracts/src/types.ts
@@ -12,6 +12,9 @@ sources:
   - packages/contracts/src/legacy.ts
   - packages/contracts/test/validation.spec.ts
   - packages/contracts/test/json-numbers.spec.ts
+  - services/orchestrator/src/services/agent-event.service.ts
+  - services/orchestrator/src/entities/agent-event.entity.ts
+  - packages/worker/src/events/event-emitter.ts
 ---
 
 # Agent Protocol v1
@@ -49,8 +52,74 @@ retired gradually.
    persisted step, rejects stale invocation IDs, then maps `succeeded` to `COMPLETED` and all
    other terminal result statuses to `FAILED`.
 
-`AgentEventV1` is defined and tested for future streaming and supervision. No ordering store,
-event sourcing, replay, or streaming migration is part of v1.
+`AgentEventV1` is the operational-event protocol message: workers emit it as
+durable evidence of activity during a run, and the Orchestrator stores and
+supervises it. No ordering store, event sourcing, replay, or streaming
+migration is part of v1.
+
+## AgentEventV1: operational events
+
+### Canonical shape
+
+`AgentEventV1` shares the correlation fields of the invocation/result pair and
+adds event identity, sequence, type, and a JSON-object payload:
+
+```json
+{
+  "schemaVersion": "1",
+  "eventId": "fce595ea-57de-4450-9e15-7170a3a66e5d:1:2",
+  "invocationId": "fce595ea-57de-4450-9e15-7170a3a66e5d:1",
+  "executionId": "066595ff-4d5e-40e2-87b1-a5ea252f6543",
+  "stepExecutionId": "fce595ea-57de-4450-9e15-7170a3a66e5d",
+  "sequence": 2,
+  "type": "progress",
+  "occurredAt": "2026-07-26T00:00:05.000Z",
+  "payload": { "percent": 60 },
+  "trace": {
+    "traceId": "7f3c9a2e",
+    "correlationId": "9b1d4f8c"
+  },
+  "metadata": { "runId": "run-42" }
+}
+```
+
+Types are `accepted`, `progress`, `log`, `heartbeat`, `artifact`, `completed`,
+and `failed`. `payload` is a JSON object; the canonical serialized event body
+must not exceed 64 KiB, enforced on the Worker before emission and on the
+Orchestrator before persistence.
+
+### Sequence semantics
+
+- `sequence` is the worker-produced logical order within one invocation,
+  monotonic from 0.
+- `eventId` is deterministic and stable across delivery retries:
+  `${invocationId}:${sequence}`.
+- Events may arrive out of order, with gaps, or after the terminal
+  `AgentResult`. The Orchestrator never reorders, renumbers, or fills gaps.
+- Duplicate deliveries are idempotent: `(stepAttemptId, eventId)` is the
+  canonical identity and `(stepAttemptId, sequence)` is also unique.
+- A different payload for the same `eventId`, or a different `eventId` claiming
+  an owned `sequence`, is retained as evidence in `agent_event_conflicts`
+  instead of overwriting the canonical row.
+
+### Authority split
+
+`AgentResult` remains the only worker-originated terminal authority.
+`AgentEvent` is durable operational evidence: it can project server-received
+liveness fields on a non-terminal attempt and prove worker activity
+(`DISPATCHED` → `RUNNING`), but it can never terminalize an attempt, change a
+LogicalStep outcome, or create a StepAttempt. Late events after a terminal
+result remain append-only evidence and never touch liveness columns.
+
+### occurredAt versus receivedAt
+
+`occurredAt` is worker-reported and is audit evidence only — a worker clock can
+be skewed or hostile. `receivedAt` is the Tenvyr ingestion time assigned by the
+Orchestrator and is the liveness authority for supervision; deadlines are never
+computed from worker clocks.
+
+HTTP workers deliver both `AgentResultV1` and `AgentEventV1` through the same
+signed callback; Kafka event topics carry canonical `AgentEventV1` only.
 
 HTTP workers wrap `AgentInvocationV1` in `HttpAgentRunRequestV1`, return an
 asynchronous `HttpAgentRunAcceptedV1`, and later deliver `AgentResultV1` through

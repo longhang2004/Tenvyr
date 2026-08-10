@@ -4,8 +4,14 @@
     {
       "id": "contracts-v1",
       "status": "implemented",
-      "sources": ["contracts/schemas", "packages/contracts/src"],
-      "tests": ["packages/contracts/test", "contracts/conformance"],
+      "sources": [
+        "contracts/schemas",
+        "packages/contracts/src"
+      ],
+      "tests": [
+        "packages/contracts/test",
+        "contracts/conformance"
+      ],
       "docs": [
         "docs/architecture/contracts/agent-protocol-v1.md",
         "docs/architecture/contracts/json-interoperability.md"
@@ -25,7 +31,9 @@
         "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
         "services/orchestrator/src/services/kafka.service.spec.ts"
       ],
-      "docs": ["docs/architecture/transports/kafka-runtime-v1.md"],
+      "docs": [
+        "docs/architecture/transports/kafka-runtime-v1.md"
+      ],
       "limitations": [
         "Kafka v1 topics and consumer identities remain compatibility identifiers"
       ]
@@ -40,7 +48,9 @@
         "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
         "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/transports/http-agent-adapter-v1.md"],
+      "docs": [
+        "docs/architecture/transports/http-agent-adapter-v1.md"
+      ],
       "limitations": [
         "Callback replay protection and dispatch state are process-local"
       ]
@@ -48,9 +58,15 @@
     {
       "id": "typescript-worker-sdk",
       "status": "implemented",
-      "sources": ["packages/worker/src"],
-      "tests": ["packages/worker/test"],
-      "docs": ["docs/architecture/workers/typescript-worker-sdk.md"],
+      "sources": [
+        "packages/worker/src"
+      ],
+      "tests": [
+        "packages/worker/test"
+      ],
+      "docs": [
+        "docs/architecture/workers/typescript-worker-sdk.md"
+      ],
       "limitations": [
         "Queue, idempotency, and callback state are process-local"
       ]
@@ -58,9 +74,15 @@
     {
       "id": "python-worker-sdk",
       "status": "implemented",
-      "sources": ["sdks/python-worker/src/tenvyr_worker"],
-      "tests": ["sdks/python-worker/tests"],
-      "docs": ["docs/architecture/workers/python-worker-sdk.md"],
+      "sources": [
+        "sdks/python-worker/src/tenvyr_worker"
+      ],
+      "tests": [
+        "sdks/python-worker/tests"
+      ],
+      "docs": [
+        "docs/architecture/workers/python-worker-sdk.md"
+      ],
       "limitations": [
         "Queue, idempotency, and callback state are process-local",
         "Thread cancellation is cooperative"
@@ -77,7 +99,9 @@
         "packages/contracts/test/json-numbers.spec.ts",
         "sdks/python-worker/tests/test_schema_protocol.py"
       ],
-      "docs": ["docs/architecture/contracts/json-interoperability.md"],
+      "docs": [
+        "docs/architecture/contracts/json-interoperability.md"
+      ],
       "limitations": [
         "Exact cross-language decimal equality is not guaranteed for non-integer floats"
       ]
@@ -85,34 +109,93 @@
     {
       "id": "gateway",
       "status": "implemented",
-      "sources": ["services/gateway/src"],
-      "tests": ["services/gateway/src/app.controller.spec.ts"],
-      "docs": ["docs/architecture/control-plane.md"],
+      "sources": [
+        "services/gateway/src"
+      ],
+      "tests": [
+        "services/gateway/src/app.controller.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
-        "Thin HTTP and WebSocket relay; no production agent-memory API"
+        "Thin HTTP and WebSocket relay; no production agent-memory API",
+        "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
       ]
     },
     {
       "id": "orchestrator-pipeline-engine",
-      "status": "implemented",
+      "status": "partial",
       "sources": [
         "services/orchestrator/src/services",
-        "services/orchestrator/src/entities"
+        "services/orchestrator/src/entities",
+        "services/orchestrator/src/database/data-source.ts",
+        "services/orchestrator/src/database/migrations"
       ],
       "tests": [
         "services/orchestrator/src/services/engine.service.spec.ts",
-        "services/orchestrator/src/services/agent-result.service.spec.ts"
+        "services/orchestrator/src/services/agent-result.service.spec.ts",
+        "services/orchestrator/src/services/result-inbox.service.spec.ts",
+        "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
+        "services/orchestrator/src/services/runtime-recovery.service.spec.ts",
+        "services/orchestrator/src/services/pipeline-validation.service.spec.ts",
+        "services/orchestrator/src/services/execution.service.spec.ts",
+        "services/orchestrator/src/app.controller.spec.ts",
+        "services/orchestrator/src/database/data-source.spec.ts",
+        "services/orchestrator/src/database/migrations/milestone-zero-foundation.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
-        "Durable callback outbox and remote cancellation are not implemented"
+        "Execution plan snapshots and attempt history are durable",
+        "Logical steps materialize unfrozen (PENDING, frozenSpecHash/frozenAt null) and freeze only when a claim or gate decision becomes authoritative; engine-level reconcileExecution is the single idempotent autonomous progression path and resumeAfterResult is a compatibility alias",
+        "Targeted dispatchAttempt(stepAttemptId) gives claim-to-dispatch affinity; dispatchNext/recover() is the global background drain with per-record retryable isolation and a bounded batch; terminal dispatch failures are reconciled against the execution that actually owns the attempt",
+        "Legacy migration backfills StepAttempts only from persisted evidence (COMPLETED->SUCCESS, FAILED->FAILED, CANCELLED->CANCELLED, RUNNING->RUNNING); never-attempted/ambiguous rows stay attempt-free and no invalid status is ever written; overwritten legacy retry history is documented as non-reconstructable",
+        "Real-PostgreSQL integration coverage (concurrency, affinity, fairness, legacy-schema adoption) runs only when TEST_DATABASE_URL is provided",
+        "AgentEvent/watchdog persistence remains outside Milestone 0"
+      ]
+    },
+    {
+      "id": "agent-events-supervision",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/services/agent-event.service.ts",
+        "services/orchestrator/src/services/supervision.service.ts",
+        "services/orchestrator/src/services/supervision-config.service.ts",
+        "services/orchestrator/src/database/migrations/1722270001000-MilestoneOneAgentEvents.ts",
+        "packages/worker/src/events/event-emitter.ts",
+        "sdks/python-worker/src/tenvyr_worker/_runtime/worker.py"
+      ],
+      "tests": [
+        "services/orchestrator/src/services/agent-event.service.spec.ts",
+        "services/orchestrator/src/services/supervision.service.spec.ts",
+        "services/orchestrator/src/services/supervision-config.service.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "packages/worker/test/events.spec.ts",
+        "sdks/python-worker/tests/test_events.py"
+      ],
+      "docs": [
+        "docs/architecture/control-plane.md",
+        "docs/architecture/contracts/agent-protocol-v1.md"
+      ],
+      "limitations": [
+        "Heartbeat supervision applies only to explicitly configured agents; agents without expectations are never failed",
+        "Worker-local event delivery is not durable; only Orchestrator-accepted events become durable PostgreSQL evidence",
+        "AgentEvents are evidence, not authority: they can never terminalize an attempt or change a step outcome",
+        "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
       ]
     },
     {
       "id": "java-agent-runner",
       "status": "implemented",
-      "sources": ["services/agent-runner/src/main/java"],
-      "tests": ["services/agent-runner/src/test/java"],
+      "sources": [
+        "services/agent-runner/src/main/java"
+      ],
+      "tests": [
+        "services/agent-runner/src/test/java"
+      ],
       "docs": [
         "docs/architecture/agents-and-runners.md",
         "docs/showcase/using-model-providers.md"
@@ -125,12 +208,16 @@
     {
       "id": "code-reviewer-agent",
       "status": "implemented",
-      "sources": ["services/agent-code-reviewer/src"],
+      "sources": [
+        "services/agent-code-reviewer/src"
+      ],
       "tests": [
         "services/agent-code-reviewer/src/app.controller.spec.ts",
         "services/agent-code-reviewer/src/kafka.service.spec.ts"
       ],
-      "docs": ["docs/architecture/agents-and-runners.md"],
+      "docs": [
+        "docs/architecture/agents-and-runners.md"
+      ],
       "limitations": [
         "Kafka-specialized service; not a general framework integration"
       ]
@@ -138,12 +225,16 @@
     {
       "id": "observability-agent",
       "status": "implemented",
-      "sources": ["services/agent-observability/src"],
+      "sources": [
+        "services/agent-observability/src"
+      ],
       "tests": [
         "services/agent-observability/src/app.controller.spec.ts",
         "services/agent-observability/src/kafka.service.spec.ts"
       ],
-      "docs": ["docs/architecture/agents-and-runners.md"],
+      "docs": [
+        "docs/architecture/agents-and-runners.md"
+      ],
       "limitations": [
         "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
       ]
@@ -151,9 +242,16 @@
     {
       "id": "frontend-dashboard",
       "status": "implemented",
-      "sources": ["frontend/src/app"],
-      "tests": ["frontend/src/app/dashboard/safe-preview.test.mjs"],
-      "docs": ["docs/architecture/overview.md", "docs/showcase/demo-guide.md"],
+      "sources": [
+        "frontend/src/app"
+      ],
+      "tests": [
+        "frontend/src/app/dashboard/safe-preview.test.mjs"
+      ],
+      "docs": [
+        "docs/architecture/overview.md",
+        "docs/showcase/demo-guide.md"
+      ],
       "limitations": [
         "Safe-preview logic has a focused test; end-to-end UI behavior is exercised through showcase smoke URLs"
       ]
@@ -161,9 +259,15 @@
     {
       "id": "setup-readiness-check",
       "status": "implemented",
-      "sources": ["scripts/setup-check.mjs"],
-      "tests": ["scripts/setup-check.mjs"],
-      "docs": ["docs/operations/local-development.md"],
+      "sources": [
+        "scripts/setup-check.mjs"
+      ],
+      "tests": [
+        "scripts/setup-check.mjs"
+      ],
+      "docs": [
+        "docs/operations/local-development.md"
+      ],
       "limitations": [
         "Reports machine state and actions but does not install or reconfigure prerequisites"
       ]
@@ -179,8 +283,14 @@
         "services/agent-code-reviewer/Dockerfile",
         "services/agent-observability/Dockerfile"
       ],
-      "tests": ["scripts/setup-check.test.mjs", "scripts/smoke-e2e.test.mjs"],
-      "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
+      "tests": [
+        "scripts/setup-check.test.mjs",
+        "scripts/smoke-e2e.test.mjs"
+      ],
+      "docs": [
+        "docs/showcase/demo-guide.md",
+        "docs/showcase/case-study.md"
+      ],
       "limitations": [
         "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
         "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
@@ -198,7 +308,9 @@
         "scripts/verify-package-packs.mjs",
         "scripts/verify-python-worker-package.py"
       ],
-      "docs": ["docs/operations/package-verification.md"],
+      "docs": [
+        "docs/operations/package-verification.md"
+      ],
       "limitations": [
         "Verification is local/private and does not authorize publication"
       ]
@@ -218,7 +330,9 @@
         "scripts/verify-package-packs.mjs",
         "scripts/verify-python-worker-package.py"
       ],
-      "docs": ["docs/product/identity.md"],
+      "docs": [
+        "docs/product/identity.md"
+      ],
       "limitations": [
         "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
       ]
@@ -228,7 +342,9 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
+      "docs": [
+        "docs/roadmap/observability-provenance.md"
+      ],
       "limitations": [
         "No production OpenTelemetry SDK or collector integration"
       ]
@@ -238,7 +354,9 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
+      "docs": [
+        "docs/roadmap/observability-provenance.md"
+      ],
       "limitations": [
         "Trace context is not propagated as W3C traceparent/tracestate"
       ]
@@ -248,31 +366,45 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
-      "limitations": ["No artifact persistence or lineage store"]
+      "docs": [
+        "docs/roadmap/observability-provenance.md"
+      ],
+      "limitations": [
+        "No artifact persistence or lineage store"
+      ]
     },
     {
       "id": "policy-engine",
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
-      "limitations": ["No runtime policy engine"]
+      "docs": [
+        "docs/roadmap/observability-provenance.md"
+      ],
+      "limitations": [
+        "No runtime policy engine"
+      ]
     },
     {
       "id": "cli-adapter",
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/README.md"],
-      "limitations": ["No CLI transport adapter"]
+      "docs": [
+        "docs/roadmap/README.md"
+      ],
+      "limitations": [
+        "No CLI transport adapter"
+      ]
     },
     {
       "id": "framework-integrations",
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/README.md"],
+      "docs": [
+        "docs/roadmap/README.md"
+      ],
       "limitations": [
         "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
       ]
@@ -282,7 +414,9 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/README.md"],
+      "docs": [
+        "docs/roadmap/README.md"
+      ],
       "limitations": [
         "Worker callback and idempotency records are lost on process restart"
       ]
@@ -292,7 +426,9 @@
       "status": "blocked",
       "sources": [],
       "tests": [],
-      "docs": ["docs/product/identity.md"],
+      "docs": [
+        "docs/product/identity.md"
+      ],
       "limitations": [
         "Blocked by registry, legal, repository, and explicit publication approval gates"
       ]
