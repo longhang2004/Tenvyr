@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param } from "@nestjs/common";
+import { Controller, Get, Post, Body, Param, Query } from "@nestjs/common";
 import { SocketGateway } from "./socket.gateway";
 
 @Controller()
@@ -83,6 +83,34 @@ export class AppController {
   @Get("api/executions/:id")
   async getExecution(@Param("id") id: string) {
     return this.forwardToOrchestrator(`/executions/${id}`);
+  }
+
+  @Get("api/executions/:id/events")
+  async getExecutionEvents(
+    @Param("id") id: string,
+    @Query("stepAttemptId") stepAttemptId?: string,
+    @Query("type") type?: string,
+    @Query("limit") limit?: string,
+    @Query("afterReceivedAt") afterReceivedAt?: string,
+    @Query("afterId") afterId?: string,
+  ) {
+    const params = new URLSearchParams();
+    if (stepAttemptId) params.set("stepAttemptId", stepAttemptId);
+    if (type) params.set("type", type);
+    if (limit) params.set("limit", limit);
+    if (afterReceivedAt) params.set("afterReceivedAt", afterReceivedAt);
+    if (afterId) params.set("afterId", afterId);
+    const query = params.toString();
+    return this.forwardToOrchestrator(
+      `/executions/${id}/events${query ? `?${query}` : ""}`,
+    );
+  }
+
+  @Post("api/executions/:id/cancel")
+  async cancelExecution(@Param("id") id: string) {
+    return this.forwardToOrchestrator(`/executions/${id}/cancel`, {
+      method: "POST",
+    });
   }
 
   private async forwardToOrchestrator(
