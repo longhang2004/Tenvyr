@@ -68,10 +68,11 @@ docs/_scratch/
 .cursor/
 .antigravity/
 .kiro/
+.reasonix/
 .clauderules
 .cursorrules
 .antigravityrules
 
 # Local owner artifacts
-/AgentWeave.zip
+/*.zip
 /scripts/compress.sh
