@@ -56,6 +56,18 @@ type StepExecution = {
   maxAttempts?: number;
   startTime?: string;
   endTime?: string;
+  attempts?: StepAttempt[];
+};
+
+type StepAttempt = {
+  id: string;
+  attemptNumber: number;
+  status: string;
+  invocationId: string;
+  dispatchedAt?: string;
+  startTime?: string;
+  terminalAt?: string;
+  error?: string | null;
 };
 
 type Execution = {
@@ -64,6 +76,7 @@ type Execution = {
   status: string;
   startTime: string;
   endTime?: string;
+  terminationReason?: string | null;
   steps?: StepExecution[];
 };
 
@@ -308,12 +321,39 @@ steps:
     }
   };
 
+  const handleCancelExecution = async () => {
+    if (!selectedExecution) return;
+    setLoading(true);
+    setErrorMsg("");
+    setSuccessMsg("");
+    try {
+      const res = await fetch(
+        `${GATEWAY_API_URL}/api/executions/${selectedExecution.id}/cancel`,
+        { method: "POST" },
+      );
+      const data = (await res.json()) as ApiResponse<Execution>;
+      if (data.success) {
+        setSelectedExecution(data.data);
+        setSuccessMsg("Execution cancelled.");
+        refreshData();
+      } else {
+        setErrorMsg(data.error || "Failed to cancel execution.");
+      }
+    } catch (error: unknown) {
+      setErrorMsg("Error cancelling execution: " + errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "COMPLETED":
         return <CheckCircle2 size={18} color="var(--accent-green)" />;
       case "FAILED":
         return <XCircle size={18} color="var(--accent-red)" />;
+      case "CANCELLED":
+        return <XCircle size={18} color="var(--text-secondary)" />;
       case "RUNNING":
         return (
           <Activity
@@ -337,6 +377,8 @@ steps:
         return "rgba(16, 185, 129, 0.1)";
       case "FAILED":
         return "rgba(239, 68, 68, 0.1)";
+      case "CANCELLED":
+        return "rgba(148, 163, 184, 0.1)";
       case "RUNNING":
         return "rgba(59, 130, 246, 0.1)";
       case "SKIPPED":
@@ -352,6 +394,8 @@ steps:
         return "rgba(16, 185, 129, 0.3)";
       case "FAILED":
         return "rgba(239, 68, 68, 0.3)";
+      case "CANCELLED":
+        return "rgba(148, 163, 184, 0.3)";
       case "RUNNING":
         return "rgba(59, 130, 246, 0.4)";
       case "SKIPPED":
@@ -678,7 +722,38 @@ steps:
                       ) || "—"}
                     </span>
                   </div>
+                  {(selectedExecution.status === "RUNNING" ||
+                    selectedExecution.status === "PENDING" ||
+                    selectedExecution.status === "WAITING") && (
+                    <button
+                      type="button"
+                      onClick={handleCancelExecution}
+                      disabled={loading}
+                      style={{
+                        marginLeft: "auto",
+                        padding: "0.35rem 0.6rem",
+                        borderRadius: "6px",
+                        border: "1px solid rgba(239, 68, 68, 0.45)",
+                        background: "rgba(239, 68, 68, 0.12)",
+                        color: "#fca5a5",
+                        cursor: loading ? "wait" : "pointer",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
+                {selectedExecution.terminationReason && (
+                  <div
+                    style={{
+                      marginTop: "-1rem",
+                      color: "var(--text-secondary)",
+                      fontSize: "0.75rem",
+                    }}
+                  >
+                    Reason: {selectedExecution.terminationReason}
+                  </div>
+                )}
 
                 {/* Nodes Grid (DAG Visualization) */}
                 <div
@@ -945,6 +1020,23 @@ steps:
                                   [Error Trace]
                                 </div>
                                 <div>{step.error}</div>
+                              </div>
+                            )}
+
+                            {step.attempts && step.attempts.length > 0 && (
+                              <div
+                                style={{
+                                  marginTop: "0.75rem",
+                                  color: "var(--text-secondary)",
+                                  fontSize: "0.75rem",
+                                }}
+                              >
+                                Attempt history: {step.attempts
+                                  .map(
+                                    (attempt) =>
+                                      `#${attempt.attemptNumber} ${attempt.status}`,
+                                  )
+                                  .join(" · ")}
                               </div>
                             )}
                           </div>
