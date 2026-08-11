@@ -18,11 +18,11 @@
   ],
   "properties": {
     "schemaVersion": { "const": "1" },
-    "eventId": { "type": "string", "minLength": 1 },
+    "eventId": { "type": "string", "minLength": 1, "maxLength": 255 },
     "invocationId": { "type": "string", "minLength": 1 },
     "executionId": { "type": "string", "minLength": 1 },
     "stepExecutionId": { "type": "string", "minLength": 1 },
-    "sequence": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
     "type": {
       "enum": [
         "accepted",

@@ -12,9 +12,11 @@ import {
 import { createTenvyrWorker, defineAgent, type TenvyrWorker } from "../src";
 import { parseWorkerConfig } from "../src/config/worker-config.validation";
 import {
-  MAX_EVENT_PAYLOAD_BYTES,
+  MAX_AGENT_EVENT_CANONICAL_BYTES,
+  MAX_AGENT_EVENT_SEQUENCE,
   RunEventEmitter,
 } from "../src/events/event-emitter";
+import { canonicalJson } from "../src/invocation/canonical-json";
 import { createExecutionContext } from "../src/execution/execution-context";
 import { noOpLogger } from "../src/observability/safe-logger";
 
@@ -82,21 +84,26 @@ describe("events configuration", () => {
 
 describe("run event emitter", () => {
   const fixedNow = Date.parse("2026-07-26T00:00:01.000Z");
-  const makeEmitter = (options: {
-    enabled?: boolean;
-    deliver?: (event: AgentEventV1, rawBody: Buffer) => void;
-    logger?: typeof noOpLogger;
-  } = {}) => {
+  const makeEmitter = (
+    options: {
+      enabled?: boolean;
+      deliver?: (event: AgentEventV1, rawBody: Buffer) => void;
+      logger?: typeof noOpLogger;
+      invocation?: AgentInvocationV1;
+    } = {},
+  ) => {
     const delivered: Array<{ event: AgentEventV1; rawBody: Buffer }> = [];
     const emitter = new RunEventEmitter({
-      invocation: invocation(),
+      invocation: options.invocation ?? invocation(),
       runId: "run-1",
       enabled: options.enabled ?? true,
       logger: options.logger ?? noOpLogger,
       now: () => fixedNow,
-      deliver: options.deliver ?? ((event, rawBody) => {
-        delivered.push({ event, rawBody });
-      }),
+      deliver:
+        options.deliver ??
+        ((event, rawBody) => {
+          delivered.push({ event, rawBody });
+        }),
     });
     return { emitter, delivered };
   };
@@ -192,20 +199,96 @@ describe("run event emitter", () => {
     const { emitter } = makeEmitter();
     const circular: Record<string, unknown> = {};
     circular.self = circular;
-    expect(() =>
-      emitter.emit("progress", circular as never),
-    ).toThrow(/circular/);
+    expect(() => emitter.emit("progress", circular as never)).toThrow(
+      /circular/,
+    );
   });
 
-  it("rejects payloads whose canonical JSON exceeds 64 KiB", () => {
-    const { emitter } = makeEmitter();
-    const oversized = { data: "x".repeat(MAX_EVENT_PAYLOAD_BYTES) };
+  it("rejects a complete event whose canonical body exceeds 64 KiB without scheduling delivery", () => {
+    const { emitter, delivered } = makeEmitter();
+    const oversized = { data: "x".repeat(MAX_AGENT_EVENT_CANONICAL_BYTES) };
     expect(() => emitter.emit("progress", oversized)).toThrow(
-      /exceeds the 65536-byte limit/,
+      /Agent event canonical body exceeds the 65536-byte limit/,
+    );
+    expect(delivered).toHaveLength(0);
+  });
+
+  it("rejects a full-envelope overflow: payload under 64 KiB but complete event over", () => {
+    const { emitter, delivered } = makeEmitter();
+    // Measure the canonical envelope overhead deterministically by emitting a
+    // probe event whose payload data string is empty, then canonicalizing the
+    // delivered event. Each additional "x" adds exactly one canonical byte.
+    emitter.emit("progress", { data: "" });
+    expect(delivered).toHaveLength(1);
+    const overhead = Buffer.byteLength(
+      canonicalJson(delivered[0].event as never),
+      "utf8",
+    );
+    const atLimit = MAX_AGENT_EVENT_CANONICAL_BYTES - overhead;
+    expect(atLimit).toBeGreaterThan(0);
+    // At the boundary (<= 64 KiB canonical body): delivered.
+    expect(() =>
+      emitter.emit("progress", { data: "x".repeat(atLimit) }),
+    ).not.toThrow();
+    // One byte over the boundary: rejected locally, no delivery scheduled.
+    expect(() =>
+      emitter.emit("progress", { data: "x".repeat(atLimit + 1) }),
+    ).toThrow(/Agent event canonical body exceeds the 65536-byte limit/);
+    expect(delivered).toHaveLength(2); // probe + boundary event only
+  });
+
+  it("rejects a generated eventId longer than the canonical 255-char bound without delivery", () => {
+    // invocationId length 254 + ":0" => eventId length 256: the canonical
+    // AgentEventV1 contract would reject the constructed event, so the
+    // emitter must reject it locally before any delivery is scheduled.
+    const { emitter, delivered } = makeEmitter({
+      invocation: invocation({
+        invocationId: "i".repeat(254),
+        trace: { traceId: "trace-1", correlationId: "long-invocation" },
+      }),
+    });
+    expect(() => emitter.emit("progress", { step: 1 })).toThrow(
+      /Generated Agent event id exceeds the 255-character limit/,
+    );
+    expect(delivered).toHaveLength(0);
+  });
+
+  it("accepts the maximum valid generated eventId (255 chars) and the event parses canonically", () => {
+    const { emitter, delivered } = makeEmitter({
+      invocation: invocation({
+        invocationId: "i".repeat(253),
+        trace: { traceId: "trace-1", correlationId: "max-invocation" },
+      }),
+    });
+    expect(() => emitter.emit("progress", { step: 1 })).not.toThrow();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].event.eventId).toBe(`${"i".repeat(253)}:0`);
+    expect(delivered[0].event.eventId).toHaveLength(255);
+    // The emitted event is valid under the canonical AgentEventV1 contract.
+    expect(
+      parseAgentEvent(JSON.parse(delivered[0].rawBody.toString("utf8"))),
+    ).toMatchObject({ eventId: `${"i".repeat(253)}:0`, sequence: 0 });
+  });
+
+  it("enforces the sequence upper bound before delivery without emitting billions of events", () => {
+    const { emitter, delivered } = makeEmitter();
+    // Internal test seam: the sequence counter is private; the emit path is
+    // exercised at the boundary without constructing two billion events.
+    (emitter as unknown as { sequence: number }).sequence =
+      MAX_AGENT_EVENT_SEQUENCE;
+    expect(() => emitter.emit("progress", { step: 1 })).not.toThrow();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].event.sequence).toBe(MAX_AGENT_EVENT_SEQUENCE);
+    expect(delivered[0].event.eventId).toBe(
+      `invocation-1:${MAX_AGENT_EVENT_SEQUENCE}`,
     );
 
-    const acceptable = { data: "x".repeat(1024) };
-    expect(() => emitter.emit("progress", acceptable)).not.toThrow();
+    (emitter as unknown as { sequence: number }).sequence =
+      MAX_AGENT_EVENT_SEQUENCE + 1;
+    expect(() => emitter.emit("progress", { step: 2 })).toThrow(
+      /Agent event sequence .* is outside the 0\.\.2147483647 range/,
+    );
+    expect(delivered).toHaveLength(1); // nothing new was scheduled
   });
 
   it("rejects agent attempts to emit system-owned event types", () => {
@@ -219,12 +302,7 @@ describe("run event emitter", () => {
     });
 
     for (const type of ["accepted", "heartbeat", "completed", "failed"]) {
-      expect(() =>
-        context.event(
-          type as "progress",
-          {},
-        ),
-      ).toThrow(
+      expect(() => context.event(type as "progress", {})).toThrow(
         `Agent events of type "${type}" are reserved for the Worker runtime`,
       );
     }
@@ -359,18 +437,14 @@ describe("Tenvyr Worker agent events", () => {
 
   const eventBodies = (): AgentEventV1[] =>
     callbackRequests
-      .filter((request) =>
-        request.body.toString("utf8").includes('"eventId"'),
-      )
+      .filter((request) => request.body.toString("utf8").includes('"eventId"'))
       .map((request) =>
         parseAgentEvent(JSON.parse(request.body.toString("utf8"))),
       );
 
   const resultBodies = (): AgentResultV1[] =>
     callbackRequests
-      .filter(
-        (request) => !request.body.toString("utf8").includes('"eventId"'),
-      )
+      .filter((request) => !request.body.toString("utf8").includes('"eventId"'))
       .map((request) => JSON.parse(request.body.toString("utf8")));
 
   it("keeps the old behavior when events are disabled: no event callbacks and an unchanged result", async () => {
@@ -408,8 +482,9 @@ describe("Tenvyr Worker agent events", () => {
       await submit(baseUrl, JSON.stringify(runRequest()))
     ).json()) as { runId: string };
 
-    await waitFor(() =>
-      eventBodies().filter((event) => event.type === "progress").length === 2,
+    await waitFor(
+      () =>
+        eventBodies().filter((event) => event.type === "progress").length === 2,
     );
     await waitFor(() =>
       eventBodies().some((event) => event.type === "accepted"),
@@ -485,12 +560,97 @@ describe("Tenvyr Worker agent events", () => {
     expect(heartbeats.length).toBeGreaterThanOrEqual(1);
     for (const heartbeat of heartbeats) {
       expect(heartbeat.payload).toEqual({});
-      expect(heartbeat.sequence).toBeGreaterThan(
-        accepted?.sequence as number,
-      );
+      expect(heartbeat.sequence).toBeGreaterThan(accepted?.sequence as number);
       expect(heartbeat.sequence).toBeLessThan(completed?.sequence as number);
     }
     expect(completed?.sequence).toBeGreaterThan(0);
+  });
+
+  it("accepts and queues a run behind a busy slot without heartbeating it", async () => {
+    let release!: () => void;
+    const execute = jest.fn(async (context, input: { block?: boolean }) => {
+      if (input.block) {
+        return new Promise<string>((resolve) => {
+          release = () => resolve("blocked-done");
+        });
+      }
+      context.progress({ ran: true });
+      // Outlive one heartbeat interval so a real heartbeat is emitted.
+      await new Promise((resolve) => setTimeout(resolve, 1300));
+      return "quick-done";
+    });
+    const baseUrl = await start(
+      makeWorker({
+        execute,
+        eventsEnabled: true,
+        heartbeatIntervalMs: 1000,
+        timeoutMs: 5000,
+      }).worker,
+    );
+    const invocationA = invocation({
+      invocationId: "invocation-a",
+      input: { block: true },
+      trace: { traceId: "trace-a", correlationId: "invocation-a" },
+    });
+    const invocationB = invocation({
+      invocationId: "invocation-b",
+      input: { block: false },
+      trace: { traceId: "trace-b", correlationId: "invocation-b" },
+    });
+    const headersA = { "Idempotency-Key": "invocation-a" };
+    const headersB = { "Idempotency-Key": "invocation-b" };
+
+    expect(
+      (await submit(baseUrl, JSON.stringify(runRequest(invocationA)), headersA))
+        .status,
+    ).toBe(202);
+    await waitFor(() => execute.mock.calls.length === 1);
+    // The single execution slot is occupied; B is accepted and queued.
+    expect(
+      (await submit(baseUrl, JSON.stringify(runRequest(invocationB)), headersB))
+        .status,
+    ).toBe(202);
+
+    // More than two heartbeat intervals pass while B is still queued: B must
+    // emit only `accepted` (no heartbeat/progress/completed), while the
+    // executing run A keeps heartbeating.
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    const bWhileQueued = eventBodies().filter(
+      (event) => event.invocationId === "invocation-b",
+    );
+    expect(bWhileQueued.map((event) => event.type)).toEqual(["accepted"]);
+    expect(bWhileQueued[0].sequence).toBe(0);
+    expect(
+      eventBodies().some(
+        (event) =>
+          event.invocationId === "invocation-a" && event.type === "heartbeat",
+      ),
+    ).toBe(true);
+
+    release();
+    await waitFor(() => resultBodies().length === 2);
+    await waitFor(() =>
+      eventBodies().some(
+        (event) =>
+          event.invocationId === "invocation-b" && event.type === "progress",
+      ),
+    );
+
+    // Once B executes, sequences are unique and monotonic from accepted (0).
+    const bEvents = eventBodies()
+      .filter((event) => event.invocationId === "invocation-b")
+      .sort((a, b) => a.sequence - b.sequence);
+    expect(bEvents.map((event) => event.sequence)).toEqual(
+      bEvents.map((_, index) => index),
+    );
+    expect(bEvents.slice(0, 2).map((event) => event.type)).toEqual([
+      "accepted",
+      "progress",
+    ]);
+    expect(bEvents.some((event) => event.type === "heartbeat")).toBe(true);
+    expect(bEvents.map((event) => event.eventId)).toEqual(
+      bEvents.map((_, index) => `invocation-b:${index}`),
+    );
   });
 
   it("keeps eventId and body stable across callback retries while each delivery operation gets its own deliveryId", async () => {
@@ -525,8 +685,8 @@ describe("Tenvyr Worker agent events", () => {
     );
     const retried = requests.filter(
       (request) =>
-        (JSON.parse(request.body.toString("utf8")) as AgentEventV1)
-          .eventId === "invocation-1:0",
+        (JSON.parse(request.body.toString("utf8")) as AgentEventV1).eventId ===
+        "invocation-1:0",
     );
     expect(retried).toHaveLength(2);
     // Same body on both attempts: eventId, occurredAt, and payload are stable.
@@ -542,9 +702,7 @@ describe("Tenvyr Worker agent events", () => {
     // Signature content is derived from the same body, deliveryId, and timestamp.
     for (const request of retried) {
       const timestamp = request.headers["x-agentweave-timestamp"] as string;
-      const deliveryId = request.headers[
-        "x-agentweave-delivery-id"
-      ] as string;
+      const deliveryId = request.headers["x-agentweave-delivery-id"] as string;
       expect(request.headers["x-agentweave-signature"]).toBe(
         `v1=${createHmac("sha256", "callback-secret")
           .update(`${timestamp}.${deliveryId}.`)
@@ -555,8 +713,8 @@ describe("Tenvyr Worker agent events", () => {
     // A later event is a separate delivery operation with a new deliveryId.
     const progress = requests.find(
       (request) =>
-        (JSON.parse(request.body.toString("utf8")) as AgentEventV1)
-          .eventId === "invocation-1:1",
+        (JSON.parse(request.body.toString("utf8")) as AgentEventV1).eventId ===
+        "invocation-1:1",
     );
     expect(progress?.headers["x-agentweave-delivery-id"]).not.toBe(
       retried[0].headers["x-agentweave-delivery-id"],
@@ -591,8 +749,9 @@ describe("Tenvyr Worker agent events", () => {
         })
       ).status,
     ).toBe(202);
-    await waitFor(() =>
-      eventBodies().filter((event) => event.type === "progress").length === 2,
+    await waitFor(
+      () =>
+        eventBodies().filter((event) => event.type === "progress").length === 2,
     );
 
     const byInvocation = (invocationId: string) =>
@@ -603,21 +762,22 @@ describe("Tenvyr Worker agent events", () => {
             (event.type === "accepted" || event.type === "progress"),
         )
         .sort((a, b) => a.sequence - b.sequence);
-    expect(byInvocation("invocation-1").map((event) => event.eventId)).toEqual(
-      ["invocation-1:0", "invocation-1:1"],
-    );
-    expect(byInvocation("invocation-2").map((event) => event.eventId)).toEqual(
-      ["invocation-2:0", "invocation-2:1"],
-    );
-    expect(
-      byInvocation("invocation-2").map((event) => event.type),
-    ).toEqual(["accepted", "progress"]);
+    expect(byInvocation("invocation-1").map((event) => event.eventId)).toEqual([
+      "invocation-1:0",
+      "invocation-1:1",
+    ]);
+    expect(byInvocation("invocation-2").map((event) => event.eventId)).toEqual([
+      "invocation-2:0",
+      "invocation-2:1",
+    ]);
+    expect(byInvocation("invocation-2").map((event) => event.type)).toEqual([
+      "accepted",
+      "progress",
+    ]);
   });
 
   it("delivers the AgentResult callback before the completed event and never replaces it", async () => {
-    const baseUrl = await start(
-      makeWorker({ eventsEnabled: true }).worker,
-    );
+    const baseUrl = await start(makeWorker({ eventsEnabled: true }).worker);
 
     expect((await submit(baseUrl, JSON.stringify(runRequest()))).status).toBe(
       202,
@@ -742,9 +902,7 @@ describe("Tenvyr Worker agent events", () => {
       202,
     );
     await waitFor(() => resultBodies().length === 1);
-    await waitFor(() =>
-      eventBodies().some((event) => event.type === "failed"),
-    );
+    await waitFor(() => eventBodies().some((event) => event.type === "failed"));
 
     const events = eventBodies().sort((a, b) => a.sequence - b.sequence);
     expect(events.map((event) => event.type)).toEqual([
@@ -773,9 +931,7 @@ describe("Tenvyr Worker agent events", () => {
   });
 
   it("uses the same HMAC headers for event callbacks as for result callbacks", async () => {
-    const baseUrl = await start(
-      makeWorker({ eventsEnabled: true }).worker,
-    );
+    const baseUrl = await start(makeWorker({ eventsEnabled: true }).worker);
 
     expect((await submit(baseUrl, JSON.stringify(runRequest()))).status).toBe(
       202,
@@ -787,23 +943,22 @@ describe("Tenvyr Worker agent events", () => {
       request.body.toString("utf8").includes('"eventId"'),
     );
     expect(eventRequests.length).toBeGreaterThanOrEqual(1);
+    const callbackHeaders = [
+      "x-agentweave-delivery-id",
+      "x-agentweave-key-id",
+      "x-agentweave-signature",
+      "x-agentweave-timestamp",
+    ];
     for (const request of eventRequests) {
       expect(
         Object.keys(request.headers)
-          .filter((header) => header.startsWith("x-agentweave-"))
+          .filter((header) => callbackHeaders.includes(header))
           .sort(),
-      ).toEqual([
-        "x-agentweave-delivery-id",
-        "x-agentweave-key-id",
-        "x-agentweave-signature",
-        "x-agentweave-timestamp",
-      ]);
+      ).toEqual(callbackHeaders);
       expect(request.headers["x-agentweave-key-id"]).toBe("callback-v1");
       expect(request.headers["user-agent"]).toBe("Tenvyr-Worker/0.1.0");
       const timestamp = request.headers["x-agentweave-timestamp"] as string;
-      const deliveryId = request.headers[
-        "x-agentweave-delivery-id"
-      ] as string;
+      const deliveryId = request.headers["x-agentweave-delivery-id"] as string;
       expect(request.headers["x-agentweave-signature"]).toBe(
         `v1=${createHmac("sha256", "callback-secret")
           .update(`${timestamp}.${deliveryId}.`)

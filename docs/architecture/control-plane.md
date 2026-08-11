@@ -185,8 +185,10 @@ late or conflicting result on the canonical row, e.g. a result after
 cancellation). There is no durable `RECEIVED → later worker → APPLIED`
 workflow: the inbox row and the authoritative terminal transition commit
 together. Late evidence belongs in append-only inbox/conflict and AgentEvent
-records now (artifact/usage records arrive in later milestones); it never
-rewrites a terminal result.
+records (usage records arrive in later milestones); it never rewrites a
+terminal result. The first authoritative application additionally registers
+durable Artifact reference identities for every descriptor in
+`result.artifacts` (see below).
 
 A worker outcome with terminal status `cancelled` transitions the logical step
 to `CANCELLED` and the execution to `CANCELLED` in the same inbox transaction;
@@ -201,6 +203,289 @@ After a terminal step update, the engine evaluates dependent steps. A
 dependency is resolved by `COMPLETED` or `SKIPPED`, or by `FAILED` only when
 that dependency uses `onFailure: continue`. When every configured step is
 terminal, the execution becomes `COMPLETED` with outputs keyed by step ID.
+
+## Artifact references and producer lineage
+
+Three distinct things must not be confused:
+
+- **Canonical AgentResult artifact descriptors** — the worker-declared
+  `result.artifacts` entries in the validated result payload. The descriptor
+  `id` is opaque producer-declared data and is never assumed to be a
+  Tenvyr-global identifier; descriptors may carry unbounded metadata and are
+  untrusted Worker input even after transport authentication (never
+  dereference, fetch, probe, or log `uri`, and never interpret `metadata` as
+  commands, paths, credentials, or transport configuration).
+- **Immutable Tenvyr Artifact reference records** — one `artifacts` row per
+  canonical descriptor, created by the first authoritative `ResultInbox`
+  application of that result (for every terminal outcome: `succeeded`,
+  `failed`, `cancelled`, and `timed_out`). Each row carries a Tenvyr-owned
+  stable uuid identity, the `ResultInbox` row reference, the descriptor
+  ordinal, and the canonical descriptor SHA-256. Uniqueness over
+  `(resultInboxId, descriptorOrdinal)` prevents duplicate registration; rows
+  are insert-only with no update path, and deletion cascades from a
+  `ResultInbox` row (never performed by current code — inbox rows are audit
+  history), mirroring `agent_events` → `step_attempts`.
+
+Storage-amplification boundary: the v1 contract does not cap the `artifacts`
+array size or descriptor string lengths (unlike the 64 KiB AgentEvent body
+cap), so a hostile worker can declare arbitrarily many descriptors — each
+costing one fixed-size Artifact row plus one canonical hash. The registration
+already runs as a single batched insert inside the apply transaction, but
+batching bounds statement count, not row count: amplification stays linear
+over the already-accepted unbounded `payload` jsonb, bounded in practice by
+transport body limits. The only real bound is a protocol-level
+`maxItems`/`maxLength` cap, which belongs to a future protocol version.
+
+- **Producer lineage** — each Artifact row resolves unambiguously to one
+  canonical `ResultInbox` row and therefore, through `stepAttemptId`, to
+  exactly one producing `StepAttempt` with its `executionId` and
+  `logicalStepId`.
+
+Artifact registration commits or rolls back together with the inbox `APPLIED`
+state, the guarded attempt terminal transition, the logical-step projection,
+outbox retirement, and any execution transition. Identical duplicate
+deliveries, and conflicting, ignored, stale, or post-cancellation results,
+create no Artifact rows and never mutate existing ones. No historical backfill
+was performed: pre-existing `APPLIED` results keep their payloads but have no
+Artifact rows — authoritative artifact identity begins with the M2 migration.
+
+Artifact `AgentEvent`s (`type: "artifact"`) remain append-only operational
+evidence. They are never authoritative and never create or update an Artifact
+record.
+
+This slice provides immutable reference identity and producer lineage. M2D
+adds bounded reference projection and attempt-to-artifact exposure lineage,
+described below. Tenvyr still does not provide blob storage,
+uploads/downloads, content (byte) immutability, semantic consumption proof,
+retention, replay, or public read APIs — and the immutability of an Artifact
+database record never implies immutability of the external bytes it references.
+
+## ExecutionState (durable state core)
+
+M2B adds an internal, durable, per-execution semantic state primitive:
+`executionState` (jsonb), `executionStateVersion` (integer), and
+`executionStateUpdatedAt` (timestamp) on the `executions` row, created by
+`MilestoneTwoExecutionState1722270003000` immediately after the M2A
+migration. It is an Orchestrator-internal primitive (`ExecutionStateService`)
+with no agent, pipeline-definition, public API, Gateway route, or
+`AgentInvocationV1.context` exposure. Agent results and artifact descriptors
+never flow into it; `AgentResultV1` gains no `statePatch` yet.
+
+Semantics:
+
+- ExecutionState is a top-level JSON object. A patch is
+  `{ set?: Record<string, JsonValue>; delete?: string[] }`: `set` replaces the
+  complete value of named top-level keys, `delete` removes them, nested values
+  are replaced (never recursively merged), a key cannot appear in both, and
+  duplicate delete keys are invalid.
+- `executionStateVersion` is the explicit semantic state version — distinct
+  from the TypeORM `rowVersion` that guards the whole row. A real mutation
+  increments it exactly once; a no-op increments nothing and never touches the
+  row (no save, no version bump, no timestamp update).
+- Hard ceilings: 128 top-level keys; 128 code points per key; 128 operations
+  per patch; 16 KiB canonical patch; 64 KiB final state. Keys `__proto__`,
+  `prototype`, and `constructor` are rejected. Values must be valid JSON
+  (no undefined, bigint, function, symbol, NaN, Infinity, cycles, class
+  instances, non-plain objects, or dangerous object keys at any nesting
+  depth); validation is a bounded
+  `ExecutionStateValidationError`, never a database retry loop.
+- `mutate(executionId, expectedVersion, patch)` runs in one transaction: the
+  owning execution row is locked pessimistically, then dispositions are
+  evaluated in order `missing` → `terminal` → `conflict`. PENDING, RUNNING,
+  and WAITING executions may be mutated; COMPLETED, FAILED, and CANCELLED
+  reject mutation. A stale writer receives `conflict` with the current
+  semantic version and changes nothing. State, semantic version, and the
+  state-specific timestamp commit or roll back atomically.
+- Outputs are isolated: `read` and `mutate` return deep copies, and applying a
+  patch never mutates caller-owned objects.
+
+M2B by itself provides no agent/result mutation authority. M2C–M2E build on it
+with bounded projection, exposure lineage, and pipeline-declared result
+mappings. The completed M2 program still provides no public read/write API,
+memory/RAG/semantic-search behavior, full event-sourced state history, or
+replay implementation.
+
+## ContextSnapshot (bounded state projection)
+
+M2C adds an optional declarative `contextProjection` to a pipeline step:
+
+```yaml
+contextProjection:
+  stateKeys:
+    - approvedBrief
+    - review.status
+```
+
+Keys are exact top-level ExecutionState keys; a dot is an ordinary key
+character, never a path operator. Absent `contextProjection` preserves legacy
+behavior byte-for-byte: no Tenvyr context envelope and a null
+`step_attempts.contextSnapshot`. Empty selections, duplicate keys, unsafe keys
+(`__proto__`, `prototype`, `constructor`), keys over 128 code points, and
+selections over 128 keys are rejected at pipeline ingress. The field
+participates in the plan revision and the frozen step specification hash, so a
+selector change is a frozen-spec change.
+
+At claim time (`ExecutionService.claimRunnableStep`, under the existing
+execution row lock) Tenvyr materializes an immutable, attempt-owned
+ContextSnapshot envelope and persists it on the StepAttempt and inside the
+DispatchOutbox invocation `context.tenvyr` member in the same transaction:
+
+```json
+{
+  "tenvyr": {
+    "schemaVersion": 1,
+    "executionState": { "version": 7, "values": { "approvedBrief": "..." } },
+    "artifacts": []
+  }
+}
+```
+
+Invariants:
+
+- The complete canonical UTF-8 envelope is bounded at 65,536 bytes; selected
+  values are isolated clones; output keys are canonically sorted; explicit
+  JSON null is included; a missing selected key fails the claim
+  deterministically with the stable code `TENVYR_CTX_MISSING_STATE_KEY` (also
+  `TENVYR_CTX_INVALID_PROJECTION`, `TENVYR_CTX_UNSAFE_VALUE`,
+  `TENVYR_CTX_ENVELOPE_TOO_LARGE`).
+- Snapshot, attempt, and outbox commit atomically; dispatch and recovery send
+  the persisted outbox invocation and never recompute the snapshot. A retry
+  owns a new attempt and a new snapshot; a later state mutation never alters a
+  historical snapshot.
+- A projection failure creates one terminal FAILED pre-dispatch StepAttempt
+  with frozen input/spec/executor snapshots and a null ContextSnapshot. It
+  creates no outbox or artifact exposure. The same claim transaction applies
+  the frozen step's `retry`/`continue`/`stop` policy; retry consumes attempt
+  budget, so no READY poison loop can form. The failure never claims that a
+  Worker received context.
+- State values never appear in errors or logs; only stable codes, identities,
+  versions, and sizes are recorded.
+- `AgentInvocationV1.context` is only ever written by the reviewed claim seam;
+  adapters, dispatch recovery, supervision, events, and result application
+  neither synthesize nor reinterpret it.
+
+The deprecated `createStepExecution` compatibility path rejects
+projection-enabled step configs instead of silently dispatching without the
+declared context.
+
+## Artifact projection and exposure lineage
+
+M2D extends the same `contextProjection` with explicit artifact references:
+
+```yaml
+contextProjection:
+  stateKeys:
+    - approvedBrief
+  artifacts:
+    - fromStep: research
+      name: report.json
+      includeMetadata: false
+    - fromStep: sources
+      ordinal: 0
+      includeMetadata: true
+```
+
+Rules:
+
+- `fromStep` must be a declared transitive dependency of the consumer step
+  (self, unrelated, and future steps are rejected at pipeline ingress).
+  `name` (exact Unicode equality) and `ordinal` (non-negative descriptor
+  ordinal) are optional but mutually exclusive filters; no filter selects
+  every authoritative artifact of the eligible producer result.
+- `includeMetadata` defaults false; metadata is absent from the reference (not
+  `{}`) unless explicitly requested. Empty `artifacts` arrays, duplicate
+  selectors, and over-128-selector projections are rejected at ingress.
+- Only the canonical APPLIED successful result of the dependency's current
+  successful attempt is eligible: failed, cancelled, timed-out, ignored,
+  conflicting, and superseded attempts are never projected. A dependency with
+  no eligible result resolves no artifacts; a configured filter that matches
+  nothing fails the claim deterministically
+  (`TENVYR_CTX_ARTIFACT_FILTER_NO_MATCH`), as do overlapping selectors
+  resolving the same artifact (`TENVYR_CTX_ARTIFACT_OVERLAP`), foreign
+  executions (`TENVYR_CTX_FOREIGN_ARTIFACT`), ordinal/hash mismatches
+  (`TENVYR_CTX_ARTIFACT_ORDINAL_MISMATCH`), and more than 128 resolved
+  references (`TENVYR_CTX_ARTIFACT_LIMIT`).
+- The reference carries only bounded Tenvyr-owned data: `artifactId` (Tenvyr
+  UUID), `producerStepId`, `producerAttemptId`, `descriptorOrdinal`, `name`,
+  `mediaType`, `uri`, and optionally `metadata`. The descriptor `id` is never
+  Tenvyr authority. References are sorted deterministically by producer step
+  ID, producer attempt ID, descriptor ordinal, then Artifact UUID, and count
+  toward the 65,536-byte complete-envelope bound.
+- `uri` is opaque untrusted producer data. The Orchestrator never fetches,
+  probes, resolves, normalizes, reads, or executes it, and never logs it.
+- Each projection commits an append-only `artifact_exposures` row per
+  (consumer StepAttempt, Artifact) in the same transaction as the attempt,
+  snapshot, and outbox (migration
+  `MilestoneTwoArtifactExposure1722270004000`). The word `exposure` is
+  authoritative: the edge proves Tenvyr put the reference in the attempt's
+  committed context — never that dispatch succeeded, the Worker opened the
+  URI, or the agent reasoned over the artifact. Foreign keys use NO ACTION:
+  referenced artifacts and attempts are never silently cascade-deleted.
+- No historical backfill: exposure lineage begins with M2D. AgentEvent
+  artifact evidence can never create or satisfy an exposure. There is no
+  public lineage API; internal queries can traverse consumer attempt →
+  exposure → Artifact → canonical ResultInbox → producer attempt.
+
+## Controlled state writes
+
+M2E adds an optional `stateWrites` array to a pipeline step: the frozen
+pipeline definition — never an agent-supplied patch or metadata field —
+authorizes a successful result to copy bounded values from
+`AgentResultV1.output` into ExecutionState. Agent Protocol v1 keeps its closed
+root schema: no `statePatch` field exists.
+
+```yaml
+stateWrites:
+  - key: approvedBrief
+    fromOutput: /brief
+  - key: review.status
+    fromOutput: /decision/status
+```
+
+Rules:
+
+- `key` is an exact top-level ExecutionState key with M2B key safety/length
+  rules (dots are ordinary characters). `fromOutput` is a restricted RFC 6901
+  JSON Pointer: the empty pointer, URI-fragment form, wildcards, filters,
+  recursive descent, expressions, invalid `~` escapes, and the `-` array
+  append token are rejected; array index tokens must be canonical
+  non-negative integers without leading zeros (except `0`).
+- Empty arrays, duplicate target keys, duplicate mappings, unknown fields,
+  unsafe keys, more than 128 mappings, and malformed pointers are rejected at
+  pipeline ingress. Every mapping is required: the first missing pointer or
+  non-JSON selected value rejects the whole write and applies no keys.
+- Static write-conflict rule: two steps that may run concurrently cannot write
+  the same key. Same-key writers are allowed only when the DAG proves one is
+  transitively ordered before the other; disjoint parallel writes remain
+  allowed and commute under the execution row lock.
+- Mappings apply only to the first canonical successful result while the
+  owning Execution is still RUNNING, inside the existing
+  `ResultInboxService.apply` transaction under the already-locked
+  execution entity (pure M2B patch semantics, no nested standalone mutation
+  transaction). A real change increments `executionStateVersion` exactly once
+  and updates the state timestamp; a semantic no-op changes nothing.
+- A late successful sibling result received after another step terminalized
+  the Execution remains canonical result evidence for its own attempt but
+  cannot mutate ExecutionState or create state-write evidence.
+- Mapping failure is a deterministic Tenvyr postcondition failure: the
+  canonical result payload stays durable evidence, no state key is applied,
+  the attempt/logical step follow the existing retry/`onFailure` policy, and
+  the ResultInbox row becomes APPLIED with the stable code
+  (`TENVYR_STATE_WRITE_REJECTED: TENVYR_STATE_WRITE_POINTER_MISSING` |
+  `_UNSAFE_VALUE` | `_BOUNDS` | `_INVALID_PATCH`) so transport redelivery can
+  never poison-loop. M2A artifact registration is preserved in the same
+  commit.
+- Each canonical successful result with configured `stateWrites` persists one
+  append-only `state_write_evidence` row (migration
+  `MilestoneTwoStateWriteEvidence1722270005000`): execution/attempt/inbox
+  identities, prior and resulting semantic versions, disposition
+  (`applied` | `noop` | `rejected`), the canonical mapping hash when
+  materialization succeeded, and a stable rejection code when it failed. The
+  unique `resultInboxId` makes duplicate delivery unable to create a second
+  row. Full prior/new state copies are never stored — this is mutation
+  provenance, not a replayable state history.
+- No state/output values ever reach logs or errors; only stable codes,
+  versions, hashes, and identities.
 
 ## AgentEvents and supervision
 
@@ -231,9 +516,38 @@ identity and `(stepAttemptId, sequence)` the logical order; both are unique.
 - **late** — an event arriving after a terminal result is still stored as
   append-only evidence but never touches liveness columns or terminal state.
 
-Canonical event payloads are bounded at 64 KiB, SHA-256 hashed for identity
+Canonical AgentEvent bodies are bounded at 64 KiB — the COMPLETE canonical
+event, envelope fields included, enforced identically on the Worker before
+emission and on the Orchestrator before persistence — and SHA-256 hashed for
+identity
 comparison, and stored with worker-reported `occurredAt` (audit evidence only)
 plus server-assigned `receivedAt` (the liveness authority).
+
+### Transport evidence bounds
+
+Every inbound delivery carries a durable transport identity
+(`adapter`/`scope`/`messageId`) that must fit the bounded varchar source
+columns of the AgentEvent, ResultInbox, and conflict tables. The bounds are
+encoded once in a shared helper used by both `AgentEventService` and
+`ResultInboxService`:
+
+- `adapter` is application-internal (≤ 50 chars, defensively asserted);
+- HTTP `scope` is the callback `keyId`, bounded to 255 characters by
+  transport configuration validation at startup (an oversized key ID fails
+  configuration, never every callback later);
+- HTTP `messageId` is the callback `deliveryId`, bounded to 255 characters at
+  the adapter trust boundary after HMAC verification (permanent 400, never a
+  retryable database failure);
+- Kafka `scope` is `${topic}:${partition}` — persisted unchanged when it fits
+  (≤ 255) and otherwise represented deterministically as
+  `kafka-sha256:<sha256(raw)>`, never truncated (truncation could collide on
+  the transport dedup index); partition stays part of the identity;
+- Kafka `messageId` is the broker offset (numerically small, defensively
+  asserted).
+
+A transport identity that violates the durable bounds is a permanent
+configuration/programming error, never a PostgreSQL varchar overflow
+misclassified as a retryable infrastructure failure.
 
 ### Liveness projection
 
@@ -245,9 +559,24 @@ Each applied event updates server-received liveness fields on the active
 - `progress` → `lastProgressReceivedAt`;
 - any applied event → `lastEventReceivedAt`.
 
-A `DISPATCHED` attempt becomes `RUNNING` exactly once, guarded by the status
-predicate, with `startTime` preserved if already set. Late events after a
-terminal result remain append-only evidence and never touch these columns.
+`accepted` means the Worker durably owns the invocation — the run was
+accepted/enqueued — NOT that the handler has begun executing. A concurrency-1
+Worker accepts a run and queues it behind a busy execution slot, so
+`accepted` projects `acceptedAt` but does NOT transition the attempt. Only
+events that prove actual execution activity — `heartbeat`, `progress`, `log`,
+`artifact` — transition a `DISPATCHED` attempt to `RUNNING` exactly once
+(guarded by the status predicate), with `startTime` set server-side on first
+transition and preserved afterwards.
+
+Arrival order between `completed`/`failed` and the terminal `AgentResult` is
+NOT execution authority: official Workers prioritize `AgentResult` and emit
+the terminal operational event only after the result callback completes,
+while a third-party runtime may deliver in any network order. In every case
+`AgentResult` is terminal authority and `completed`/`failed` remain
+append-only operational evidence: they never transition the attempt (they
+only set `lastEventReceivedAt`, which already satisfies acceptance) and never
+terminalize it. Late events after a terminal result remain append-only
+evidence and never touch these columns.
 
 ### Event read API
 
@@ -283,15 +612,36 @@ are validated as bounded positive integers (1 ms to 24 h).
 ### Watchdog rules
 
 `SupervisionService.evaluate` runs one bounded pass over active attempts
-(`DISPATCHED`/`RUNNING`) of agents that opted in, ordered by dispatch time and
-last heartbeat, with per-attempt error isolation:
+(`DISPATCHED`/`RUNNING`) of agents that opted in, ordered by
+(`dispatchedAt`, `id`), with per-attempt error isolation and an in-memory
+keyset cursor: each pass resumes after the last visited row and wraps at the
+end of the candidate set, so more than one batch of continuously-healthy
+older attempts can never permanently starve a later stale attempt (a restart
+resets the cursor and re-visits the oldest candidates; evaluation is
+idempotent, so revisits are harmless):
 
 - **Rule A — `AGENT_ACCEPTANCE_TIMEOUT`** (`retryable: true`): a `DISPATCHED`
-  attempt that received no event and whose persisted `dispatchedAt` plus
-  `startupGraceMs` has elapsed.
+  attempt that received NO event (`lastEventReceivedAt IS NULL`) and whose
+  persisted `dispatchedAt` plus `startupGraceMs` has elapsed. An `accepted`
+  event satisfies Rule A even when the attempt stays `DISPATCHED` while
+  queued: `accepted` proves the Worker took ownership, so an accepted run
+  waiting in the Worker queue is never acceptance-timed-out. Consequently an
+  attempt that was accepted but never produces any execution activity is not
+  supervision-recovered while it stays `DISPATCHED`: when the step carries a
+  timeout, the persisted `deadlineAt` path (Milestone-0 deadline recovery)
+  settles it; a step without a timeout has no watchdog deadline at all — the
+  queue-safety semantics deliberately refuse an `acceptedAt`-based timeout
+  that would falsely fail legitimately queued runs.
 - **Rule B — `AGENT_HEARTBEAT_STALE`** (`retryable: true`): a `RUNNING`
-  attempt whose persisted `lastHeartbeatReceivedAt` plus `staleAfterMs` has
-  elapsed.
+  attempt whose persisted staleness baseline plus `staleAfterMs` has elapsed.
+  The baseline is the last server-received heartbeat; before the first
+  heartbeat it is the persisted server-side `startTime` (the transition into
+  RUNNING). So after execution activity begins the agent has `staleAfterMs`
+  to produce its first heartbeat, later deadlines derive only from persisted
+  heartbeat receipts, and `progress`/`log`/`artifact` events remain
+  operational activity evidence but never substitute for the configured
+  heartbeat contract. A run that was accepted but is still queued
+  (`DISPATCHED`) is never heartbeat-timed-out.
 
 Both rules terminalize through the same `ResultInbox` path as persisted
 deadline recovery, producing a synthetic `timed_out` `AgentResult`, so
@@ -301,11 +651,12 @@ deduplication all hold.
 ### Determinism
 
 Synthetic results are deterministic across replicas: `completedAt` is derived
-from PERSISTED timestamps plus configured durations (dispatch time + grace, or
-last server-received heartbeat + `staleAfterMs`), never the recovery tick
-time. Every replica that times out the same attempt constructs the identical
-canonical payload and payload hash, so the inbox deduplicates instead of
-recording a conflicting payload. Server `receivedAt` timestamps are the
+from PERSISTED timestamps plus configured durations (dispatch time + grace,
+or the persisted staleness baseline — last server-received heartbeat, or
+`startTime` before the first heartbeat — plus `staleAfterMs`), never the
+recovery tick time. Every replica that times out the same attempt constructs
+the identical canonical payload and payload hash, so the inbox deduplicates
+instead of recording a conflicting payload. Server timestamps are the
 liveness clock; worker `occurredAt` is never used for deadlines.
 
 ### Recovery cycle ordering
@@ -380,11 +731,11 @@ way an external authority ends one. Retry timing stays `RETRYING` +
     `nextAttemptAt`; later reconciliation creates a NEW `StepAttempt` with a
     NEW `invocationId` (never a transport redelivery of the rejected
     attempt), bounded by `maxAttempts`; retry exhausted → execution `FAILED`.
-  The lease guard runs first: a stale worker's late non-retryable failure
-  after the lease moved to a newer claim is ignored and cannot fail the
-  attempt the newer claim owns. After the terminal failure commits, the
-  caller reconciles the affected execution and attempts Gateway projection —
-  the outbox service itself never depends on the Gateway.
+    The lease guard runs first: a stale worker's late non-retryable failure
+    after the lease moved to a newer claim is ignored and cannot fail the
+    attempt the newer claim owns. After the terminal failure commits, the
+    caller reconciles the affected execution and attempts Gateway projection —
+    the outbox service itself never depends on the Gateway.
 - Persisted attempt deadlines are recovered by `RuntimeRecoveryService` and
   produce a `TIMED_OUT` attempt outcome; process-local `setTimeout` is not
   authoritative. The synthetic timeout result uses the persisted `deadlineAt`
@@ -462,13 +813,13 @@ persisted evidence that an attempt actually existed. The pre-Milestone-0
 engine incremented `attempt` at scheduling time and then wrote `RUNNING` or a
 terminal status, so the mapping is:
 
-| Legacy `step_executions.status` | StepAttempt status | attemptNumber |
-| ------------------------------- | ------------------ | ------------- |
-| `COMPLETED`                     | `SUCCESS`          | `GREATEST(attempt, 1)` |
-| `FAILED`                        | `FAILED`           | `GREATEST(attempt, 1)` |
-| `CANCELLED`                     | `CANCELLED`        | `GREATEST(attempt, 1)` |
-| `RUNNING`                       | `RUNNING`          | `GREATEST(attempt, 1)` |
-| `PENDING`, `SKIPPED`, or any other state | — (no attempt) | — |
+| Legacy `step_executions.status`          | StepAttempt status | attemptNumber          |
+| ---------------------------------------- | ------------------ | ---------------------- |
+| `COMPLETED`                              | `SUCCESS`          | `GREATEST(attempt, 1)` |
+| `FAILED`                                 | `FAILED`           | `GREATEST(attempt, 1)` |
+| `CANCELLED`                              | `CANCELLED`        | `GREATEST(attempt, 1)` |
+| `RUNNING`                                | `RUNNING`          | `GREATEST(attempt, 1)` |
+| `PENDING`, `SKIPPED`, or any other state | — (no attempt)     | —                      |
 
 `PENDING` rows — even with an incremented legacy counter — and `SKIPPED` rows
 are scheduling state only: their dispatch outcome is ambiguous or never began,

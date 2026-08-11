@@ -1,3 +1,6 @@
+import type { ContextProjection } from "./context-snapshot";
+import type { StateWriteMapping } from "./state-writes";
+
 export type FailurePolicy = "continue" | "stop" | "retry";
 
 export type ConditionLiteral = string | number | boolean | null;
@@ -28,6 +31,8 @@ export type PipelineStepConfig = {
   retries?: number;
   onFailure?: FailurePolicy;
   metadata?: Record<string, unknown>;
+  contextProjection?: ContextProjection;
+  stateWrites?: StateWriteMapping[];
 };
 
 export type PipelineDefinition = {

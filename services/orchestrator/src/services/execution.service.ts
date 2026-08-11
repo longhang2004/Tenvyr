@@ -1,5 +1,5 @@
 import { Injectable, Inject } from "@nestjs/common";
-import { DataSource, Repository } from "typeorm";
+import { DataSource, type EntityManager, Repository } from "typeorm";
 import { ExecutionEntity, ExecutionStatus } from "../entities/execution.entity";
 import {
   LogicalStepEntity,
@@ -14,6 +14,16 @@ import {
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { PipelineEntity } from "../entities/pipeline.entity";
 import type { PipelineStepConfig } from "../domain/pipeline-definition";
+import {
+  ContextProjectionError,
+  materializeContextSnapshot,
+  type ArtifactContextReference,
+  type TenvyrContextEnvelope,
+} from "../domain/context-snapshot";
+import type { ExecutionState } from "../domain/execution-state";
+import { ArtifactExposureEntity } from "../entities/artifact-exposure.entity";
+import { ArtifactEntity } from "../entities/artifact.entity";
+import { ArtifactProjectionResolver } from "./artifact-projection.resolver";
 import { sha256Json } from "../domain/canonical-json";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
 
@@ -51,6 +61,7 @@ export type StepSchedulingClaim =
       attempt: StepAttemptEntity;
     }
   | { disposition: "skipped"; logicalStep: LogicalStepEntity }
+  | { disposition: "projection_failed" }
   | null;
 
 @Injectable()
@@ -194,6 +205,68 @@ export class ExecutionService {
       logicalStep.endTime = null;
       await logicalRepository.save(logicalStep);
 
+      // M2C/M2D: the execution lock is already held, so the state read below
+      // is race-free. The immutable Tenvyr context envelope (state projection
+      // plus resolved artifact references) is materialized here and persisted
+      // on the attempt AND in the outbox invocation atomically; dispatch and
+      // recovery never recompute it. M2D exposure edges commit in the same
+      // transaction. A projection failure becomes a durable FAILED attempt
+      // with no outbox/exposure, then follows the frozen step's retry/continue/
+      // stop policy in this same transaction. This records the consumed retry
+      // budget without pretending any Worker received context.
+      let contextSnapshot: TenvyrContextEnvelope | null = null;
+      let exposureArtifacts: ArtifactEntity[] = [];
+      if (stepConfig.contextProjection) {
+        try {
+          const projected = await this.materializeProjectedContext(
+            manager,
+            execution,
+            stepConfig,
+          );
+          contextSnapshot = projected.envelope;
+          exposureArtifacts = projected.artifacts;
+        } catch (error) {
+          if (!(error instanceof ContextProjectionError)) throw error;
+
+          const failure = `Context projection failed: ${error.code}`;
+          await attemptRepository.save(
+            attemptRepository.create({
+              executionId,
+              logicalStepId: logicalStep.id,
+              planRevisionId: revision.id,
+              attemptNumber,
+              invocationId: `${logicalStep.id}:${attemptNumber}`,
+              frozenSpecHash,
+              inputSnapshot,
+              contextSnapshot: null,
+              executorSnapshot: { agent: stepConfig.agent },
+              status: "FAILED",
+              deadlineAt,
+              terminalAt: now,
+              error: failure,
+              terminationReason: failure,
+            }),
+          );
+
+          const retry =
+            stepConfig.onFailure === "retry" && attemptNumber < maxAttempts;
+          logicalStep.status = retry ? "RETRYING" : "FAILED";
+          logicalStep.error = failure;
+          logicalStep.endTime = retry ? null : now;
+          logicalStep.nextAttemptAt = retry ? now : null;
+          await logicalRepository.save(logicalStep);
+
+          if (!retry && stepConfig.onFailure !== "continue") {
+            execution.status = "FAILED";
+            execution.endTime = now;
+            execution.terminationReason = failure;
+            execution.output = { failedStep: stepConfig.id, error: failure };
+            await manager.getRepository(ExecutionEntity).save(execution);
+          }
+          return { disposition: "projection_failed" };
+        }
+      }
+
       const attempt = await attemptRepository.save(
         attemptRepository.create({
           executionId,
@@ -203,12 +276,30 @@ export class ExecutionService {
           invocationId: `${logicalStep.id}:${attemptNumber}`,
           frozenSpecHash,
           inputSnapshot,
-          contextSnapshot: null,
+          contextSnapshot,
           executorSnapshot: { agent: stepConfig.agent },
           status: "CREATED",
           deadlineAt,
         }),
       );
+
+      // M2D: append-only exposure edges commit with the attempt; a failure
+      // here rolls back the attempt, snapshot, and outbox together.
+      if (exposureArtifacts.length > 0) {
+        await manager
+          .getRepository(ArtifactExposureEntity)
+          .createQueryBuilder()
+          .insert()
+          .into(ArtifactExposureEntity)
+          .values(
+            exposureArtifacts.map((artifact) => ({
+              stepAttemptId: attempt.id,
+              artifactId: artifact.id,
+            })),
+          )
+          .orIgnore()
+          .execute();
+      }
       const createdAt = now.toISOString();
       await outboxRepository.save(
         outboxRepository.create({
@@ -224,6 +315,7 @@ export class ExecutionService {
             attempt: attemptNumber,
             createdAt,
             deadlineAt: deadlineAt?.toISOString(),
+            ...(contextSnapshot ? { context: contextSnapshot } : {}),
             trace: {
               traceId: executionId,
               correlationId: attempt.invocationId,
@@ -234,6 +326,44 @@ export class ExecutionService {
       );
       return { disposition: "claimed", logicalStep, attempt };
     });
+  }
+
+  /**
+   * M2C/M2D: build the immutable context envelope under the already-held
+   * execution lock. State values are selected from the authoritative semantic
+   * state version; artifact references are resolved from the canonical
+   * APPLIED results of declared dependency steps (same-execution only). The
+   * complete envelope is bounded at 65,536 canonical UTF-8 bytes. Returns the
+   * envelope plus the authoritative Artifact entities for exposure edges.
+   */
+  private async materializeProjectedContext(
+    manager: EntityManager,
+    execution: ExecutionEntity,
+    stepConfig: PipelineStepConfig,
+  ): Promise<{
+    envelope: TenvyrContextEnvelope;
+    artifacts: ArtifactEntity[];
+  }> {
+    const projection = stepConfig.contextProjection!;
+    let references: ArtifactContextReference[] = [];
+    let artifacts: ArtifactEntity[] = [];
+    if (projection.artifacts && projection.artifacts.length > 0) {
+      const resolved = await new ArtifactProjectionResolver(manager).resolve(
+        execution.id,
+        projection.artifacts,
+      );
+      references = resolved.references;
+      artifacts = resolved.artifacts;
+    }
+    return {
+      envelope: materializeContextSnapshot(
+        projection,
+        (execution.executionState ?? {}) as ExecutionState,
+        execution.executionStateVersion,
+        references,
+      ),
+      artifacts,
+    };
   }
 
   async createExecution(
@@ -581,7 +711,7 @@ export class ExecutionService {
           .where('"stepAttemptId" IN (:...attemptIds)', {
             attemptIds: attempts.map((attempt) => attempt.id),
           })
-          .andWhere('status IN (:...dispatchable)', {
+          .andWhere("status IN (:...dispatchable)", {
             dispatchable: ["PENDING", "LEASED", "DISPATCHED"],
           })
           .execute();
@@ -618,6 +748,14 @@ export class ExecutionService {
     stepConfig?: PipelineStepConfig,
     deadlineAt?: Date,
   ): Promise<StepExecutionEntity> {
+    // M2C: the deprecated compatibility path never materializes a
+    // ContextSnapshot. A projection-enabled step config is rejected instead
+    // of silently dispatching without its declared context.
+    if (stepConfig?.contextProjection) {
+      throw new Error(
+        "createStepExecution does not support contextProjection; use claimRunnableStep",
+      );
+    }
     return this.dataSource.transaction(async (manager) => {
       const logicalRepository = manager.getRepository(LogicalStepEntity);
       const attemptRepository = manager.getRepository(StepAttemptEntity);

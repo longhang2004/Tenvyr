@@ -4,13 +4,17 @@ import { AgentAdapterError } from "../agent-adapters/agent-adapter.errors";
 import type { AgentAdapter } from "../agent-adapters/agent-adapter.types";
 import { PipelineService } from "./pipeline.service";
 import { ExecutionService } from "./execution.service";
-import { ExecutionEntity, type ExecutionStatus } from "../entities/execution.entity";
+import {
+  ExecutionEntity,
+  type ExecutionStatus,
+} from "../entities/execution.entity";
 import {
   LogicalStepEntity,
   type StepExecutionEntity,
   type StepStatus,
 } from "../entities/step-execution.entity";
 import type { PipelineStepConfig } from "../domain/pipeline-definition";
+import { ContextProjectionError } from "../domain/context-snapshot";
 import { DispatchOutboxService } from "./dispatch-outbox.service";
 
 type TemplateContext = {
@@ -102,10 +106,7 @@ export class EngineService {
       await this.notifyGatewayUpdate(executionId);
     } else if (options.projectTerminal) {
       const execution = await this.executionService.getExecution(executionId);
-      if (
-        execution &&
-        TERMINAL_EXECUTION_STATUSES.includes(execution.status)
-      ) {
+      if (execution && TERMINAL_EXECUTION_STATUSES.includes(execution.status)) {
         await this.notifyGatewayUpdate(executionId);
       }
     }
@@ -364,7 +365,7 @@ export class EngineService {
       const deadlineAt = timeoutMs
         ? new Date(Date.now() + timeoutMs)
         : undefined;
-      const claim = await this.executionService.claimRunnableStep(
+      const claim = await this.claimWithProjectionFailure(
         execution.id,
         config,
         resolvedInput,
@@ -372,6 +373,13 @@ export class EngineService {
         deadlineAt,
       );
       if (!claim) continue; // a concurrent replica won this scheduling decision
+      if (claim.disposition === "projection_failed") {
+        // The claim transaction already persisted the failed pre-dispatch
+        // attempt and applied retry/continue/stop. Reconcile again so a retry
+        // or a dependent of an onFailure:continue step can advance.
+        progressed = true;
+        continue;
+      }
       progressed = true;
       if (claim.disposition === "skipped") {
         console.log(
@@ -411,9 +419,8 @@ export class EngineService {
     stepConfig: PipelineStepConfig,
   ): Promise<string | null> {
     try {
-      const disposition = await this.dispatchOutbox.dispatchAttempt(
-        stepAttemptId,
-      );
+      const disposition =
+        await this.dispatchOutbox.dispatchAttempt(stepAttemptId);
       if (disposition.outcome === "terminal_failure") {
         console.error("Non-retryable dispatch failure committed", {
           executionId: disposition.executionId,
@@ -440,6 +447,40 @@ export class EngineService {
       );
     }
     return null;
+  }
+
+  /**
+   * Claim with M2C deterministic projection-failure routing. The normal claim
+   * path persists a FAILED pre-dispatch attempt and applies the frozen step's
+   * retry/continue/stop policy atomically without an outbox. The catch remains
+   * a defensive fallback for a ContextProjectionError raised outside that
+   * reviewed transaction path; any other error propagates.
+   */
+  private async claimWithProjectionFailure(
+    executionId: string,
+    stepConfig: PipelineStepConfig,
+    resolvedInput: unknown,
+    maxAttempts: number,
+    deadlineAt?: Date,
+  ) {
+    try {
+      return await this.executionService.claimRunnableStep(
+        executionId,
+        stepConfig,
+        resolvedInput,
+        maxAttempts,
+        deadlineAt,
+      );
+    } catch (err) {
+      if (err instanceof ContextProjectionError) {
+        await this.failExecution(executionId, {
+          failedStep: stepConfig.id,
+          error: `Context projection failed: ${err.code}`,
+        });
+        return { disposition: "projection_failed" as const };
+      }
+      throw err;
+    }
   }
 
   private async handleFailurePolicy(
@@ -601,7 +642,7 @@ export class EngineService {
       return true;
     }
 
-    const claim = await this.executionService.claimRunnableStep(
+    const claim = await this.claimWithProjectionFailure(
       execution.id,
       stepConfig,
       resolvedInput,
@@ -609,6 +650,9 @@ export class EngineService {
       deadlineAt,
     );
     if (!claim) return false;
+    if (claim.disposition === "projection_failed") {
+      return true; // the execution already FAILED through the deterministic policy
+    }
     if (claim.disposition === "skipped") {
       console.log(
         `Step [${stepConfig.id}] condition evaluated to false. Skipping step.`,

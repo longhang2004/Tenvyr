@@ -35,6 +35,42 @@ const execute = <TInput, TOutput>(
   });
 
 describe("agent execution", () => {
+  it("exposes the Tenvyr context envelope to the handler via invocation.context (M2C)", async () => {
+    const tenvyrEnvelope = {
+      tenvyr: {
+        schemaVersion: 1,
+        executionState: { version: 7, values: { approvedBrief: "x" } },
+        artifacts: [],
+      },
+    };
+    const agent = defineAgent({
+      name: "echo-agent",
+      async execute(context) {
+        const seen = (context.invocation as AgentInvocationV1).context;
+        expect(seen).toEqual(tenvyrEnvelope);
+        return { output: { sawContext: seen !== undefined } };
+      },
+    });
+
+    const withContext: AgentInvocationV1 = {
+      ...invocation,
+      context: tenvyrEnvelope,
+    };
+    await expect(
+      executeAgent({
+        agent,
+        invocation: withContext,
+        runId: "run-1",
+        timeoutMs: 1000,
+        logger: noOpLogger,
+        now: () => Date.parse("2026-07-26T00:00:01.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      status: "succeeded",
+      output: { output: { sawContext: true } },
+    });
+  });
+
   it("maps a direct object containing output as raw output", async () => {
     const agent = defineAgent({
       name: "echo-agent",

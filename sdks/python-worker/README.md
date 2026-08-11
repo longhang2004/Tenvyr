@@ -58,8 +58,12 @@ with zero behavioral change.
 
 The Worker runtime emits lifecycle events automatically:
 
-- `accepted` at sequence `0` when the run is accepted;
-- `heartbeat` on the configured interval while the handler is executing;
+- `accepted` at sequence `0` when the run is accepted — this means the Worker
+  owns the invocation, NOT that the handler has started. A run accepted while
+  the execution slot is busy sits in the Worker queue and emits nothing
+  further until it actually executes;
+- `heartbeat` on the configured interval while the handler is executing —
+  queued runs never emit heartbeats;
 - `completed` or `failed` after the terminal `AgentResult` callback completes,
   so event delivery can never prevent or delay the terminal result.
 
@@ -71,12 +75,21 @@ restricted to `progress`, `log`, or `artifact`; system-owned types
 
 Per run, `eventId` is deterministic (`{invocationId}:{sequence}`) with a
 monotonic sequence counter, and each event body is built exactly once and
-reused across delivery retries. Payloads must be JSON objects within the
-canonical 64 KiB limit.
+reused across delivery retries. The generated identity is validated against
+the canonical AgentEventV1 bounds (`eventId <= 255` characters,
+`sequence <= 2147483647`) before any delivery is scheduled — a long
+invocation ID or exhausted sequence rejects the event locally, never sending
+an identity the Orchestrator would permanently reject. Payloads must be JSON
+objects, and the COMPLETE canonical event body (envelope fields included)
+must fit within the 64 KiB limit: an oversized event is rejected locally,
+before any delivery callback is scheduled, so the Worker never emits an event
+the Orchestrator would permanently reject.
 
 Events are delivered through the same signed-body callback machinery as
-results: identical `X-AgentWeave-*` HMAC headers, a per-delivery `deliveryId`,
-a stable prebuilt body on every retry, and the same bounded retry policy.
+results: identical X-AgentWeave-Key-Id/X-AgentWeave-Timestamp/
+X-AgentWeave-Delivery-Id/X-AgentWeave-Signature HMAC headers, a
+per-delivery `deliveryId`, a stable prebuilt body on every retry, and the
+same bounded retry policy.
 Delivery failures are logged without secrets, routed to
 `on_callback_delivery_failed`, and never raise into the run. Callback state is
 worker-local and process-local — a restart forgets undelivered events; the

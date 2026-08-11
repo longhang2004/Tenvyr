@@ -97,11 +97,23 @@ describe("HttpAgentCallbackController", () => {
       400,
     ],
     [
-      "event handler failure",
+      "event handler failure (transient)",
       new AgentAdapterError("EVENT_HANDLER_FAILED", "http", "db down", {
         retryable: true,
       }),
       503,
+    ],
+    [
+      "event handler failure (permanent, e.g. oversized payload)",
+      new AgentAdapterError(
+        "EVENT_HANDLER_FAILED",
+        "http",
+        "payload too large",
+        {
+          retryable: false,
+        },
+      ),
+      400,
     ],
     [
       "invalid result contract",

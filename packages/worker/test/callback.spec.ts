@@ -8,6 +8,7 @@ import { createCallbackSignature } from "../src/callback/callback-signer";
 import {
   classifyCallbackResponse,
   deliverCallback,
+  deliverSignedBody,
   type CallbackDeliveryConfig,
 } from "../src/callback/callback-delivery";
 import { noOpLogger } from "../src/observability/safe-logger";
@@ -187,6 +188,105 @@ describe("callback delivery", () => {
         .digest("hex")}`;
       expect(request.headers["x-agentweave-signature"]).toBe(expected);
     }
+  });
+
+  it("retries an EVENT callback on 503 (transient) up to max attempts", async () => {
+    // The Orchestrator returns 503 for a retryable event application failure
+    // (e.g. a transient database error): the Worker must keep retrying.
+    statuses = [503, 503, 503];
+    const rawBody = Buffer.from(
+      JSON.stringify({
+        schemaVersion: "1",
+        eventId: "invocation-1:0",
+        invocationId: "invocation-1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 0,
+        type: "accepted",
+        occurredAt: "2026-07-26T00:00:00.000Z",
+        payload: { acceptedAt: "2026-07-26T00:00:00.000Z" },
+        trace: { traceId: "trace-1", correlationId: "invocation-1" },
+        metadata: { runId: "run-1" },
+      }),
+      "utf8",
+    );
+
+    const outcome = await deliverSignedBody(
+      {
+        agent: "echo-agent",
+        runId: "run-1",
+        invocationId: "invocation-1",
+        subject: "Agent event",
+        rawBody,
+        callbackUrl,
+        keyId: "callback-v1",
+        secret: "callback-secret",
+        config,
+        logger: noOpLogger,
+      },
+      { random: () => 0.5, sleep: async () => undefined },
+    );
+
+    expect(outcome).toEqual({
+      delivered: false,
+      deliveryId: expect.any(String),
+      attempts: config.maxAttempts,
+      reason: "retryable-http-status",
+      httpStatus: 503,
+    });
+    expect(requests).toHaveLength(config.maxAttempts);
+    for (const request of requests) {
+      expect(request.body.equals(rawBody)).toBe(true);
+    }
+  });
+
+  it("does NOT retry an EVENT callback on 400 (permanent rejection)", async () => {
+    // The Orchestrator returns 400 for a permanent event application failure
+    // (e.g. an oversized canonical payload): the Worker must drop the event,
+    // not retry it forever.
+    statuses = [400];
+    const rawBody = Buffer.from(
+      JSON.stringify({
+        schemaVersion: "1",
+        eventId: "invocation-1:1",
+        invocationId: "invocation-1",
+        executionId: "execution-1",
+        stepExecutionId: "step-execution-1",
+        sequence: 1,
+        type: "progress",
+        occurredAt: "2026-07-26T00:00:01.000Z",
+        payload: { stage: "indexing" },
+        trace: { traceId: "trace-1", correlationId: "invocation-1" },
+        metadata: { runId: "run-1" },
+      }),
+      "utf8",
+    );
+
+    const outcome = await deliverSignedBody(
+      {
+        agent: "echo-agent",
+        runId: "run-1",
+        invocationId: "invocation-1",
+        subject: "Agent event",
+        rawBody,
+        callbackUrl,
+        keyId: "callback-v1",
+        secret: "callback-secret",
+        config,
+        logger: noOpLogger,
+      },
+      { random: () => 0.5, sleep: async () => undefined },
+    );
+
+    expect(outcome).toEqual({
+      delivered: false,
+      deliveryId: expect.any(String),
+      attempts: 1,
+      reason: "non-retryable-http-status",
+      httpStatus: 400,
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body.equals(rawBody)).toBe(true);
   });
 
   it("does not retry an accepted callback when the user logger throws", async () => {

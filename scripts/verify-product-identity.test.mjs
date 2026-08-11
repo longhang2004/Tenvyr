@@ -416,6 +416,265 @@ test("Python comments cannot satisfy required wire-header constants", () => {
   );
 });
 
+test("Kafka v1 event-topic allowlist is exact: near misses, invented suffixes, and wrong paths fail", () => {
+  const audit = auditEntries(
+    [
+      {
+        path: "docs/architecture/transports/kafka-runtime-v1.md",
+        text: `${oldLower}.agent.<agent>.event`,
+      },
+      {
+        path: "docs/architecture/transports/kafka-runtime-v1.md",
+        text: `${oldLower}.agent.<agent>.result`,
+      },
+      {
+        path: "docs/architecture/transports/kafka-runtime-v1.md",
+        text: `${oldLower}.agent.<agent>.events`,
+      },
+      {
+        path: "docs/architecture/transports/kafka-runtime-v1.md",
+        text: `${oldLower}.agent.<agent>.evnt`,
+      },
+      {
+        path: "docs/architecture/transports/copied-kafka.md",
+        text: `${oldLower}.agent.<agent>.event`,
+      },
+      {
+        path: "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+        text: `\`${oldLower}.agent.\${agent}.event\``,
+      },
+      {
+        path: "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+        text: `\`${oldLower}.agent.\${agent}.events\``,
+      },
+      {
+        path: "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+        text: `"${oldLower}.agent.code-reviewer.event"`,
+      },
+      {
+        path: "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+        text: `"${oldLower}.agent.code-reviewer.event."`,
+      },
+      {
+        path: "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+        text: `"${oldLower}.agent.code-reviewer.events"`,
+      },
+      {
+        path: "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+        text: `"${oldLower}.agent.other.event"`,
+      },
+      {
+        path: "services/orchestrator/src/domain/transport-identity.spec.ts",
+        text: `topic: "${oldLower}.agent.reader.event"`,
+      },
+      {
+        path: "services/orchestrator/src/domain/transport-identity.spec.ts",
+        text: `topic: "${oldLower}.agent.reader.other"`,
+      },
+      {
+        path: "services/orchestrator/src/domain/transport-identity.spec.ts",
+        text: `const longTopic = \`${oldLower}.agent.\${"t".repeat(260)}\`;`,
+      },
+      {
+        path: "src/copied-identity.spec.ts",
+        text: `topic: "${oldLower}.agent.reader.event"`,
+      },
+      {
+        path: "src/copied-identity.spec.ts",
+        text: `const longTopic = \`${oldLower}.agent.\${"t".repeat(260)}\`;`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    [
+      null,
+      "kafka-runtime-v1",
+      "kafka-runtime-v1",
+      null,
+      null,
+      "kafka-runtime-v1",
+      null,
+      null,
+      null,
+      "kafka-runtime-v1",
+      null,
+      "kafka-runtime-v1",
+      null,
+      "kafka-runtime-v1",
+      null,
+      null,
+    ],
+  );
+});
+
+test("postgres guard lines are exact deployment compatibility at the disposable-database spec", () => {
+  const path =
+    "services/orchestrator/src/database/postgres.integration.spec.ts";
+  const audit = auditEntries(
+    [
+      {
+        path,
+        text: `const configured = process.env.POSTGRES_DB || "${oldLower}";`,
+      },
+      {
+        path,
+        text: `(process.env.POSTGRES_DB || "${oldLower}").toLowerCase() ===`,
+      },
+      {
+        path,
+        text: `const configured = process.env.POSTGRES_DB || "${oldLower}"; // trailing`,
+      },
+      {
+        path,
+        text: `const configured = process.env.POSTGRES_DB || "${oldLower} ";`,
+      },
+      {
+        path: "src/copied-spec.ts",
+        text: `const configured = process.env.POSTGRES_DB || "${oldLower}";`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    ["persistent-deployment", "persistent-deployment", null, null, null],
+  );
+});
+
+test("required topic-template rules fail when the topic construction drifts", () => {
+  for (const id of [
+    "orchestrator-result-topic-template",
+    "orchestrator-event-topic-template",
+  ]) {
+    const rule = requiredLegacyIdentifiers.find(
+      (candidate) => candidate.id === id,
+    );
+    assert(rule, id);
+    assert.deepEqual(
+      auditEntries([{ path: rule.path, text: rule.fixture }], [rule]).missing,
+      [],
+      id,
+    );
+    const mutated = rule.fixture.replace(new RegExp(oldLower, "g"), "renamed");
+    assert.deepEqual(
+      auditEntries([{ path: rule.path, text: mutated }], [rule]).missing,
+      [id],
+      id,
+    );
+  }
+});
+
+test("Worker event-delivery tests allow only the four exact v1 header names", () => {
+  const audit = auditEntries(
+    [
+      {
+        path: "packages/worker/test/events.spec.ts",
+        text: [
+          `request.headers["x-${oldLower}-key-id"]`,
+          `request.headers["x-${oldLower}-timestamp"]`,
+          `request.headers["x-${oldLower}-delivery-id"]`,
+          `request.headers["x-${oldLower}-signature"]`,
+          `request.headers["x-${oldLower}-extra"]`,
+          `header.startsWith("x-${oldLower}-")`,
+        ].join("\n"),
+      },
+      {
+        path: "sdks/python-worker/tests/test_events.py",
+        text: [
+          `headers["x-${oldLower}-key-id"]`,
+          `headers["x-${oldLower}-timestamp"]`,
+          `headers["x-${oldLower}-delivery-id"]`,
+          `headers["x-${oldLower}-signature"]`,
+          `key.startswith("x-${oldLower}-")`,
+          `headers["x-${oldLower}-extra"]`,
+        ].join("\n"),
+      },
+      {
+        path: "sdks/python-worker/tests/copied_events.py",
+        text: `headers["x-${oldLower}-key-id"]`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    [
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      null,
+      null,
+      null,
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      null,
+      null,
+    ],
+  );
+});
+
+test("packaged Worker docs accept only the four exact wire headers at exact paths", () => {
+  const audit = auditEntries(
+    [
+      {
+        path: "packages/worker/README.md",
+        text: [
+          `X-${oldName}-Key-Id`,
+          `X-${oldName}-Timestamp`,
+          `X-${oldName}-Delivery-Id`,
+          `X-${oldName}-Signature`,
+          `X-${oldName}-Extra`,
+          `\`X-${oldName}-*\``,
+        ].join("\n"),
+      },
+      {
+        path: "sdks/python-worker/README.md",
+        text: [
+          `X-${oldName}-Key-Id`,
+          `X-${oldName}-Timestamp`,
+          `X-${oldName}-Delivery-Id`,
+          `X-${oldName}-Signature`,
+        ].join("\n"),
+      },
+      {
+        path: "sdks/python-worker/CONFORMANCE.md",
+        text: `X-${oldName}-Key-Id`,
+      },
+      {
+        path: "packages/worker/docs/README.md",
+        text: `X-${oldName}-Key-Id`,
+      },
+    ],
+    [],
+  );
+
+  assert.deepEqual(
+    audit.findings.map(({ category }) => category),
+    [
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      null,
+      null,
+      null,
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+      "wire-protocol-v1",
+    ],
+  );
+});
+
 test("missing required identifiers fail independently of rename violations", () => {
   const required = [
     {
@@ -511,10 +770,19 @@ test("required TypeScript identifiers tolerate quote and multiline formatting", 
       text: [
         "return Array.from(",
         "  new Set([",
-        `    ...agents.map((agent) => \`${oldLower}.agent.\${agent}.result\`),`,
+        `    ...this.agentNames().map((agent) => \`${oldLower}.agent.\${agent}.result\`),`,
         "    ...explicitTopics,",
         "  ]),",
         ");",
+      ].join("\n"),
+    },
+    {
+      id: "orchestrator-event-topic-template",
+      text: [
+        "return [",
+        `  ...this.agentNames().map((agent) => \`${oldLower}.agent.\${agent}.event\`),`,
+        "  ...configured,",
+        "];",
       ].join("\n"),
     },
   ];
@@ -593,20 +861,35 @@ test("required TypeScript identifiers reject comment and string spoofs", () => {
   const resultTopics = [
     "return Array.from(",
     "  new Set([",
-    `    ...agents.map((agent) => \`${oldLower}.agent.\${agent}.result\`),`,
+    `    ...this.agentNames().map((agent) => \`${oldLower}.agent.\${agent}.result\`),`,
     "    ...explicitTopics,",
     "  ]),",
     ");",
   ].join("\n");
-  for (const text of [
-    `/*\n${resultTopics}\n*/`,
-    `const spoof = ${JSON.stringify(resultTopics)};`,
+  const eventTopicsRule = requiredLegacyIdentifiers.find(
+    ({ id }) => id === "orchestrator-event-topic-template",
+  );
+  assert(eventTopicsRule);
+  const eventTopics = [
+    "return [",
+    `  ...this.agentNames().map((agent) => \`${oldLower}.agent.\${agent}.event\`),`,
+    "  ...configured,",
+    "];",
+  ].join("\n");
+  for (const [rule, fixture] of [
+    [resultTopicsRule, resultTopics],
+    [eventTopicsRule, eventTopics],
   ]) {
-    assert.deepEqual(
-      auditEntries([{ path: resultTopicsRule.path, text }], [resultTopicsRule])
-        .missing,
-      [resultTopicsRule.id],
-    );
+    for (const text of [
+      `/*\n${fixture}\n*/`,
+      `const spoof = ${JSON.stringify(fixture)};`,
+    ]) {
+      assert.deepEqual(
+        auditEntries([{ path: rule.path, text }], [rule]).missing,
+        [rule.id],
+        `${rule.id}: ${text}`,
+      );
+    }
   }
 });
 

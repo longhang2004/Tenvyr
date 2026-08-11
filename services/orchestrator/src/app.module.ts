@@ -24,6 +24,7 @@ import { RuntimeRecoveryService } from "./services/runtime-recovery.service";
 import { AgentEventService } from "./services/agent-event.service";
 import { SupervisionConfigService } from "./services/supervision-config.service";
 import { SupervisionService } from "./services/supervision.service";
+import { ExecutionStateService } from "./services/execution-state.service";
 
 @Module({
   imports: [],
@@ -56,6 +57,7 @@ import { SupervisionService } from "./services/supervision.service";
     AgentAdapterLifecycle,
     DispatchOutboxService,
     RuntimeRecoveryService,
+    ExecutionStateService,
   ],
   exports: [
     ...databaseProviders,
@@ -68,6 +70,7 @@ import { SupervisionService } from "./services/supervision.service";
     AgentEventService,
     ResultInboxService,
     DispatchOutboxService,
+    ExecutionStateService,
     AGENT_ADAPTER,
   ],
 })

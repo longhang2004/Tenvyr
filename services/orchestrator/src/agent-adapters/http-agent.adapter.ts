@@ -287,6 +287,22 @@ export class HttpAgentAdapter implements AgentAdapter {
       maxSkewSeconds: settings.callbackMaxSkewSeconds,
       nowMs: request.nowMs,
     });
+    // The delivery id is authenticated (it is covered by the HMAC) but
+    // unbounded by the protocol, and it is persisted into varchar(255)
+    // transport columns on both the event and result paths. Bound it at this
+    // trust boundary so an authenticated-but-malformed value is a permanent
+    // 400 rejection, never a DB overflow misclassified as retryable
+    // infrastructure failure.
+    if ((request.deliveryId as string).length > 255) {
+      throw new AgentAdapterError(
+        "CALLBACK_INVALID",
+        this.kind,
+        "HTTP callback delivery id exceeds the durable 255-character bound",
+        {
+          retryable: false,
+        },
+      );
+    }
     if (!this.handlers) {
       throw new AgentAdapterError(
         "CALLBACK_HANDLER_UNAVAILABLE",

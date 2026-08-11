@@ -232,6 +232,135 @@ describe("ExecutionService attempt history", () => {
     );
   });
 
+  it("materializes the Tenvyr context envelope on the attempt and in the outbox invocation atomically (M2C)", async () => {
+    const candidate = {
+      id: "logical-1",
+      executionId: "execution-1",
+      stepId: "review",
+      agent: "reviewer",
+      status: "READY",
+      attempt: 0,
+      maxAttempts: 1,
+    } as any;
+    const candidateLock = {
+      setLock: jest.fn().mockReturnThis(),
+      setOnLocked: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(candidate),
+    };
+    const logicalRepository = {
+      createQueryBuilder: jest.fn(() => candidateLock),
+      find: jest.fn().mockResolvedValue([candidate]),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const executionRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: "execution-1",
+          input: { repository: "tenvyr" },
+          status: "RUNNING",
+          activePlanRevisionId: "revision-1",
+          executionState: { brief: { ok: true }, "other.key": 2 },
+          executionStateVersion: 3,
+        }),
+      })),
+    };
+    const attemptRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      })),
+      create: jest.fn((value) => value),
+      save: jest.fn().mockResolvedValue({
+        id: "attempt-1",
+        invocationId: "logical-1:1",
+      }),
+    };
+    const revisionRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: "revision-1",
+        plan: {
+          steps: [
+            {
+              id: "review",
+              agent: "reviewer",
+              input: { safe: true },
+              contextProjection: { stateKeys: ["other.key", "brief"] },
+            },
+          ],
+        },
+      }),
+    };
+    const outboxRepository = {
+      create: jest.fn((value) => value),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    const manager = {
+      getRepository: jest.fn((entity) => {
+        if (entity === LogicalStepEntity) return logicalRepository;
+        if (entity === ExecutionEntity) return executionRepository;
+        if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
+        if (entity === StepAttemptEntity) return attemptRepository;
+        if (entity === DispatchOutboxEntity) return outboxRepository;
+        throw new Error("unexpected repository");
+      }),
+    };
+    const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
+    const service = new ExecutionService(
+      {} as any,
+      logicalRepository as any,
+      attemptRepository as any,
+      revisionRepository as any,
+      dataSource as any,
+    );
+
+    const claim = await service.claimRunnableStep(
+      "execution-1",
+      {
+        id: "review",
+        agent: "reviewer",
+        input: { safe: true },
+        contextProjection: { stateKeys: ["other.key", "brief"] },
+      },
+      { safe: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("claimed");
+
+    const expectedEnvelope = {
+      tenvyr: {
+        schemaVersion: 1,
+        executionState: {
+          version: 3,
+          values: { brief: { ok: true }, "other.key": 2 },
+        },
+        artifacts: [],
+      },
+    };
+    // Canonical lexicographic values order, independent of selector order.
+    expect(Object.keys(expectedEnvelope.tenvyr.executionState.values)).toEqual([
+      "brief",
+      "other.key",
+    ]);
+    expect(attemptRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextSnapshot: expectedEnvelope,
+        status: "CREATED",
+      }),
+    );
+    expect(outboxRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invocation: expect.objectContaining({
+          context: expectedEnvelope,
+        }),
+      }),
+    );
+  });
+
   it("freezes the gate decision when a condition evaluates false and skips the step", async () => {
     const candidate = {
       id: "logical-1",
@@ -418,9 +547,7 @@ describe("ExecutionService attempt history", () => {
     expect(candidate.attempt).toBe(2);
     // The retry keeps the execution-defining spec that the first claim froze.
     expect(candidate.frozenSpecHash).toBe(frozen);
-    expect(candidate.frozenAt?.toISOString()).toBe(
-      "2026-08-10T00:00:00.000Z",
-    );
+    expect(candidate.frozenAt?.toISOString()).toBe("2026-08-10T00:00:00.000Z");
     expect(attemptRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
         attemptNumber: 2,
@@ -570,7 +697,12 @@ describe("ExecutionService cancellation and state machine", () => {
       {} as any,
       dataSource as any,
     );
-    return { service, attemptRepository, logicalRepository, executionRepository };
+    return {
+      service,
+      attemptRepository,
+      logicalRepository,
+      executionRepository,
+    };
   };
 
   it("makes repeated cancellation idempotent", async () => {
@@ -603,8 +735,12 @@ describe("ExecutionService cancellation and state machine", () => {
         eligibleAt: null,
       },
     ];
-    const { service, attemptRepository, logicalRepository, executionRepository } =
-      cancelHarness(execution, steps, attempts);
+    const {
+      service,
+      attemptRepository,
+      logicalRepository,
+      executionRepository,
+    } = cancelHarness(execution, steps, attempts);
 
     const first = await service.cancelExecution("execution-1");
     expect(first.status).toBe("CANCELLED");
@@ -787,8 +923,18 @@ describe("ExecutionService materialization and reconciliation", () => {
       activePlanRevisionId: "revision-1",
     };
     const steps: any[] = [
-      { id: "logical-1", executionId: "execution-1", stepId: "a", status: "PENDING" },
-      { id: "logical-2", executionId: "execution-1", stepId: "b", status: "PENDING" },
+      {
+        id: "logical-1",
+        executionId: "execution-1",
+        stepId: "a",
+        status: "PENDING",
+      },
+      {
+        id: "logical-2",
+        executionId: "execution-1",
+        stepId: "b",
+        status: "PENDING",
+      },
     ];
     const executionQuery = {
       setLock: jest.fn().mockReturnThis(),
@@ -809,8 +955,9 @@ describe("ExecutionService materialization and reconciliation", () => {
       findOne: jest.fn().mockResolvedValue(execution),
     };
     const stepRepository = {
-      findOne: jest.fn(async ({ where }: any) =>
-        steps.find((step) => step.stepId === where.stepId) ?? null,
+      findOne: jest.fn(
+        async ({ where }: any) =>
+          steps.find((step) => step.stepId === where.stepId) ?? null,
       ),
       create: jest.fn((value) => ({ ...value })),
       save: jest.fn(async (value) => value),

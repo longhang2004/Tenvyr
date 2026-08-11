@@ -1,3 +1,4 @@
+import { ContextProjectionError } from "../domain/context-snapshot";
 import { EngineService } from "./engine.service";
 
 const execution = {
@@ -329,6 +330,87 @@ describe("EngineService behavior", () => {
     );
   });
 
+  it("routes a ContextProjectionError into the deterministic failure policy with no outbox (M2C)", async () => {
+    const stepRows: any[] = [
+      { ...stepExecution, status: "READY", eligibleAt: null, attempt: 0 },
+    ];
+    executionService.getStepExecutions.mockResolvedValue(stepRows);
+    executionService.getStepExecution.mockResolvedValue(null);
+    executionService.claimRunnableStep.mockRejectedValue(
+      new ContextProjectionError("TENVYR_CTX_MISSING_STATE_KEY"),
+    );
+
+    await service.reconcileExecution("execution-1");
+
+    expect(executionService.updateExecutionStatus).toHaveBeenCalledWith(
+      "execution-1",
+      "FAILED",
+      expect.objectContaining({
+        failedStep: "review",
+        error: "Context projection failed: TENVYR_CTX_MISSING_STATE_KEY",
+      }),
+    );
+    // A projection failure never creates a dispatch hand-off.
+    expect(outbox.dispatchAttempt).not.toHaveBeenCalled();
+    expect(outbox.dispatchNext).not.toHaveBeenCalled();
+    expect(transport.invoke).not.toHaveBeenCalled();
+  });
+
+  it("never logs state values, result output, or artifact URIs (M2F LOG-001)", async () => {
+    // Hostile values flow through the failure path; captured logs/errors may
+    // contain only stable codes and identifiers, never the values themselves.
+    const hostileStateValue = "super-secret-state-value";
+    const hostileUri = "s3://bucket/secret-uri-key";
+    const stepRows: any[] = [
+      { ...stepExecution, status: "READY", eligibleAt: null, attempt: 0 },
+    ];
+    executionService.getStepExecutions.mockResolvedValue(stepRows);
+    executionService.getStepExecution.mockResolvedValue(null);
+    executionService.claimRunnableStep.mockRejectedValue(
+      new ContextProjectionError("TENVYR_CTX_ENVELOPE_TOO_LARGE"),
+    );
+    executionService.updateExecutionStatus.mockImplementation(
+      async (_id, status, output) => ({
+        ...execution,
+        status,
+        output: {
+          ...output,
+          hostileStateValue,
+          hostileUri,
+        },
+      }),
+    );
+    const captured: string[] = [];
+    const errorSpy = jest
+      .spyOn(console, "error")
+      .mockImplementation((message?: unknown) => {
+        captured.push(String(message));
+      });
+    const logSpy = jest
+      .spyOn(console, "log")
+      .mockImplementation((message?: unknown) => {
+        captured.push(String(message));
+      });
+    try {
+      await service.reconcileExecution("execution-1");
+    } finally {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+    const all = captured.join("\n");
+    // Hostile values never reach logs/errors.
+    expect(all).not.toContain("super-secret-state-value");
+    expect(all).not.toContain("secret-uri-key");
+    // The stable code is the durable diagnostic (persisted, not logged).
+    expect(executionService.updateExecutionStatus).toHaveBeenCalledWith(
+      "execution-1",
+      "FAILED",
+      expect.objectContaining({
+        error: "Context projection failed: TENVYR_CTX_ENVELOPE_TOO_LARGE",
+      }),
+    );
+  });
+
   it("detects completion from durable step state without any step context", async () => {
     executionService.getStepExecutions.mockResolvedValue([
       { ...stepExecution, status: "COMPLETED", output: { score: 100 } },
@@ -437,7 +519,10 @@ describe("EngineService behavior", () => {
   it("advances dependents after a condition skip within the same reconciliation", async () => {
     const configA = { id: "a", agent: "alpha" };
     const configB = { id: "b", agent: "beta", dependsOn: ["a"] };
-    executionService.getExecutionPlanSteps.mockResolvedValue([configA, configB]);
+    executionService.getExecutionPlanSteps.mockResolvedValue([
+      configA,
+      configB,
+    ]);
     const stepA: any = {
       ...stepExecution,
       id: "logical-a",

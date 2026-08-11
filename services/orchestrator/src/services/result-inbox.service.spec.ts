@@ -1,5 +1,6 @@
 import type { AgentResultV1 } from "@tenvyr/contracts";
 import { sha256Json } from "../domain/canonical-json";
+import { ArtifactEntity } from "../entities/artifact.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
@@ -192,7 +193,10 @@ describe("ResultInboxService", () => {
     });
     const logicalSelect = chain({ ...logical });
     const outboxTransition = chain(undefined, 1);
-    const executionSelect = chain({ id: result.executionId, status: "RUNNING" });
+    const executionSelect = chain({
+      id: result.executionId,
+      status: "RUNNING",
+    });
     const inboxRepository = {
       createQueryBuilder: jest
         .fn()
@@ -225,7 +229,10 @@ describe("ResultInboxService", () => {
             }),
           };
         if (entity === ExecutionEntity)
-          return { createQueryBuilder: jest.fn(() => executionSelect), save: jest.fn() };
+          return {
+            createQueryBuilder: jest.fn(() => executionSelect),
+            save: jest.fn(),
+          };
         throw new Error("unexpected repository");
       }),
     };
@@ -266,7 +273,10 @@ describe("ResultInboxService", () => {
     });
     const logicalSelect = chain({ ...logical, status: "RUNNING" });
     const outboxTransition = chain(undefined, 1);
-    const executionSelect = chain({ id: result.executionId, status: "RUNNING" });
+    const executionSelect = chain({
+      id: result.executionId,
+      status: "RUNNING",
+    });
     const inboxSave = jest.fn();
     const logicalSave = jest.fn(async (value: any) => value);
     const executionSave = jest.fn(async (value: any) => value);
@@ -288,7 +298,10 @@ describe("ResultInboxService", () => {
             save: inboxSave,
           };
         if (entity === LogicalStepEntity)
-          return { createQueryBuilder: jest.fn(() => logicalSelect), save: logicalSave };
+          return {
+            createQueryBuilder: jest.fn(() => logicalSelect),
+            save: logicalSave,
+          };
         if (entity === DispatchOutboxEntity)
           return { createQueryBuilder: jest.fn(() => outboxTransition) };
         if (entity === ExecutionPlanRevisionEntity)
@@ -299,7 +312,10 @@ describe("ResultInboxService", () => {
             }),
           };
         if (entity === ExecutionEntity)
-          return { createQueryBuilder: jest.fn(() => executionSelect), save: executionSave };
+          return {
+            createQueryBuilder: jest.fn(() => executionSelect),
+            save: executionSave,
+          };
         throw new Error("unexpected repository");
       }),
     };
@@ -328,7 +344,8 @@ describe("ResultInboxService", () => {
     );
   });
 
-  it("rejects a terminal result that arrives after cancellation won the race", async () => {    const attemptSelect = chain(attempt);
+  it("rejects a terminal result that arrives after cancellation won the race", async () => {
+    const attemptSelect = chain(attempt);
     const inboxInsert = chain();
     const inboxSelect = chain({
       id: "inbox-1",
@@ -336,7 +353,10 @@ describe("ResultInboxService", () => {
       status: "RECEIVED",
     });
     const logicalSelect = chain({ ...logical });
-    const executionSelect = chain({ id: result.executionId, status: "CANCELLED" });
+    const executionSelect = chain({
+      id: result.executionId,
+      status: "CANCELLED",
+    });
     const inboxSave = jest.fn();
     const logicalSave = jest.fn();
     const executionSave = jest.fn();
@@ -353,9 +373,15 @@ describe("ResultInboxService", () => {
             save: inboxSave,
           };
         if (entity === LogicalStepEntity)
-          return { createQueryBuilder: jest.fn(() => logicalSelect), save: logicalSave };
+          return {
+            createQueryBuilder: jest.fn(() => logicalSelect),
+            save: logicalSave,
+          };
         if (entity === ExecutionEntity)
-          return { createQueryBuilder: jest.fn(() => executionSelect), save: executionSave };
+          return {
+            createQueryBuilder: jest.fn(() => executionSelect),
+            save: executionSave,
+          };
         throw new Error("unexpected repository");
       }),
     };
@@ -417,7 +443,10 @@ describe("ResultInboxService", () => {
             save: jest.fn(),
           };
         if (entity === LogicalStepEntity)
-          return { createQueryBuilder: jest.fn(() => logicalSelect), save: logicalSave };
+          return {
+            createQueryBuilder: jest.fn(() => logicalSelect),
+            save: logicalSave,
+          };
         if (entity === DispatchOutboxEntity)
           return { createQueryBuilder: jest.fn(() => outboxTransition) };
         if (entity === ExecutionPlanRevisionEntity)
@@ -428,7 +457,10 @@ describe("ResultInboxService", () => {
             }),
           };
         if (entity === ExecutionEntity)
-          return { createQueryBuilder: jest.fn(() => executionSelect), save: executionSave };
+          return {
+            createQueryBuilder: jest.fn(() => executionSelect),
+            save: executionSave,
+          };
         throw new Error("unexpected repository");
       }),
     };
@@ -466,7 +498,11 @@ describe("ResultInboxService", () => {
       payloadHash: sha256Json(lateTimeout),
       status: "RECEIVED",
     });
-    const logicalSelect = chain({ ...logical, status: "RUNNING", maxAttempts: 3 });
+    const logicalSelect = chain({
+      ...logical,
+      status: "RUNNING",
+      maxAttempts: 3,
+    });
     const outboxTransition = chain(undefined, 1);
     const executionSelect = chain({ id: result.executionId, status: "FAILED" });
     const logicalSave = jest.fn(async (value: any) => value);
@@ -489,7 +525,10 @@ describe("ResultInboxService", () => {
             save: jest.fn(),
           };
         if (entity === LogicalStepEntity)
-          return { createQueryBuilder: jest.fn(() => logicalSelect), save: logicalSave };
+          return {
+            createQueryBuilder: jest.fn(() => logicalSelect),
+            save: logicalSave,
+          };
         if (entity === DispatchOutboxEntity)
           return { createQueryBuilder: jest.fn(() => outboxTransition) };
         if (entity === ExecutionPlanRevisionEntity)
@@ -500,7 +539,10 @@ describe("ResultInboxService", () => {
             }),
           };
         if (entity === ExecutionEntity)
-          return { createQueryBuilder: jest.fn(() => executionSelect), save: executionSave };
+          return {
+            createQueryBuilder: jest.fn(() => executionSelect),
+            save: executionSave,
+          };
         throw new Error("unexpected repository");
       }),
     };
@@ -518,5 +560,338 @@ describe("ResultInboxService", () => {
       expect.objectContaining({ status: "FAILED", nextAttemptAt: null }),
     );
     expect(executionSave).not.toHaveBeenCalled();
+  });
+
+  // A full first-application manager mock: attempt transition, inbox insert +
+  // select (RECEIVED), step projection, outbox retirement, execution, and the
+  // artifact registration repository.
+  const appliedManager = (payload: AgentResultV1) => {
+    const attemptSelect = chain(attempt);
+    const attemptTransition = chain(undefined, 1);
+    const inboxInsert = chain();
+    const inboxSelect = chain({
+      id: "inbox-1",
+      payloadHash: sha256Json(payload),
+      status: "RECEIVED",
+    });
+    const logicalSelect = chain({ ...logical, status: "RUNNING" });
+    const outboxTransition = chain(undefined, 1);
+    const executionSelect = chain({
+      id: payload.executionId,
+      status: "RUNNING",
+    });
+    const artifactInsert = chain();
+    const inboxSave = jest.fn();
+    const manager = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === StepAttemptEntity)
+          return {
+            createQueryBuilder: jest
+              .fn()
+              .mockReturnValueOnce(attemptSelect)
+              .mockReturnValueOnce(attemptTransition),
+          };
+        if (entity === ResultInboxEntity)
+          return {
+            createQueryBuilder: jest
+              .fn()
+              .mockReturnValueOnce(inboxInsert)
+              .mockReturnValueOnce(inboxSelect),
+            save: inboxSave,
+          };
+        if (entity === LogicalStepEntity)
+          return {
+            createQueryBuilder: jest.fn(() => logicalSelect),
+            save: jest.fn(),
+          };
+        if (entity === DispatchOutboxEntity)
+          return { createQueryBuilder: jest.fn(() => outboxTransition) };
+        if (entity === ExecutionPlanRevisionEntity)
+          return {
+            findOne: jest.fn().mockResolvedValue({
+              id: "revision-1",
+              plan: { steps: [{ id: "review", onFailure: "stop" }] },
+            }),
+          };
+        if (entity === ExecutionEntity)
+          return {
+            createQueryBuilder: jest.fn(() => executionSelect),
+            save: jest.fn(),
+          };
+        if (entity === ArtifactEntity)
+          return { createQueryBuilder: jest.fn(() => artifactInsert) };
+        throw new Error("unexpected repository");
+      }),
+    };
+    return { manager, artifactInsert, inboxSave };
+  };
+
+  const artifactA = { id: "worker-art-1", name: "report.pdf" };
+  const artifactB = {
+    id: "worker-art-1", // duplicate worker id: opaque producer data
+    name: "data.json",
+    mediaType: "application/json",
+  };
+
+  it.each([
+    ["succeeded", { status: "succeeded", output: { done: true } }] as const,
+    [
+      "failed",
+      {
+        status: "failed",
+        error: { code: "AGENT_ERROR", message: "boom", retryable: false },
+      },
+    ] as const,
+    [
+      "cancelled",
+      {
+        status: "cancelled",
+        error: { code: "CANCELLED", message: "stopped", retryable: false },
+      },
+    ] as const,
+    [
+      "timed_out",
+      {
+        status: "timed_out",
+        error: { code: "DEADLINE_EXCEEDED", message: "late", retryable: true },
+      },
+    ] as const,
+  ])(
+    "registers one immutable Artifact per descriptor when the canonical outcome is %s",
+    async (_, outcome) => {
+      const payload: AgentResultV1 = {
+        ...result,
+        ...outcome,
+        artifacts: [artifactA, artifactB],
+      };
+      const { manager, artifactInsert } = appliedManager(payload);
+      const service = new ResultInboxService({
+        transaction: jest.fn((work) => work(manager)),
+      } as any);
+
+      await expect(
+        service.apply(payload, { adapter: "kafka", receivedAt: "now" }),
+      ).resolves.toEqual({
+        disposition: "applied",
+        executionId: "execution-1",
+        stepId: "review",
+      });
+      // Tenvyr identity is (inbox row, ordinal); the worker id stays opaque.
+      expect(artifactInsert.values).toHaveBeenCalledWith([
+        {
+          resultInboxId: "inbox-1",
+          descriptorOrdinal: 0,
+          descriptorHash: sha256Json(artifactA),
+        },
+        {
+          resultInboxId: "inbox-1",
+          descriptorOrdinal: 1,
+          descriptorHash: sha256Json(artifactB),
+        },
+      ]);
+      // Defense in depth: duplicate registration is swallowed, never thrown.
+      expect(artifactInsert.orIgnore).toHaveBeenCalled();
+    },
+  );
+
+  it("registers no additional Artifact records for an identical duplicate delivery", async () => {
+    const payload: AgentResultV1 = {
+      ...result,
+      artifacts: [artifactA],
+    };
+    const attemptSelect = chain(attempt);
+    const inboxInsert = chain();
+    const inboxSelect = chain({
+      id: "inbox-1",
+      payloadHash: sha256Json(payload),
+      status: "APPLIED",
+    });
+    const logicalSelect = chain(logical);
+    const manager = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === StepAttemptEntity)
+          return { createQueryBuilder: jest.fn(() => attemptSelect) };
+        if (entity === ResultInboxEntity)
+          return {
+            createQueryBuilder: jest
+              .fn()
+              .mockReturnValueOnce(inboxInsert)
+              .mockReturnValueOnce(inboxSelect),
+          };
+        if (entity === LogicalStepEntity)
+          return { createQueryBuilder: jest.fn(() => logicalSelect) };
+        throw new Error("unexpected repository");
+      }),
+    };
+    const service = new ResultInboxService({
+      transaction: jest.fn((work) => work(manager)),
+    } as any);
+
+    await expect(
+      service.apply(payload, { adapter: "kafka", receivedAt: "now" }),
+    ).resolves.toEqual({
+      disposition: "duplicate",
+      executionId: "execution-1",
+      stepId: "review",
+    });
+    expect(manager.getRepository).not.toHaveBeenCalledWith(ArtifactEntity);
+  });
+
+  it("conflicting, ignored, and post-cancellation results register no Artifact records", async () => {
+    const payload: AgentResultV1 = {
+      ...result,
+      artifacts: [artifactA],
+    };
+    const conflicting: AgentResultV1 = {
+      ...payload,
+      output: { value: 2 }, // same invocationId, different payload
+    };
+    const ignored: AgentResultV1 = {
+      ...payload,
+      invocationId: "logical-unknown:1",
+    };
+    const attemptSelect = chain(attempt);
+    const inboxInsert = chain();
+    const inboxSelect = chain({
+      id: "inbox-1",
+      payloadHash: "a".repeat(64),
+      status: "APPLIED",
+    });
+    const conflictInsert = chain();
+    const logicalSelect = chain(logical);
+    const manager = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === StepAttemptEntity)
+          return { createQueryBuilder: jest.fn(() => attemptSelect) };
+        if (entity === ResultInboxEntity)
+          return {
+            createQueryBuilder: jest
+              .fn()
+              .mockReturnValueOnce(inboxInsert)
+              .mockReturnValueOnce(inboxSelect),
+          };
+        if (entity === ResultConflictEntity)
+          return { createQueryBuilder: jest.fn(() => conflictInsert) };
+        if (entity === LogicalStepEntity)
+          return { createQueryBuilder: jest.fn(() => logicalSelect) };
+        throw new Error("unexpected repository");
+      }),
+    };
+    const service = new ResultInboxService({
+      transaction: jest.fn((work) => work(manager)),
+    } as any);
+
+    await expect(
+      service.apply(conflicting, { adapter: "kafka", receivedAt: "now" }),
+    ).resolves.toEqual({ disposition: "conflict" });
+
+    const ignoredManager = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === StepAttemptEntity)
+          return { createQueryBuilder: jest.fn(() => chain(undefined)) };
+        throw new Error("unexpected repository");
+      }),
+    };
+    const ignoredService = new ResultInboxService({
+      transaction: jest.fn((work) => work(ignoredManager)),
+    } as any);
+    await expect(
+      ignoredService.apply(ignored, { adapter: "kafka", receivedAt: "now" }),
+    ).resolves.toEqual({ disposition: "ignored" });
+
+    const cancelledExecutionSelect = chain({
+      id: payload.executionId,
+      status: "CANCELLED",
+    });
+    // Matching payload hash so the flow reaches the execution-CANCELLED
+    // guard (a mismatched hash would short-circuit into the conflict path).
+    const cancelledInboxInsert = chain();
+    const cancelledInboxSelect = chain({
+      id: "inbox-1",
+      payloadHash: sha256Json(payload),
+      status: "RECEIVED",
+    });
+    const cancelledInboxSave = jest.fn();
+    const cancelledManager = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === StepAttemptEntity)
+          return { createQueryBuilder: jest.fn(() => attemptSelect) };
+        if (entity === ResultInboxEntity)
+          return {
+            createQueryBuilder: jest
+              .fn()
+              .mockReturnValueOnce(cancelledInboxInsert)
+              .mockReturnValueOnce(cancelledInboxSelect),
+            save: cancelledInboxSave,
+          };
+        if (entity === LogicalStepEntity)
+          return {
+            createQueryBuilder: jest.fn(() => logicalSelect),
+            save: jest.fn(),
+          };
+        if (entity === ExecutionEntity)
+          return {
+            createQueryBuilder: jest.fn(() => cancelledExecutionSelect),
+            save: jest.fn(),
+          };
+        throw new Error("unexpected repository");
+      }),
+    };
+    const cancelledService = new ResultInboxService({
+      transaction: jest.fn((work) => work(cancelledManager)),
+    } as any);
+    await expect(
+      cancelledService.apply(payload, { adapter: "kafka", receivedAt: "now" }),
+    ).resolves.toEqual({ disposition: "conflict" });
+    // Proof the CANCELLED guard ran: the canonical row is REJECTED, never
+    // APPLIED, and no conflict-evidence row was written.
+    expect(cancelledInboxSave).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "REJECTED" }),
+    );
+
+    expect(manager.getRepository).not.toHaveBeenCalledWith(ArtifactEntity);
+    expect(ignoredManager.getRepository).not.toHaveBeenCalledWith(
+      ArtifactEntity,
+    );
+    expect(cancelledManager.getRepository).not.toHaveBeenCalledWith(
+      ArtifactEntity,
+    );
+  });
+
+  it("registers nothing for a result without artifacts (zero-artifact compatibility)", async () => {
+    const { manager } = appliedManager(result);
+    const service = new ResultInboxService({
+      transaction: jest.fn((work) => work(manager)),
+    } as any);
+
+    await expect(
+      service.apply(result, { adapter: "kafka", receivedAt: "now" }),
+    ).resolves.toEqual({
+      disposition: "applied",
+      executionId: "execution-1",
+      stepId: "review",
+    });
+    expect(manager.getRepository).not.toHaveBeenCalledWith(ArtifactEntity);
+  });
+
+  it("an artifact registration failure aborts the whole application", async () => {
+    const payload: AgentResultV1 = {
+      ...result,
+      artifacts: [artifactA],
+    };
+    const { manager, artifactInsert, inboxSave } = appliedManager(payload);
+    artifactInsert.execute.mockRejectedValueOnce(
+      new Error("artifact insert failed"),
+    );
+    const service = new ResultInboxService({
+      transaction: jest.fn((work) => work(manager)),
+    } as any);
+
+    await expect(
+      service.apply(payload, { adapter: "kafka", receivedAt: "now" }),
+    ).rejects.toThrow("artifact insert failed");
+    // The APPLIED inbox save must never run; the real rollback proof lives in
+    // the PostgreSQL integration suite.
+    expect(inboxSave).not.toHaveBeenCalled();
   });
 });

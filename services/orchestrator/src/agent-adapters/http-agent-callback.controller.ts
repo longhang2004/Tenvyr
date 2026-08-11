@@ -66,11 +66,17 @@ export class HttpAgentCallbackController {
         if (error.code === "CALLBACK_UNAUTHORIZED")
           throw new UnauthorizedException();
         if (error.code === "CALLBACK_INVALID") throw new BadRequestException();
-        if (error.code === "CALLBACK_AMBIGUOUS") throw new BadRequestException();
+        if (error.code === "CALLBACK_AMBIGUOUS")
+          throw new BadRequestException();
         if (error.code === "CALLBACK_HANDLER_UNAVAILABLE")
           throw new ServiceUnavailableException();
-        if (error.code === "EVENT_HANDLER_FAILED")
-          throw new ServiceUnavailableException();
+        if (error.code === "EVENT_HANDLER_FAILED") {
+          // Durable/transient event database failures are retryable (503, the
+          // Worker retries); permanent rejection (e.g. an oversized canonical
+          // payload) is non-retryable (400, the Worker drops the event).
+          if (error.retryable) throw new ServiceUnavailableException();
+          throw new BadRequestException();
+        }
       }
       throw new InternalServerErrorException();
     }

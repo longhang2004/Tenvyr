@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import math
+import threading
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -31,7 +32,12 @@ from tenvyr_worker._callback.delivery import (
 )
 from tenvyr_worker._protocol.json_value import JsonValue
 from tenvyr_worker._protocol.validation import parse_agent_event
-from tenvyr_worker._runtime.worker import MAX_EVENT_PAYLOAD_BYTES, RunEventEmitter
+from tenvyr_worker._runtime.canonical_json import canonical_json
+from tenvyr_worker._runtime.worker import (
+    MAX_AGENT_EVENT_CANONICAL_BYTES,
+    MAX_AGENT_EVENT_SEQUENCE,
+    RunEventEmitter,
+)
 
 
 def _execute(context: object, value: object) -> object:
@@ -182,6 +188,82 @@ def test_emitter_assigns_sequences_with_deterministic_event_ids_and_fields() -> 
     assert delivered[2][0]["payload"] == {"status": "succeeded"}
 
 
+def test_emitter_sequences_are_unique_and_monotonic_under_thread_concurrency() -> None:
+    """Stress the sequence/eventId allocation across thread kinds.
+
+    A synchronous handler runs under ``asyncio.to_thread``, so its
+    ``context.progress(...)`` calls land on handler worker threads while the
+    heartbeat coroutine emits from the event-loop thread. Sequence and
+    eventId must stay unique and strictly monotonic ([0..N-1]) regardless.
+    The emitter's ``threading.Lock`` is the synchronization contract, not the
+    GIL, so this runs several rounds to exercise the race.
+    """
+    rounds = 10
+    handler_threads = 8
+    emissions_per_handler = 50
+    loop_emissions = 100
+
+    for _ in range(rounds):
+        collector: list[tuple[dict[str, JsonValue], bytes]] = []
+        collector_lock = threading.Lock()
+
+        def deliver(
+            event: dict[str, JsonValue],
+            raw_body: bytes,
+            collector: list[tuple[dict[str, JsonValue], bytes]] = collector,
+            lock: threading.Lock = collector_lock,
+        ) -> None:
+            with lock:
+                collector.append((event, raw_body))
+
+        emitter = RunEventEmitter(
+            invocation=_invocation(),
+            run_id="run-1",
+            enabled=True,
+            logger=_Recorder(),
+            now=lambda: FIXED_NOW,
+            deliver=deliver,
+        )
+        # The sync-handler pattern: context.progress from worker threads.
+        context = AgentExecutionContext(
+            invocation=_invocation(),
+            run_id="run-1",
+            logger=_Recorder(),
+            _emitter=emitter,
+        )
+        start = threading.Barrier(handler_threads + 1)
+
+        def handler_worker(
+            start: threading.Barrier = start,
+            context: AgentExecutionContext = context,
+        ) -> None:
+            start.wait()
+            for i in range(emissions_per_handler):
+                context.progress({"thread": True, "i": i})
+
+        threads = [
+            threading.Thread(target=handler_worker) for _ in range(handler_threads)
+        ]
+        for thread in threads:
+            thread.start()
+        start.wait()  # release all handler threads at once
+        # Concurrent heartbeat emissions from the event-loop thread.
+        for _ in range(loop_emissions):
+            emitter.emit("heartbeat", {})
+        for thread in threads:
+            thread.join()
+
+        sequences = [event["sequence"] for event, _ in collector]
+        event_ids = [cast(str, event["eventId"]) for event, _ in collector]
+        assert len(sequences) == len(set(sequences))
+        assert len(event_ids) == len(set(event_ids))
+        assert sorted(sequences) == list(range(len(sequences)))
+        # No cross-thread corruption of identity-bearing fields.
+        for event, _ in collector:
+            assert event["invocationId"] == "invocation-1"
+            assert event["metadata"] == {"runId": "run-1"}
+
+
 def test_emitter_builds_body_once_and_reuses_the_same_bytes() -> None:
     emitter, delivered = _make_emitter()
     emitter.emit("progress", {"step": 1})
@@ -235,14 +317,83 @@ def test_emitter_rejects_circular_payloads() -> None:
         emitter.emit("progress", circular)  # type: ignore[arg-type]
 
 
-def test_emitter_rejects_payloads_whose_canonical_json_exceeds_64_kib() -> None:
-    emitter, _ = _make_emitter()
-    oversized = {"data": "x" * MAX_EVENT_PAYLOAD_BYTES}
+def test_emitter_rejects_a_complete_event_over_64_kib_without_delivery() -> None:
+    emitter, delivered = _make_emitter()
+    oversized = {"data": "x" * MAX_AGENT_EVENT_CANONICAL_BYTES}
     with pytest.raises(ValueError, match="exceeds the 65536-byte limit"):
         emitter.emit("progress", oversized)
+    assert delivered == []
 
-    acceptable = {"data": "x" * 1024}
-    emitter.emit("progress", acceptable)
+
+@pytest.mark.parametrize("rounds", range(3))
+def test_emitter_rejects_full_envelope_overflow_and_accepts_the_boundary(
+    rounds: int,
+) -> None:
+    """Payload under 64 KiB but complete canonical event over the limit.
+
+    The envelope overhead is measured deterministically from a probe event
+    whose payload data string is empty; each extra \"x\" adds exactly one
+    canonical byte, so the boundary is exact rather than a magic constant.
+    """
+    emitter, delivered = _make_emitter()
+    emitter.emit("progress", {"data": ""})
+    assert len(delivered) == 1
+    overhead = len(canonical_json(delivered[0][0]).encode("utf-8"))
+    at_limit = MAX_AGENT_EVENT_CANONICAL_BYTES - overhead
+    assert at_limit > 0
+
+    emitter.emit("progress", {"data": "x" * at_limit})
+    with pytest.raises(ValueError, match="exceeds the 65536-byte limit"):
+        emitter.emit("progress", {"data": "x" * (at_limit + 1)})
+    # Probe + boundary event delivered; the overflow was never scheduled.
+    assert len(delivered) == 2
+    assert delivered[1][0]["payload"] == {"data": "x" * at_limit}
+
+
+@pytest.mark.parametrize(
+    ("invocation_id", "expect_error"),
+    [
+        # invocationId length 254 + ":0" => eventId length 256: the canonical
+        # AgentEventV1 contract would reject the constructed event, so the
+        # emitter rejects it locally before any delivery is scheduled.
+        ("i" * 254, r"exceeds the 255-character limit"),
+        # The maximum valid generated eventId: 253 + ":0" => 255 characters.
+        ("i" * 253, None),
+    ],
+)
+def test_emitter_enforces_generated_event_id_bound(
+    invocation_id: str, expect_error: str | None
+) -> None:
+    emitter, delivered = _make_emitter()
+    emitter._invocation_id = invocation_id  # type: ignore[attr-defined]
+    if expect_error is not None:
+        with pytest.raises(ValueError, match=expect_error):
+            emitter.emit("progress", {"step": 1})
+        assert delivered == []
+        return
+    emitter.emit("progress", {"step": 1})
+    assert len(delivered) == 1
+    event = delivered[0][0]
+    assert event["eventId"] == f"{'i' * 253}:0"
+    assert len(cast(str, event["eventId"])) == 255
+    # The emitted event is valid under the canonical AgentEventV1 contract.
+    parse_agent_event(json.loads(delivered[0][1].decode("utf-8")))
+
+
+def test_emitter_enforces_sequence_upper_bound_without_billions_of_events() -> None:
+    """Internal seam: the sequence counter is private; the emit path is
+    exercised at the boundary without constructing two billion events."""
+    emitter, delivered = _make_emitter()
+    emitter._sequence = MAX_AGENT_EVENT_SEQUENCE  # type: ignore[attr-defined]
+    emitter.emit("progress", {"step": 1})
+    assert len(delivered) == 1
+    assert delivered[0][0]["sequence"] == MAX_AGENT_EVENT_SEQUENCE
+    assert delivered[0][0]["eventId"] == f"invocation-1:{MAX_AGENT_EVENT_SEQUENCE}"
+
+    emitter._sequence = MAX_AGENT_EVENT_SEQUENCE + 1  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match=r"outside the 0\.\.2147483647 range"):
+        emitter.emit("progress", {"step": 2})
+    assert len(delivered) == 1  # nothing new was scheduled
 
 
 def test_context_rejects_system_owned_event_types() -> None:
@@ -472,6 +623,91 @@ async def test_accepted_at_sequence_zero_and_monotonic_progress() -> None:
             )
             assert parsed_at.tzinfo is not None
         assert _result_bodies(sink)[0]["status"] == "succeeded"
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_queued_run_emits_only_accepted_until_it_executes() -> None:
+    """concurrency=1: run B is accepted and queued behind run A.
+
+    While B sits queued it must emit only `accepted` — no heartbeat, no
+    progress — so the Orchestrator can neither acceptance-timeout nor
+    heartbeat-timeout an accepted-but-queued run, and must not transition it
+    to RUNNING from the accepted event alone.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def execute(context: Any, value: object) -> object:
+        if cast(dict[str, object], value).get("block") is True:
+            entered.set()
+            await release.wait()
+            return "blocked-done"
+        context.progress({"ran": True})
+        # Outlive one heartbeat interval so a heartbeat is actually emitted.
+        await asyncio.sleep(1.2)
+        return "quick-done"
+
+    async with _callback_server() as (origin, sink):
+        worker = create_tenvyr_worker(
+            _config(
+                origin,
+                agent=define_agent(name="echo-agent", execute=execute),
+                events_enabled=True,
+                event_heartbeat_interval_seconds=1.0,
+            )
+        )
+        address = await worker.start(port=0)
+        url = f"http://{address.host}:{address.port}"
+        request_a = _request("invocation-1")
+        request_a["resultDelivery"]["callbackUrl"] = f"{origin}/callback"  # type: ignore[index]
+        request_b = _request("invocation-2")
+        request_b["resultDelivery"]["callbackUrl"] = f"{origin}/callback"  # type: ignore[index]
+        cast(dict[str, object], request_a["invocation"])["input"] = {"block": True}
+        cast(dict[str, object], request_b["invocation"])["input"] = {"block": False}
+        async with ClientSession() as client:
+            first = await _submit(client, url, request_a, "invocation-1")
+            assert first.status == 202
+            await asyncio.wait_for(entered.wait(), timeout=5.0)
+            # The execution slot is occupied; B is accepted and queued.
+            second = await _submit(client, url, request_b, "invocation-2")
+            assert second.status == 202
+
+            # ~2 heartbeat intervals later B is still queued: only `accepted`.
+            await asyncio.sleep(2.2)
+            b_events = [
+                event
+                for event in _event_bodies(sink)
+                if event["invocationId"] == "invocation-2"
+            ]
+            assert [event["type"] for event in b_events] == ["accepted"]
+            assert b_events[0]["sequence"] == 0
+
+            release.set()
+            await _wait_for(lambda: len(_result_bodies(sink)) == 2)
+
+        # Once B executes it emits progress/heartbeat; sequences stay unique
+        # and monotonic from the accepted event at 0.
+        await _wait_for(
+            lambda: any(
+                event["invocationId"] == "invocation-2" and event["type"] == "progress"
+                for event in _event_bodies(sink)
+            )
+        )
+        b_events = sorted(
+            [
+                event
+                for event in _event_bodies(sink)
+                if event["invocationId"] == "invocation-2"
+            ],
+            key=lambda event: cast(int, event["sequence"]),
+        )
+        assert [event["sequence"] for event in b_events] == list(range(len(b_events)))
+        assert [event["type"] for event in b_events[:2]] == ["accepted", "progress"]
+        assert any(event["type"] == "heartbeat" for event in b_events)
+        assert [event["eventId"] for event in b_events] == [
+            f"invocation-2:{sequence}" for sequence in range(len(b_events))
+        ]
         await worker.stop()
 
 
@@ -879,17 +1115,19 @@ async def test_event_callbacks_use_the_same_hmac_headers_as_results() -> None:
         event_requests = [
             r for r in sink.requests if _is_event_body(cast(bytes, r["body"]))
         ]
+        callback_headers = [
+            "x-agentweave-delivery-id",
+            "x-agentweave-key-id",
+            "x-agentweave-signature",
+            "x-agentweave-timestamp",
+        ]
         assert len(event_requests) >= 1
         for request in event_requests:
             headers = cast(dict[str, str], request["headers"])
-            assert sorted(
-                key for key in headers if key.startswith("x-agentweave-")
-            ) == [
-                "x-agentweave-delivery-id",
-                "x-agentweave-key-id",
-                "x-agentweave-signature",
-                "x-agentweave-timestamp",
-            ]
+            assert (
+                sorted(key for key in headers if key in callback_headers)
+                == callback_headers
+            )
             assert headers["x-agentweave-key-id"] == "callback-v1"
             assert headers["user-agent"] == USER_AGENT
             timestamp = headers["x-agentweave-timestamp"]

@@ -172,6 +172,16 @@ const documentedDeploymentReferenceLines = [
     `Java namespace \`com.${legacyLower}\` also remain unchanged pending separately approved`,
     `com.${legacyLower}`,
   ],
+  [
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    `const configured = process.env.POSTGRES_DB || "${legacyLower}";`,
+    legacyLower,
+  ],
+  [
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    `(process.env.POSTGRES_DB || "${legacyLower}").toLowerCase() ===`,
+    legacyLower,
+  ],
 ];
 const compatibilityValues = new Set([
   ...dockerIdentifiers,
@@ -186,6 +196,8 @@ const wireProtocolPaths = new Set([
   "packages/worker/src/callback/callback-delivery.ts",
   "packages/worker/test/hardening.spec.ts",
   "packages/worker/test/worker-http.spec.ts",
+  "packages/worker/README.md",
+  "packages/worker/test/events.spec.ts",
   "packages/worker/dist/callback/callback-delivery.js",
   "services/orchestrator/src/agent-adapters/http-agent-callback.controller.spec.ts",
   "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
@@ -194,6 +206,9 @@ const wireProtocolPaths = new Set([
   "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts",
   "packages/worker/test/callback.spec.ts",
   "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
+  "sdks/python-worker/README.md",
+  "sdks/python-worker/CONFORMANCE.md",
+  "sdks/python-worker/tests/test_events.py",
 ]);
 const kafkaPathRules = new Map([
   [`${legacyLower}-dev`, new Set([".env.example"])],
@@ -310,6 +325,51 @@ const kafkaPathRules = new Map([
     `${legacyLower}.agent.<agent-name>.result`,
     new Set(["CLAUDE.md", "README.md"]),
   ],
+  [
+    `${legacyLower}.agent.<agent>.event`,
+    new Set([
+      "docs/architecture/transports/adapter-model.md",
+      "docs/architecture/transports/kafka-runtime-v1.md",
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+    ]),
+  ],
+  [
+    `${legacyLower}.agent.\${agent}.event`,
+    new Set([
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+    ]),
+  ],
+  [
+    `${legacyLower}.agent.code-reviewer.event`,
+    new Set([
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+    ]),
+  ],
+  [
+    `${legacyLower}.agent.observability.event`,
+    new Set([
+      "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+    ]),
+  ],
+  [
+    `${legacyLower}.agent.reader.event`,
+    new Set([
+      "services/orchestrator/src/database/postgres.integration.spec.ts",
+      "services/orchestrator/src/domain/transport-identity.spec.ts",
+    ]),
+  ],
+  [
+    // Exact forbidden-regex match produced by long-topic test strings (the
+    // topic prefix followed by an interpolated run) at the durable
+    // transport-identity tests. Not a wildcard: only the literal match
+    // `<legacy-name>.agent.` on these exact paths is allowed, so a longer or
+    // differently-shaped topic string still fails.
+    `${legacyLower}.agent.`,
+    new Set([
+      "services/orchestrator/src/database/postgres.integration.spec.ts",
+      "services/orchestrator/src/domain/transport-identity.spec.ts",
+    ]),
+  ],
 ]);
 
 const forbiddenPattern = new RegExp(
@@ -319,7 +379,7 @@ const forbiddenPattern = new RegExp(
     `X-${legacyName}-[A-Za-z0-9-]+`,
     `x-${legacyLower}-[a-z0-9-]+`,
     `${legacyName}-(?:Worker|Orchestrator)/[0-9]+(?:\\.[0-9]+)*`,
-    `${legacyLower}\\.agent\\.\\$\\{[A-Za-z0-9_.]+\\}\\.(?:task|result)`,
+    `${legacyLower}\\.agent\\.\\$\\{[A-Za-z0-9_.]+\\}\\.(?:task|result|event)(?![A-Za-z0-9_.])`,
     `[A-Za-z0-9_]*${legacyName}[A-Za-z0-9_]*`,
     `com\\.${legacyLower}(?:\\.[A-Za-z0-9_.*-]+)*`,
     `${legacyLower}(?:[./-][A-Za-z0-9_.*<>-]+)*`,
@@ -381,10 +441,19 @@ export const requiredLegacyIdentifiers = Object.freeze([
     "orchestrator-result-topic-template",
     "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
     new RegExp(
-      `^[\\t ]*return\\s+Array\\.from\\(\\s*new\\s+Set\\(\\s*\\[\\s*\\.\\.\\.agents\\.map\\(\\s*\\(agent\\)\\s*=>\\s*\`${escapeRegExp(legacyLower)}\\.agent\\.\\$\\{agent\\}\\.result\`\\s*\\)\\s*,\\s*\\.\\.\\.explicitTopics\\s*,?\\s*\\]\\s*\\)\\s*,?\\s*\\)\\s*;[\\t ]*$`,
+      `^[\\t ]*return\\s+Array\\.from\\(\\s*new\\s+Set\\(\\s*\\[\\s*\\.\\.\\.this\\.agentNames\\(\\)\\.map\\(\\s*\\(agent\\)\\s*=>\\s*\`${escapeRegExp(legacyLower)}\\.agent\\.\\$\\{agent\\}\\.result\`\\s*\\)\\s*,\\s*\\.\\.\\.explicitTopics\\s*,?\\s*\\]\\s*\\)\\s*,?\\s*\\)\\s*;[\\t ]*$`,
       "m",
     ),
-    `return Array.from(\n  new Set([\n    ...agents.map((agent) => \`${legacyLower}.agent.\${agent}.result\`),\n    ...explicitTopics,\n  ]),\n);`,
+    `return Array.from(\n  new Set([\n    ...this.agentNames().map((agent) => \`${legacyLower}.agent.\${agent}.result\`),\n    ...explicitTopics,\n  ]),\n);`,
+  ),
+  requiredPattern(
+    "orchestrator-event-topic-template",
+    "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+    new RegExp(
+      `^[\\t ]*return\\s*\\[\\s*\\.\\.\\.this\\.agentNames\\(\\)\\.map\\(\\s*\\(agent\\)\\s*=>\\s*\`${escapeRegExp(legacyLower)}\\.agent\\.\\$\\{agent\\}\\.event\`\\s*\\)\\s*,\\s*\\.\\.\\.configured\\s*,?\\s*\\]\\s*;[\\t ]*$`,
+      "m",
+    ),
+    `return [\n  ...this.agentNames().map((agent) => \`${legacyLower}.agent.\${agent}.event\`),\n  ...configured,\n];`,
   ),
   requiredQuotedConst(
     "reviewer-task-topic",

@@ -135,17 +135,17 @@ final output, which retries created cost/artifacts, and which runtimes handled
 sensitive data. PROV-O may be a projection/export format; it is not required
 to be the storage schema.
 
-| Field                      | Direction                                                                                                                                     |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Problem                    | Result records identify outcomes but do not preserve durable lineage between inputs, attempts, tools, models, artifacts, and final output.    |
-| Proposed capability        | Add immutable artifact identities and used/generated/associated relationships, then derive a provenance graph and optional PROV-O projection. |
-| Why this project is suited | The control plane already assigns execution, step-execution, attempt, invocation, and result identities.                                      |
-| Dependencies               | Artifact store, durable attempt events, privacy labels, content hashing, retention policy.                                                    |
-| User value                 | Auditable answers about origin, responsibility, retry waste, and sensitive-data transit.                                                      |
-| Differentiation            | Lineage is joined to enforced execution state and policy decisions.                                                                           |
-| Complexity                 | High.                                                                                                                                         |
-| Key risks                  | Large graphs, ambiguous derived data, sensitive lineage metadata, inconsistent external-agent reporting.                                      |
-| Acceptance signal          | A final result can be traced to immutable input/artifact identities and the exact successful or failed attempts that used or generated them.  |
+| Field                      | Direction                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Problem                    | Result records identify outcomes but do not preserve durable lineage between inputs, attempts, tools, models, artifacts, and final output.                                                                                                                                                                                                                                                                                                           |
+| Proposed capability        | Add immutable artifact identities and used/generated/associated relationships, then derive a provenance graph and optional PROV-O projection.                                                                                                                                                                                                                                                                                                        |
+| Why this project is suited | The control plane already assigns execution, step-execution, attempt, invocation, and result identities.                                                                                                                                                                                                                                                                                                                                             |
+| Dependencies               | Artifact content storage, privacy labels, content hashing, retention policy (durable attempt events are satisfied — Milestone 1; durable artifact identity and producer lineage are partial — Milestone 2A; a durable per-execution ExecutionState core is partial — Milestone 2B, internal primitive only). This table is roadmap intent, not current implementation truth: see the [implementation status](../reference/implementation-status.md). |
+| User value                 | Auditable answers about origin, responsibility, retry waste, and sensitive-data transit.                                                                                                                                                                                                                                                                                                                                                             |
+| Differentiation            | Lineage is joined to enforced execution state and policy decisions.                                                                                                                                                                                                                                                                                                                                                                                  |
+| Complexity                 | High.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Key risks                  | Large graphs, ambiguous derived data, sensitive lineage metadata, inconsistent external-agent reporting.                                                                                                                                                                                                                                                                                                                                             |
+| Acceptance signal          | A final result can be traced to immutable input/artifact identities and the exact successful or failed attempts that used or generated them.                                                                                                                                                                                                                                                                                                         |
 
 ## Theme D — Provider telemetry proxy
 
@@ -382,9 +382,13 @@ gates are complete.
 ## Current non-goals
 
 The current implementation includes private TypeScript and Python Worker SDKs
-and protocol-v1 numeric interoperability. It does not include OpenTelemetry
+and protocol-v1 numeric interoperability, plus M2A durable artifact identity
+and producer lineage, the M2B internal durable ExecutionState core (an
+Orchestrator-internal primitive only), and the M2C state-only ContextSnapshot
+(opt-in `contextProjection.stateKeys`; `context.tenvyr.artifacts` stays an
+empty list). It does not include OpenTelemetry
 instrumentation, W3C propagation, the planned control-plane observability
-dashboard, provider proxy, PROV-O exporter, artifact store, policy engine, CLI
-Adapter, durable callback/idempotency storage, provider integration,
-auto-instrumentation, public package release, external repository rename, or
-database migration.
+dashboard, provider proxy, PROV-O exporter, artifact content storage,
+artifact context projection, policy engine, CLI Adapter, durable
+callback/idempotency storage, provider integration, auto-instrumentation,
+public package release, external repository rename, or database migration.

@@ -9,8 +9,15 @@ import { ResultInboxEntity } from "../entities/result-inbox.entity";
 import { ResultConflictEntity } from "../entities/result-conflict.entity";
 import { AgentEventEntity } from "../entities/agent-event.entity";
 import { AgentEventConflictEntity } from "../entities/agent-event-conflict.entity";
+import { ArtifactEntity } from "../entities/artifact.entity";
+import { ArtifactExposureEntity } from "../entities/artifact-exposure.entity";
+import { StateWriteEvidenceEntity } from "../entities/state-write-evidence.entity";
 import { MilestoneZeroFoundation1722270000000 } from "./migrations/1722270000000-MilestoneZeroFoundation";
 import { MilestoneOneAgentEvents1722270001000 } from "./migrations/1722270001000-MilestoneOneAgentEvents";
+import { MilestoneTwoArtifactIdentity1722270002000 } from "./migrations/1722270002000-MilestoneTwoArtifactIdentity";
+import { MilestoneTwoExecutionState1722270003000 } from "./migrations/1722270003000-MilestoneTwoExecutionState";
+import { MilestoneTwoArtifactExposure1722270004000 } from "./migrations/1722270004000-MilestoneTwoArtifactExposure";
+import { MilestoneTwoStateWriteEvidence1722270005000 } from "./migrations/1722270005000-MilestoneTwoStateWriteEvidence";
 
 export function databaseOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -38,10 +45,17 @@ export function databaseOptions(
       ResultConflictEntity,
       AgentEventEntity,
       AgentEventConflictEntity,
+      ArtifactEntity,
+      ArtifactExposureEntity,
+      StateWriteEvidenceEntity,
     ],
     migrations: [
       MilestoneZeroFoundation1722270000000,
       MilestoneOneAgentEvents1722270001000,
+      MilestoneTwoArtifactIdentity1722270002000,
+      MilestoneTwoExecutionState1722270003000,
+      MilestoneTwoArtifactExposure1722270004000,
+      MilestoneTwoStateWriteEvidence1722270005000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

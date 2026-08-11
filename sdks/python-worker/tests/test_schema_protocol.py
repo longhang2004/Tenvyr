@@ -19,6 +19,7 @@ from tenvyr_worker._protocol.schemas import (
 from tenvyr_worker._protocol.validation import (
     ContractValidationError,
     loads_json,
+    parse_agent_event,
     parse_agent_result,
     parse_http_agent_run_accepted,
     parse_http_agent_run_request,
@@ -169,6 +170,34 @@ def test_shared_valid_results(path: str) -> None:
 def test_shared_invalid_results(path: str) -> None:
     with pytest.raises(ContractValidationError):
         parse_agent_result(_fixture(path))
+
+
+def _valid_event(**overrides: object) -> dict[str, object]:
+    event: dict[str, object] = {
+        "schemaVersion": "1",
+        "eventId": "event-1",
+        "invocationId": "invocation-1",
+        "executionId": "execution-1",
+        "stepExecutionId": "step-execution-1",
+        "sequence": 0,
+        "type": "progress",
+        "occurredAt": "2026-07-26T00:00:00.000Z",
+        "payload": {"stage": "indexing"},
+        "trace": {"traceId": "trace-1", "correlationId": "invocation-1"},
+    }
+    event.update(overrides)
+    return event
+
+
+def test_event_id_and_sequence_storage_safe_boundaries() -> None:
+    """Contract/storage parity: maxima persist, out-of-range values reject."""
+    parsed = parse_agent_event(_valid_event(eventId="e" * 255, sequence=2147483647))
+    assert parsed["eventId"] == "e" * 255
+    assert parsed["sequence"] == 2147483647
+    with pytest.raises(ContractValidationError):
+        parse_agent_event(_valid_event(eventId="e" * 256))
+    with pytest.raises(ContractValidationError):
+        parse_agent_event(_valid_event(sequence=2147483648))
 
 
 def test_validation_reports_special_key_paths_without_mutation() -> None:

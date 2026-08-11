@@ -1,13 +1,30 @@
 import type { AgentResultV1 } from "@tenvyr/contracts";
+import type { JsonValue } from "@tenvyr/contracts";
 import { Inject, Injectable } from "@nestjs/common";
-import { DataSource } from "typeorm";
+import { DataSource, type EntityManager } from "typeorm";
 import type { AgentTransportMetadata } from "../agent-adapters/agent-adapter.types";
 import { sha256Json } from "../domain/canonical-json";
+import {
+  applyStatePatch,
+  EXECUTION_STATE_BOUNDS,
+  jsonValueUtf8Size,
+  validateStatePatch,
+  type ExecutionState,
+  type ExecutionStatePatch,
+} from "../domain/execution-state";
+import {
+  buildStateWritesPatch,
+  StateWriteResolutionError,
+  type StateWriteMapping,
+} from "../domain/state-writes";
+import { durableTransportIdentity } from "../domain/transport-identity";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { ResultConflictEntity } from "../entities/result-conflict.entity";
 import { ResultInboxEntity } from "../entities/result-inbox.entity";
+import { ArtifactEntity } from "../entities/artifact.entity";
+import { StateWriteEvidenceEntity } from "../entities/state-write-evidence.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
 import {
   StepAttemptEntity,
@@ -32,6 +49,23 @@ export type ResultApplication =
   | { disposition: "duplicate"; executionId: string; stepId: string }
   | { disposition: "conflict" }
   | { disposition: "ignored" };
+
+/** M2E controlled state-write outcome for one canonical successful result. */
+type StateWriteApplication =
+  | {
+      disposition: "applied" | "noop";
+      priorVersion: number;
+      resultVersion: number;
+      mappingHash: string;
+      rejectionCode?: never;
+    }
+  | {
+      disposition: "rejected";
+      priorVersion: number;
+      resultVersion: number;
+      mappingHash?: never;
+      rejectionCode: string;
+    };
 
 @Injectable()
 export class ResultInboxService {
@@ -132,7 +166,9 @@ export class ResultInboxService {
             .execute();
           return { disposition: "conflict" };
         }
-        throw new Error("Result inbox insertion did not produce a canonical row");
+        throw new Error(
+          "Result inbox insertion did not produce a canonical row",
+        );
       }
 
       if (inbox.payloadHash !== payloadHash) {
@@ -184,25 +220,80 @@ export class ResultInboxService {
         return { disposition: "conflict" };
       }
 
+      // The frozen plan revision is read under the execution lock so M2E can
+      // apply pipeline-declared state writes in the same transaction (the
+      // step config is the authoritative mapping source, never the result).
+      const plan = await manager
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({
+          where: { id: attempt.planRevisionId },
+        });
+      const stepConfig = plan?.plan.steps.find(
+        (step) => step.id === logicalStep.stepId,
+      );
+
       const terminalStatus = this.attemptStatus(result.status);
+
+      // Terminal-outcome precedence runs BEFORE any state write: a late
+      // result whose attempt already owns a different authoritative terminal
+      // outcome (e.g. terminalized by the non-retryable dispatch path or a
+      // supervision synthetic result) must never apply state — the conflict
+      // disposition below commits nothing.
       if (TERMINAL_ATTEMPTS.includes(attempt.status)) {
         if (attempt.status !== terminalStatus) {
           inbox.status = "REJECTED";
-          inbox.lastApplicationError = "A different terminal outcome is already authoritative";
+          inbox.lastApplicationError =
+            "A different terminal outcome is already authoritative";
           await inboxRepository.save(inbox);
           return { disposition: "conflict" };
         }
-      } else {
+      }
+
+      // M2E: pipeline-declared controlled state writes apply only to the
+      // first canonical successful result, under the already-held execution
+      // lock, using the pure M2B patch semantics (never a nested standalone
+      // mutation transaction). A real change increments the semantic version
+      // exactly once; a semantic no-op touches nothing.
+      let stateWrite: StateWriteApplication | null = null;
+      let effectiveTerminalStatus = terminalStatus;
+      let postconditionFailure: string | null = null;
+      // Once sibling work has made the execution terminal, this result stays
+      // durable evidence but is late for mutation authority. It may settle its
+      // own attempt/logical-step facts below; it cannot change ExecutionState.
+      if (
+        execution.status === "RUNNING" &&
+        result.status === "succeeded" &&
+        stepConfig?.stateWrites &&
+        stepConfig.stateWrites.length > 0
+      ) {
+        stateWrite = await this.applyControlledStateWrites(
+          manager,
+          execution,
+          stepConfig.stateWrites,
+          result.output,
+        );
+        if (stateWrite.disposition === "rejected") {
+          // Deterministic Tenvyr postcondition failure: the canonical result
+          // stays evidence, no state key is applied, the attempt follows the
+          // existing retry/onFailure policy, and transport redelivery can
+          // never poison-loop (the inbox row becomes APPLIED below).
+          effectiveTerminalStatus = "FAILED";
+          postconditionFailure = `TENVYR_STATE_WRITE_REJECTED: ${stateWrite.rejectionCode}`;
+        }
+      }
+
+      if (!TERMINAL_ATTEMPTS.includes(attempt.status)) {
         const transition = await manager
           .getRepository(StepAttemptEntity)
           .createQueryBuilder()
           .update(StepAttemptEntity)
           .set({
-            status: terminalStatus,
+            status: effectiveTerminalStatus,
             terminalAt: new Date(),
             result: result.status === "succeeded" ? result.output : null,
-            error: this.error(result),
-            terminationReason: this.terminationReason(result),
+            error: postconditionFailure ?? this.error(result),
+            terminationReason:
+              postconditionFailure ?? this.terminationReason(result),
           })
           .where("id = :id", { id: attempt.id })
           .andWhere("status NOT IN (:...terminal)", {
@@ -221,35 +312,34 @@ export class ResultInboxService {
         .createQueryBuilder()
         .update(DispatchOutboxEntity)
         .set({ status: "COMPLETED", leaseExpiresAt: null, leaseToken: null })
-        .where('"stepAttemptId" = :stepAttemptId', { stepAttemptId: attempt.id })
-        .andWhere('status IN (:...dispatchable)', {
+        .where('"stepAttemptId" = :stepAttemptId', {
+          stepAttemptId: attempt.id,
+        })
+        .andWhere("status IN (:...dispatchable)", {
           dispatchable: ["PENDING", "LEASED", "DISPATCHED"],
         })
         .execute();
-
-      const plan = await manager.getRepository(ExecutionPlanRevisionEntity).findOne({
-        where: { id: attempt.planRevisionId },
-      });
-      const stepConfig = plan?.plan.steps.find((step) => step.id === logicalStep.stepId);
       // Retry scheduling is only meaningful while the run is still live: a
       // late sibling outcome under an already-terminal execution must record
       // its step as terminal (FAILED) instead of RETRYING with a past
       // nextAttemptAt, which recovery would otherwise re-pick every tick.
       const retry =
         execution.status === "RUNNING" &&
-        (terminalStatus === "FAILED" || terminalStatus === "TIMED_OUT") &&
+        (effectiveTerminalStatus === "FAILED" ||
+          effectiveTerminalStatus === "TIMED_OUT") &&
         stepConfig?.onFailure === "retry" &&
         attempt.attemptNumber < logicalStep.maxAttempts;
       logicalStep.status =
-        terminalStatus === "SUCCESS"
+        effectiveTerminalStatus === "SUCCESS"
           ? "COMPLETED"
-          : terminalStatus === "CANCELLED"
+          : effectiveTerminalStatus === "CANCELLED"
             ? "CANCELLED"
             : retry
               ? "RETRYING"
               : "FAILED";
-      logicalStep.output = result.status === "succeeded" ? result.output : null;
-      logicalStep.error = this.error(result);
+      logicalStep.output =
+        effectiveTerminalStatus === "SUCCESS" ? result.output : null;
+      logicalStep.error = postconditionFailure ?? this.error(result);
       logicalStep.endTime = retry ? null : new Date();
       logicalStep.nextAttemptAt = retry ? new Date() : null;
       await manager.getRepository(LogicalStepEntity).save(logicalStep);
@@ -259,11 +349,16 @@ export class ResultInboxService {
       // its own attempt/step facts but must never rewrite the terminal run
       // truth (e.g. a late `cancelled` outcome cannot turn a FAILED run into
       // a CANCELLED one).
-      if (!retry && logicalStep.status === "FAILED" && stepConfig?.onFailure !== "continue") {
+      if (
+        !retry &&
+        logicalStep.status === "FAILED" &&
+        stepConfig?.onFailure !== "continue"
+      ) {
         if (!TERMINAL_EXECUTION_STATUSES.includes(execution.status)) {
           execution.status = "FAILED";
           execution.endTime = new Date();
-          execution.terminationReason = this.error(result);
+          execution.terminationReason =
+            postconditionFailure ?? this.error(result);
           await executionRepository.save(execution);
         }
       } else if (logicalStep.status === "CANCELLED") {
@@ -275,9 +370,61 @@ export class ResultInboxService {
         }
       }
 
+      // Durable artifact identity: one immutable Artifact row per canonical
+      // descriptor, registered inside this transaction regardless of the
+      // terminal outcome. The worker descriptor id stays opaque producer data;
+      // identity is the inbox row + descriptor ordinal, and the canonical
+      // descriptor hash is the stable descriptor projection. orIgnore() is
+      // defense in depth — the pessimistic inbox lock above already serializes
+      // identical deliveries, so a duplicate can never reach this insert.
+      const descriptors = result.artifacts ?? [];
+      if (descriptors.length > 0) {
+        await manager
+          .getRepository(ArtifactEntity)
+          .createQueryBuilder()
+          .insert()
+          .into(ArtifactEntity)
+          .values(
+            descriptors.map((descriptor, descriptorOrdinal) => ({
+              resultInboxId: inbox.id,
+              descriptorOrdinal,
+              descriptorHash: sha256Json(descriptor),
+            })),
+          )
+          .orIgnore()
+          .execute();
+      }
+
+      // M2E: append-only provenance for every canonical successful result
+      // with configured state writes. The unique resultInboxId makes a
+      // duplicate delivery unable to create a second row; no state/output
+      // values are stored, only versions, the canonical mapping hash, and a
+      // stable rejection code.
+      if (stateWrite) {
+        await manager
+          .getRepository(StateWriteEvidenceEntity)
+          .createQueryBuilder()
+          .insert()
+          .into(StateWriteEvidenceEntity)
+          .values({
+            executionId: execution.id,
+            stepAttemptId: attempt.id,
+            resultInboxId: inbox.id,
+            priorVersion: stateWrite.priorVersion,
+            resultVersion: stateWrite.resultVersion,
+            disposition: stateWrite.disposition,
+            mappingHash: stateWrite.mappingHash ?? null,
+            rejectionCode: stateWrite.rejectionCode ?? null,
+          })
+          .orIgnore()
+          .execute();
+      }
+
       inbox.status = "APPLIED";
       inbox.appliedAt = new Date();
-      inbox.lastApplicationError = null;
+      // A state-write rejection is authoritative evidence: the canonical
+      // result is applied with a stable code, never retried by transport.
+      inbox.lastApplicationError = postconditionFailure ?? null;
       await inboxRepository.save(inbox);
       return {
         disposition: "applied",
@@ -285,6 +432,105 @@ export class ResultInboxService {
         stepId: logicalStep.stepId,
       };
     });
+  }
+
+  /**
+   * M2E: apply pipeline-declared controlled state writes from a canonical
+   * successful output under the already-held execution row lock, using the
+   * pure M2B patch semantics. Never nests a standalone mutation transaction.
+   *
+   * - every mapping is required; the first missing pointer or non-JSON value
+   *   rejects the whole write with a stable code and applies no keys;
+   * - a semantic no-op changes no state, version, or timestamp;
+   * - a real change increments the semantic version exactly once and updates
+   *   the state timestamp;
+   * - final-state bounds (64 KiB, 128 keys) are hard ceilings: a violation
+   *   is a deterministic rejection, never a retry loop.
+   */
+  private async applyControlledStateWrites(
+    manager: EntityManager,
+    execution: ExecutionEntity,
+    mappings: StateWriteMapping[],
+    output: unknown,
+  ): Promise<StateWriteApplication> {
+    const priorVersion = execution.executionStateVersion;
+    let patch: { set: Record<string, JsonValue> };
+    try {
+      patch = buildStateWritesPatch(output, mappings);
+    } catch (error) {
+      const code =
+        error instanceof StateWriteResolutionError
+          ? error.code
+          : "TENVYR_STATE_WRITE_INVALID_PATCH";
+      return {
+        disposition: "rejected",
+        priorVersion,
+        resultVersion: priorVersion,
+        rejectionCode: code,
+      };
+    }
+
+    let validated: ExecutionStatePatch;
+    try {
+      validated = validateStatePatch({ set: patch.set });
+    } catch {
+      return {
+        disposition: "rejected",
+        priorVersion,
+        resultVersion: priorVersion,
+        rejectionCode: "TENVYR_STATE_WRITE_INVALID_PATCH",
+      };
+    }
+    const mappingHash = sha256Json(validated);
+
+    const applied = applyStatePatch(
+      (execution.executionState ?? {}) as ExecutionState,
+      validated,
+    );
+    if (!applied.changed) {
+      return {
+        disposition: "noop",
+        priorVersion,
+        resultVersion: priorVersion,
+        mappingHash,
+      };
+    }
+
+    let finalSize: number;
+    try {
+      finalSize = jsonValueUtf8Size(applied.state);
+    } catch {
+      return {
+        disposition: "rejected",
+        priorVersion,
+        resultVersion: priorVersion,
+        rejectionCode: "TENVYR_STATE_WRITE_UNSAFE_VALUE",
+      };
+    }
+    if (
+      finalSize > EXECUTION_STATE_BOUNDS.maxStateBytes ||
+      Object.keys(applied.state).length > EXECUTION_STATE_BOUNDS.maxStateKeys
+    ) {
+      return {
+        disposition: "rejected",
+        priorVersion,
+        resultVersion: priorVersion,
+        rejectionCode: "TENVYR_STATE_WRITE_BOUNDS",
+      };
+    }
+
+    // The execution row is already locked; state, semantic version, and the
+    // state-specific timestamp commit atomically with the result application.
+    execution.executionState = structuredClone(applied.state);
+    execution.executionStateVersion = priorVersion + 1;
+    execution.executionStateUpdatedAt = new Date();
+    await manager.getRepository(ExecutionEntity).save(execution);
+    return {
+      disposition: "applied",
+      priorVersion,
+      resultVersion: priorVersion + 1,
+      mappingHash,
+    };
   }
 
   private attemptStatus(status: AgentResultV1["status"]): StepAttemptStatus {
@@ -301,7 +547,9 @@ export class ResultInboxService {
   }
 
   private error(result: AgentResultV1): string | null {
-    return result.error ? `${result.error.code}: ${result.error.message}` : null;
+    return result.error
+      ? `${result.error.code}: ${result.error.message}`
+      : null;
   }
 
   private terminationReason(result: AgentResultV1): string | null {
@@ -315,20 +563,15 @@ export class ResultInboxService {
     scope?: string;
     messageId?: string;
   } {
-    if (transport.adapter === "kafka") {
-      return {
-        adapter: transport.adapter,
-        scope:
-          transport.topic !== undefined && transport.partition !== undefined
-            ? `${transport.topic}:${transport.partition}`
-            : undefined,
-        messageId: transport.offset,
-      };
-    }
+    // Durable transport identity, shared with AgentEventService: the bounded
+    // storage constraints (varchar columns) are encoded once in
+    // durableTransportIdentity, and Kafka scopes are deterministically
+    // bounded when a long topic would overflow.
+    const identity = durableTransportIdentity(transport);
     return {
-      adapter: transport.adapter,
-      scope: transport.keyId,
-      messageId: transport.deliveryId,
+      adapter: identity.adapter,
+      scope: identity.scope ?? undefined,
+      messageId: identity.messageId ?? undefined,
     };
   }
 }

@@ -4,14 +4,8 @@
     {
       "id": "contracts-v1",
       "status": "implemented",
-      "sources": [
-        "contracts/schemas",
-        "packages/contracts/src"
-      ],
-      "tests": [
-        "packages/contracts/test",
-        "contracts/conformance"
-      ],
+      "sources": ["contracts/schemas", "packages/contracts/src"],
+      "tests": ["packages/contracts/test", "contracts/conformance"],
       "docs": [
         "docs/architecture/contracts/agent-protocol-v1.md",
         "docs/architecture/contracts/json-interoperability.md"
@@ -31,9 +25,7 @@
         "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
         "services/orchestrator/src/services/kafka.service.spec.ts"
       ],
-      "docs": [
-        "docs/architecture/transports/kafka-runtime-v1.md"
-      ],
+      "docs": ["docs/architecture/transports/kafka-runtime-v1.md"],
       "limitations": [
         "Kafka v1 topics and consumer identities remain compatibility identifiers"
       ]
@@ -48,9 +40,7 @@
         "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
         "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
       ],
-      "docs": [
-        "docs/architecture/transports/http-agent-adapter-v1.md"
-      ],
+      "docs": ["docs/architecture/transports/http-agent-adapter-v1.md"],
       "limitations": [
         "Callback replay protection and dispatch state are process-local"
       ]
@@ -58,15 +48,9 @@
     {
       "id": "typescript-worker-sdk",
       "status": "implemented",
-      "sources": [
-        "packages/worker/src"
-      ],
-      "tests": [
-        "packages/worker/test"
-      ],
-      "docs": [
-        "docs/architecture/workers/typescript-worker-sdk.md"
-      ],
+      "sources": ["packages/worker/src"],
+      "tests": ["packages/worker/test"],
+      "docs": ["docs/architecture/workers/typescript-worker-sdk.md"],
       "limitations": [
         "Queue, idempotency, and callback state are process-local"
       ]
@@ -74,15 +58,9 @@
     {
       "id": "python-worker-sdk",
       "status": "implemented",
-      "sources": [
-        "sdks/python-worker/src/tenvyr_worker"
-      ],
-      "tests": [
-        "sdks/python-worker/tests"
-      ],
-      "docs": [
-        "docs/architecture/workers/python-worker-sdk.md"
-      ],
+      "sources": ["sdks/python-worker/src/tenvyr_worker"],
+      "tests": ["sdks/python-worker/tests"],
+      "docs": ["docs/architecture/workers/python-worker-sdk.md"],
       "limitations": [
         "Queue, idempotency, and callback state are process-local",
         "Thread cancellation is cooperative"
@@ -99,9 +77,7 @@
         "packages/contracts/test/json-numbers.spec.ts",
         "sdks/python-worker/tests/test_schema_protocol.py"
       ],
-      "docs": [
-        "docs/architecture/contracts/json-interoperability.md"
-      ],
+      "docs": ["docs/architecture/contracts/json-interoperability.md"],
       "limitations": [
         "Exact cross-language decimal equality is not guaranteed for non-integer floats"
       ]
@@ -109,15 +85,9 @@
     {
       "id": "gateway",
       "status": "implemented",
-      "sources": [
-        "services/gateway/src"
-      ],
-      "tests": [
-        "services/gateway/src/app.controller.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
+      "sources": ["services/gateway/src"],
+      "tests": ["services/gateway/src/app.controller.spec.ts"],
+      "docs": ["docs/architecture/control-plane.md"],
       "limitations": [
         "Thin HTTP and WebSocket relay; no production agent-memory API",
         "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
@@ -145,9 +115,7 @@
         "services/orchestrator/src/database/migrations/milestone-zero-foundation.spec.ts",
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
+      "docs": ["docs/architecture/control-plane.md"],
       "limitations": [
         "Execution plan snapshots and attempt history are durable",
         "Logical steps materialize unfrozen (PENDING, frozenSpecHash/frozenAt null) and freeze only when a claim or gate decision becomes authoritative; engine-level reconcileExecution is the single idempotent autonomous progression path and resumeAfterResult is a compatibility alias",
@@ -190,12 +158,8 @@
     {
       "id": "java-agent-runner",
       "status": "implemented",
-      "sources": [
-        "services/agent-runner/src/main/java"
-      ],
-      "tests": [
-        "services/agent-runner/src/test/java"
-      ],
+      "sources": ["services/agent-runner/src/main/java"],
+      "tests": ["services/agent-runner/src/test/java"],
       "docs": [
         "docs/architecture/agents-and-runners.md",
         "docs/showcase/using-model-providers.md"
@@ -208,16 +172,12 @@
     {
       "id": "code-reviewer-agent",
       "status": "implemented",
-      "sources": [
-        "services/agent-code-reviewer/src"
-      ],
+      "sources": ["services/agent-code-reviewer/src"],
       "tests": [
         "services/agent-code-reviewer/src/app.controller.spec.ts",
         "services/agent-code-reviewer/src/kafka.service.spec.ts"
       ],
-      "docs": [
-        "docs/architecture/agents-and-runners.md"
-      ],
+      "docs": ["docs/architecture/agents-and-runners.md"],
       "limitations": [
         "Kafka-specialized service; not a general framework integration"
       ]
@@ -225,16 +185,12 @@
     {
       "id": "observability-agent",
       "status": "implemented",
-      "sources": [
-        "services/agent-observability/src"
-      ],
+      "sources": ["services/agent-observability/src"],
       "tests": [
         "services/agent-observability/src/app.controller.spec.ts",
         "services/agent-observability/src/kafka.service.spec.ts"
       ],
-      "docs": [
-        "docs/architecture/agents-and-runners.md"
-      ],
+      "docs": ["docs/architecture/agents-and-runners.md"],
       "limitations": [
         "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
       ]
@@ -242,16 +198,9 @@
     {
       "id": "frontend-dashboard",
       "status": "implemented",
-      "sources": [
-        "frontend/src/app"
-      ],
-      "tests": [
-        "frontend/src/app/dashboard/safe-preview.test.mjs"
-      ],
-      "docs": [
-        "docs/architecture/overview.md",
-        "docs/showcase/demo-guide.md"
-      ],
+      "sources": ["frontend/src/app"],
+      "tests": ["frontend/src/app/dashboard/safe-preview.test.mjs"],
+      "docs": ["docs/architecture/overview.md", "docs/showcase/demo-guide.md"],
       "limitations": [
         "Safe-preview logic has a focused test; end-to-end UI behavior is exercised through showcase smoke URLs"
       ]
@@ -259,15 +208,9 @@
     {
       "id": "setup-readiness-check",
       "status": "implemented",
-      "sources": [
-        "scripts/setup-check.mjs"
-      ],
-      "tests": [
-        "scripts/setup-check.mjs"
-      ],
-      "docs": [
-        "docs/operations/local-development.md"
-      ],
+      "sources": ["scripts/setup-check.mjs"],
+      "tests": ["scripts/setup-check.mjs"],
+      "docs": ["docs/operations/local-development.md"],
       "limitations": [
         "Reports machine state and actions but does not install or reconfigure prerequisites"
       ]
@@ -283,14 +226,8 @@
         "services/agent-code-reviewer/Dockerfile",
         "services/agent-observability/Dockerfile"
       ],
-      "tests": [
-        "scripts/setup-check.test.mjs",
-        "scripts/smoke-e2e.test.mjs"
-      ],
-      "docs": [
-        "docs/showcase/demo-guide.md",
-        "docs/showcase/case-study.md"
-      ],
+      "tests": ["scripts/setup-check.test.mjs", "scripts/smoke-e2e.test.mjs"],
+      "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
       "limitations": [
         "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
         "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
@@ -308,9 +245,7 @@
         "scripts/verify-package-packs.mjs",
         "scripts/verify-python-worker-package.py"
       ],
-      "docs": [
-        "docs/operations/package-verification.md"
-      ],
+      "docs": ["docs/operations/package-verification.md"],
       "limitations": [
         "Verification is local/private and does not authorize publication"
       ]
@@ -330,9 +265,7 @@
         "scripts/verify-package-packs.mjs",
         "scripts/verify-python-worker-package.py"
       ],
-      "docs": [
-        "docs/product/identity.md"
-      ],
+      "docs": ["docs/product/identity.md"],
       "limitations": [
         "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
       ]
@@ -342,9 +275,7 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/roadmap/observability-provenance.md"
-      ],
+      "docs": ["docs/roadmap/observability-provenance.md"],
       "limitations": [
         "No production OpenTelemetry SDK or collector integration"
       ]
@@ -354,23 +285,85 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/roadmap/observability-provenance.md"
-      ],
+      "docs": ["docs/roadmap/observability-provenance.md"],
       "limitations": [
         "Trace context is not propagated as W3C traceparent/tracestate"
       ]
     },
     {
       "id": "artifact-store",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
+      "status": "partial",
+      "sources": [
+        "services/orchestrator/src/entities/artifact.entity.ts",
+        "services/orchestrator/src/entities/artifact-exposure.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270002000-MilestoneTwoArtifactIdentity.ts",
+        "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
+        "services/orchestrator/src/services/artifact-projection.resolver.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/result-inbox.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/services/result-inbox.service.spec.ts",
+        "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
+        "services/orchestrator/src/domain/context-snapshot.spec.ts",
+        "services/orchestrator/src/database/migrations/milestone-two-artifact-identity.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
       "docs": [
+        "docs/architecture/control-plane.md",
         "docs/roadmap/observability-provenance.md"
       ],
       "limitations": [
-        "No artifact persistence or lineage store"
+        "Immutable reference identity, producer lineage, bounded attempt projection, and exposure lineage exist; exposure is not proof of URI access or semantic consumption",
+        "No content/blob storage, uploads/downloads, signed URLs, encryption, retention, deletion APIs, or replay",
+        "No public/Gateway/frontend artifact read APIs (current APIs are unauthenticated and artifact metadata may be sensitive)",
+        "No historical backfill: authoritative artifact identity begins after the M2 migration",
+        "Artifact database records are immutable references; external bytes are not verified or claimed immutable",
+        "Artifact AgentEvents remain non-authoritative append-only evidence"
+      ]
+    },
+    {
+      "id": "execution-state",
+      "status": "partial",
+      "sources": [
+        "services/orchestrator/src/domain/execution-state.ts",
+        "services/orchestrator/src/services/artifact-projection.resolver.ts",
+        "services/orchestrator/src/entities/artifact-exposure.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
+        "services/orchestrator/src/domain/context-snapshot.ts",
+        "services/orchestrator/src/services/execution-state.service.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/pipeline-validation.service.ts",
+        "services/orchestrator/src/entities/execution.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270003000-MilestoneTwoExecutionState.ts",
+        "services/orchestrator/src/domain/state-writes.ts",
+        "services/orchestrator/src/entities/state-write-evidence.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270005000-MilestoneTwoStateWriteEvidence.ts",
+        "services/orchestrator/src/services/result-inbox.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/domain/execution-state.spec.ts",
+        "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
+        "services/orchestrator/src/domain/context-snapshot.spec.ts",
+        "services/orchestrator/src/services/execution-state.service.spec.ts",
+        "services/orchestrator/src/services/execution.service.spec.ts",
+        "services/orchestrator/src/services/engine.service.spec.ts",
+        "services/orchestrator/src/services/pipeline-validation.service.spec.ts",
+        "services/orchestrator/src/architecture.spec.ts",
+        "services/orchestrator/src/database/migrations/milestone-two-execution-state.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "services/orchestrator/src/domain/state-writes.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Internal durable primitive only: no agent/result mutation authority and no AgentResultV1.statePatch",
+        "Mutation evidence is not full event-sourced state history (no revision table)",
+        "Exposure proves the reference entered committed context, never dispatch success, URI opening, or semantic consumption",
+        "Artifact bytes are never owned, fetched, verified, or claimed immutable",
+        "No public state/artifact/lineage API (current APIs are unauthenticated)",
+        "No memory, RAG, semantic search, or provider prompt construction",
+        "No replay implementation",
+        "Patch semantics are top-level key set/delete only; nested merges are future work"
       ]
     },
     {
@@ -378,33 +371,23 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/roadmap/observability-provenance.md"
-      ],
-      "limitations": [
-        "No runtime policy engine"
-      ]
+      "docs": ["docs/roadmap/observability-provenance.md"],
+      "limitations": ["No runtime policy engine"]
     },
     {
       "id": "cli-adapter",
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/roadmap/README.md"
-      ],
-      "limitations": [
-        "No CLI transport adapter"
-      ]
+      "docs": ["docs/roadmap/README.md"],
+      "limitations": ["No CLI transport adapter"]
     },
     {
       "id": "framework-integrations",
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/roadmap/README.md"
-      ],
+      "docs": ["docs/roadmap/README.md"],
       "limitations": [
         "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
       ]
@@ -414,9 +397,7 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/roadmap/README.md"
-      ],
+      "docs": ["docs/roadmap/README.md"],
       "limitations": [
         "Worker callback and idempotency records are lost on process restart"
       ]
@@ -426,9 +407,7 @@
       "status": "blocked",
       "sources": [],
       "tests": [],
-      "docs": [
-        "docs/product/identity.md"
-      ],
+      "docs": ["docs/product/identity.md"],
       "limitations": [
         "Blocked by registry, legal, repository, and explicit publication approval gates"
       ]

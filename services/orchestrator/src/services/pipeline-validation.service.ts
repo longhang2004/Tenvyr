@@ -1,4 +1,6 @@
 import { Injectable } from "@nestjs/common";
+import { validateContextProjection } from "../domain/context-snapshot";
+import { validateStateWrites } from "../domain/state-writes";
 import type {
   FailurePolicy,
   PipelineDefinition,
@@ -76,6 +78,16 @@ export class PipelineValidationService {
       throw new Error(`steps[${index}].metadata must be an object`);
     }
 
+    const contextProjection =
+      value.contextProjection === undefined
+        ? undefined
+        : validateContextProjection(value.contextProjection);
+
+    const stateWrites =
+      value.stateWrites === undefined
+        ? undefined
+        : validateStateWrites(value.stateWrites);
+
     return {
       id,
       agent,
@@ -96,6 +108,8 @@ export class PipelineValidationService {
       ...(value.metadata === undefined
         ? {}
         : { metadata: value.metadata as Record<string, unknown> }),
+      ...(contextProjection === undefined ? {} : { contextProjection }),
+      ...(stateWrites === undefined ? {} : { stateWrites }),
     };
   }
 
@@ -124,6 +138,54 @@ export class PipelineValidationService {
       }
     }
 
+    // M2D: every artifact selector's fromStep must be a declared TRANSITIVE
+    // dependency of the consumer step; self, unrelated, and future steps are
+    // rejected at pipeline ingress.
+    for (const step of steps) {
+      for (const selector of step.contextProjection?.artifacts ?? []) {
+        if (selector.fromStep === step.id) {
+          throw new Error(
+            `Step ${step.id} cannot project artifacts from itself`,
+          );
+        }
+        if (!this.isTransitiveDependency(step, selector.fromStep, byId)) {
+          throw new Error(
+            `Step ${step.id} projects artifacts from ${selector.fromStep}, which is not a transitive dependency`,
+          );
+        }
+      }
+    }
+
+    // M2E static write-conflict rule: two steps that may run concurrently
+    // cannot write the same ExecutionState key. Same-key writers are allowed
+    // only when the DAG proves one is transitively ordered before the other
+    // (dependency reachability establishes sequence). Disjoint parallel
+    // writes remain allowed and commute under the execution row lock.
+    const writers = new Map<string, string[]>();
+    for (const step of steps) {
+      for (const mapping of step.stateWrites ?? []) {
+        const list = writers.get(mapping.key) ?? [];
+        list.push(step.id);
+        writers.set(mapping.key, list);
+      }
+    }
+    for (const [key, ids] of writers) {
+      for (let first = 0; first < ids.length; first += 1) {
+        for (let second = first + 1; second < ids.length; second += 1) {
+          const writerA = byId.get(ids[first])!;
+          const writerB = byId.get(ids[second])!;
+          const ordered =
+            this.isTransitiveDependency(writerA, writerB.id, byId) ||
+            this.isTransitiveDependency(writerB, writerA.id, byId);
+          if (!ordered) {
+            throw new Error(
+              `Steps ${ids[first]} and ${ids[second]} both write state key "${key}" without proven ordering`,
+            );
+          }
+        }
+      }
+    }
+
     const visiting = new Set<string>();
     const depths = new Map<string, number>();
     const depth = (step: PipelineStepConfig): number => {
@@ -145,6 +207,24 @@ export class PipelineValidationService {
       return result;
     };
     steps.forEach(depth);
+  }
+
+  private isTransitiveDependency(
+    step: PipelineStepConfig,
+    candidate: string,
+    byId: Map<string, PipelineStepConfig>,
+  ): boolean {
+    const visit = (current: PipelineStepConfig, seen: Set<string>): boolean => {
+      for (const dependency of current.dependsOn ?? []) {
+        if (dependency === candidate) return true;
+        if (seen.has(dependency)) continue;
+        seen.add(dependency);
+        const next = byId.get(dependency);
+        if (next && visit(next, seen)) return true;
+      }
+      return false;
+    };
+    return visit(step, new Set([step.id]));
   }
 
   private stringArray(value: unknown, path: string): string[] {

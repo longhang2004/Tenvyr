@@ -1,16 +1,20 @@
-import { AgentTransportConfigService, parseAgentTransportConfiguration } from './agent-transport-config.service';
+import {
+  AgentTransportConfigService,
+  parseAgentTransportConfiguration,
+  type HttpAgentTransportConfiguration,
+} from "./agent-transport-config.service";
 
 const httpConfiguration = {
-  'remote-security-reviewer': {
-    kind: 'http',
-    submitUrl: 'https://security-agent.internal/v1/runs',
+  "remote-security-reviewer": {
+    kind: "http",
+    submitUrl: "https://security-agent.internal/v1/runs",
     outboundAuthentication: {
-      type: 'bearer',
-      tokenEnv: 'SECURITY_AGENT_TOKEN',
+      type: "bearer",
+      tokenEnv: "SECURITY_AGENT_TOKEN",
     },
     callbackAuthentication: {
-      keyId: 'security-agent-v1',
-      secretEnv: 'SECURITY_AGENT_CALLBACK_SECRET',
+      keyId: "security-agent-v1",
+      secretEnv: "SECURITY_AGENT_CALLBACK_SECRET",
     },
     requestTimeoutMs: 10_000,
     maxResponseBytes: 65_536,
@@ -19,154 +23,203 @@ const httpConfiguration = {
 
 const environment = (overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   AGENT_TRANSPORT_CONFIG: JSON.stringify(httpConfiguration),
-  HTTP_AGENT_CALLBACK_BASE_URL: 'https://orchestrator.example',
-  SECURITY_AGENT_TOKEN: 'bearer-secret',
-  SECURITY_AGENT_CALLBACK_SECRET: 'callback-secret',
+  HTTP_AGENT_CALLBACK_BASE_URL: "https://orchestrator.example",
+  SECURITY_AGENT_TOKEN: "bearer-secret",
+  SECURITY_AGENT_CALLBACK_SECRET: "callback-secret",
   ...overrides,
 });
 
-describe('AgentTransportConfigService', () => {
-  it('defaults existing and unknown agents to Kafka', () => {
+describe("AgentTransportConfigService", () => {
+  it("defaults existing and unknown agents to Kafka", () => {
     const config = parseAgentTransportConfiguration({});
 
-    expect(config.agents.get('code-reviewer')).toBeUndefined();
-    expect(config.agents.get('observability')).toBeUndefined();
-    expect(new AgentTransportConfigService(config).forAgent('unknown')).toEqual({ kind: 'kafka' });
+    expect(config.agents.get("code-reviewer")).toBeUndefined();
+    expect(config.agents.get("observability")).toBeUndefined();
+    expect(new AgentTransportConfigService(config).forAgent("unknown")).toEqual(
+      { kind: "kafka" },
+    );
   });
 
-  it('accepts an explicit empty transport map without HTTP callback configuration', () => {
-    expect(() => parseAgentTransportConfiguration({ AGENT_TRANSPORT_CONFIG: '{}' })).not.toThrow();
+  it("accepts an explicit empty transport map without HTTP callback configuration", () => {
+    expect(() =>
+      parseAgentTransportConfiguration({ AGENT_TRANSPORT_CONFIG: "{}" }),
+    ).not.toThrow();
   });
 
-  it('resolves an exact HTTP agent and its trusted callback URL', () => {
-    const service = new AgentTransportConfigService(parseAgentTransportConfiguration(environment()));
+  it("resolves an exact HTTP agent and its trusted callback URL", () => {
+    const service = new AgentTransportConfigService(
+      parseAgentTransportConfiguration(environment()),
+    );
 
-    expect(service.forAgent('remote-security-reviewer')).toMatchObject({
-      kind: 'http',
-      submitUrl: 'https://security-agent.internal/v1/runs',
+    expect(service.forAgent("remote-security-reviewer")).toMatchObject({
+      kind: "http",
+      submitUrl: "https://security-agent.internal/v1/runs",
       requestTimeoutMs: 10_000,
       maxResponseBytes: 65_536,
     });
-    expect(service.callbackUrlFor('remote-security-reviewer')).toBe(
-      'https://orchestrator.example/internal/agent-callbacks/http/remote-security-reviewer',
+    expect(service.callbackUrlFor("remote-security-reviewer")).toBe(
+      "https://orchestrator.example/internal/agent-callbacks/http/remote-security-reviewer",
     );
   });
 
   it.each([
-    ['missing bearer token', { SECURITY_AGENT_TOKEN: undefined }],
-    ['missing callback secret', { SECURITY_AGENT_CALLBACK_SECRET: undefined }],
+    ["missing bearer token", { SECURITY_AGENT_TOKEN: undefined }],
+    ["missing callback secret", { SECURITY_AGENT_CALLBACK_SECRET: undefined }],
     [
-      'invalid submit URL',
+      "invalid submit URL",
       {
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
-            submitUrl: 'not-a-url',
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            submitUrl: "not-a-url",
           },
         }),
       },
     ],
     [
-      'embedded URL credentials',
+      "embedded URL credentials",
       {
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
-            submitUrl: 'https://user:password@security-agent.internal/v1/runs',
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            submitUrl: "https://user:password@security-agent.internal/v1/runs",
           },
         }),
       },
     ],
     [
-      'unsupported protocol',
+      "unsupported protocol",
       {
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
-            submitUrl: 'ftp://security-agent.internal/v1/runs',
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            submitUrl: "ftp://security-agent.internal/v1/runs",
           },
         }),
       },
     ],
     [
-      'insecure HTTP without explicit override',
+      "insecure HTTP without explicit override",
       {
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
-            submitUrl: 'http://127.0.0.1:8080/v1/runs',
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            submitUrl: "http://127.0.0.1:8080/v1/runs",
           },
         }),
       },
     ],
     [
-      'invalid timeout',
+      "invalid timeout",
       {
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
             requestTimeoutMs: 0,
           },
         }),
       },
     ],
     [
-      'invalid response-size limit',
+      "invalid response-size limit",
       {
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
             maxResponseBytes: -1,
           },
         }),
       },
     ],
-  ])('rejects %s at startup', (_case, overrides) => {
-    expect(() => parseAgentTransportConfiguration(environment(overrides))).toThrow(
+    [
+      "callback key ID beyond the durable 255-char bound",
+      {
+        AGENT_TRANSPORT_CONFIG: JSON.stringify({
+          ...httpConfiguration,
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            callbackAuthentication: {
+              keyId: "k".repeat(256),
+              secretEnv: "SECURITY_AGENT_CALLBACK_SECRET",
+            },
+          },
+        }),
+      },
+    ],
+  ])("rejects %s at startup", (_case, overrides) => {
+    expect(() =>
+      parseAgentTransportConfiguration(environment(overrides)),
+    ).toThrow(
       expect.objectContaining({
-        code: 'HTTP_CONFIGURATION_INVALID',
+        code: "HTTP_CONFIGURATION_INVALID",
         retryable: false,
       }),
     );
   });
 
-  it('permits explicitly enabled development HTTP URLs', () => {
+  it("accepts a callback key ID at the durable 255-char bound", () => {
     const config = parseAgentTransportConfiguration(
       environment({
-        HTTP_AGENT_ALLOW_INSECURE: 'true',
-        HTTP_AGENT_CALLBACK_BASE_URL: 'http://127.0.0.1:3001',
         AGENT_TRANSPORT_CONFIG: JSON.stringify({
           ...httpConfiguration,
-          'remote-security-reviewer': {
-            ...httpConfiguration['remote-security-reviewer'],
-            submitUrl: 'http://127.0.0.1:8080/v1/runs',
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            callbackAuthentication: {
+              keyId: "k".repeat(255),
+              secretEnv: "SECURITY_AGENT_CALLBACK_SECRET",
+            },
           },
         }),
       }),
     );
 
-    expect(config.agents.get('remote-security-reviewer')?.kind).toBe('http');
+    const httpAgent = config.agents.get(
+      "remote-security-reviewer",
+    ) as HttpAgentTransportConfiguration;
+    expect(httpAgent.callbackAuthentication.keyId).toBe("k".repeat(255));
   });
 
-  it('does not expose secret values in validation errors', () => {
+  it("permits explicitly enabled development HTTP URLs", () => {
+    const config = parseAgentTransportConfiguration(
+      environment({
+        HTTP_AGENT_ALLOW_INSECURE: "true",
+        HTTP_AGENT_CALLBACK_BASE_URL: "http://127.0.0.1:3001",
+        AGENT_TRANSPORT_CONFIG: JSON.stringify({
+          ...httpConfiguration,
+          "remote-security-reviewer": {
+            ...httpConfiguration["remote-security-reviewer"],
+            submitUrl: "http://127.0.0.1:8080/v1/runs",
+          },
+        }),
+      }),
+    );
+
+    expect(config.agents.get("remote-security-reviewer")?.kind).toBe("http");
+  });
+
+  it("does not expose secret values in validation errors", () => {
     expect(() =>
       parseAgentTransportConfiguration(
         environment({
           AGENT_TRANSPORT_CONFIG: JSON.stringify({
             ...httpConfiguration,
-            'remote-security-reviewer': {
-              ...httpConfiguration['remote-security-reviewer'],
-              requestTimeoutMs: 'callback-secret',
+            "remote-security-reviewer": {
+              ...httpConfiguration["remote-security-reviewer"],
+              requestTimeoutMs: "callback-secret",
             },
           }),
         }),
       ),
-    ).toThrow(expect.not.objectContaining({ message: expect.stringContaining('callback-secret') }));
+    ).toThrow(
+      expect.not.objectContaining({
+        message: expect.stringContaining("callback-secret"),
+      }),
+    );
   });
 });

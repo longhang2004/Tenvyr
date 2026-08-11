@@ -85,15 +85,26 @@ adds event identity, sequence, type, and a JSON-object payload:
 
 Types are `accepted`, `progress`, `log`, `heartbeat`, `artifact`, `completed`,
 and `failed`. `payload` is a JSON object; the canonical serialized event body
-must not exceed 64 KiB, enforced on the Worker before emission and on the
+must not exceed 64 KiB, enforced identically on the Worker before emission
+(against the COMPLETE canonical event, envelope fields included) and on the
 Orchestrator before persistence.
 
 ### Sequence semantics
 
 - `sequence` is the worker-produced logical order within one invocation,
-  monotonic from 0.
+  monotonic from 0, bounded by the durable int32 storage:
+  `0 <= sequence <= 2147483647`.
 - `eventId` is deterministic and stable across delivery retries:
-  `${invocationId}:${sequence}`.
+  `${invocationId}:${sequence}`, bounded by the durable varchar(255) storage:
+  `1 <= eventId.length <= 255`. Official Workers enforce the generated
+  identity bounds (`eventId <= 255`, `sequence <= 2147483647`) before
+  scheduling any event delivery, so an event an official Worker accepts for
+  delivery is always AgentEventV1-valid and fits durable scalar storage.
+- Storage-safe bounds are part of the canonical contract: an event outside
+  them is rejected as a permanent contract violation by every transport
+  (HTTP 400 without retry; Kafka poison-acknowledged) before any PostgreSQL
+  persistence attempt, so a schema-valid event can never fail with a
+  PostgreSQL varchar/int overflow.
 - Events may arrive out of order, with gaps, or after the terminal
   `AgentResult`. The Orchestrator never reorders, renumbers, or fills gaps.
 - Duplicate deliveries are idempotent: `(stepAttemptId, eventId)` is the
@@ -106,10 +117,24 @@ Orchestrator before persistence.
 
 `AgentResult` remains the only worker-originated terminal authority.
 `AgentEvent` is durable operational evidence: it can project server-received
-liveness fields on a non-terminal attempt and prove worker activity
-(`DISPATCHED` → `RUNNING`), but it can never terminalize an attempt, change a
-LogicalStep outcome, or create a StepAttempt. Late events after a terminal
-result remain append-only evidence and never touch liveness columns.
+liveness fields on a non-terminal attempt, and events that prove execution
+activity (`heartbeat`, `progress`, `log`, `artifact`) transition
+`DISPATCHED` → `RUNNING` — but events can never terminalize an attempt,
+change a LogicalStep outcome, or create a StepAttempt.
+
+`accepted` is narrower than execution: it means the Worker durably
+owns/accepted the invocation (the run was enqueued) and projects
+`acceptedAt`, but it is NOT proof that the handler has begun executing. A
+concurrency-1 Worker accepts a run and queues it behind a busy execution
+slot, so an accepted attempt legitimately stays `DISPATCHED` while queued.
+Consequently an accepted run is never acceptance-timed-out, and a queued run
+is never heartbeat-timed-out; once the handler actually starts, the first
+heartbeat/progress/log/artifact event transitions the attempt to `RUNNING`
+and the normal heartbeat contract applies from the persisted server-side
+`startTime`.
+
+Late events after a terminal result remain append-only evidence and never
+touch liveness columns.
 
 ### occurredAt versus receivedAt
 

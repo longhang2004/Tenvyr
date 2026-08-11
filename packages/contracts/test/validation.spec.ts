@@ -95,6 +95,28 @@ describe("contract validation", () => {
     );
   });
 
+  it("accepts the storage-safe eventId and sequence maxima", () => {
+    expect(
+      parseAgentEvent({
+        ...event,
+        eventId: "e".repeat(255),
+        sequence: 2147483647,
+      }),
+    ).toMatchObject({
+      eventId: "e".repeat(255),
+      sequence: 2147483647,
+    });
+  });
+
+  it.each([
+    ["eventId longer than varchar(255)", { eventId: "e".repeat(256) }],
+    ["sequence beyond PostgreSQL int32", { sequence: 2147483648 }],
+  ])("rejects %s before any persistence attempt", (_label, overrides) => {
+    expect(() => parseAgentEvent({ ...event, ...overrides })).toThrow(
+      ContractValidationError,
+    );
+  });
+
   it("rejects a non-object event payload", () => {
     expect(() => parseAgentEvent({ ...event, payload: "working" })).toThrow(
       ContractValidationError,

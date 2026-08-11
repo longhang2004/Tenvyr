@@ -56,6 +56,36 @@ async def test_raw_none_and_structured_missing_or_explicit_none_are_distinct() -
 
 
 @pytest.mark.asyncio
+async def test_handler_reads_the_tenvyr_envelope_from_invocation_context() -> None:
+    """M2C conformance: the Python handler sees the semantically identical
+    Tenvyr envelope the Orchestrator persisted, with no result-semantic drift."""
+    envelope = {
+        "tenvyr": {
+            "schemaVersion": 1,
+            "executionState": {"version": 7, "values": {"approvedBrief": "x"}},
+            "artifacts": [],
+        }
+    }
+    invocation = {**_INVOCATION, "context": envelope}
+    seen: dict[str, object] = {}
+
+    def handler(context, _input):
+        seen["context"] = dict(context.invocation["context"])  # type: ignore[index]
+        return {"output": {"sawContext": True}}
+
+    result = await execute_agent(
+        agent=define_agent(name="echo-agent", execute=handler),
+        invocation=invocation,
+        run_id="run-1",
+        timeout_seconds=1.0,
+        now=lambda: _NOW,
+    )
+    assert seen["context"] == envelope
+    assert result["status"] == "succeeded"
+    assert result["output"] == {"output": {"sawContext": True}}
+
+
+@pytest.mark.asyncio
 async def test_parsers_wrap_async_handler_and_structured_success() -> None:
     calls: list[str] = []
 

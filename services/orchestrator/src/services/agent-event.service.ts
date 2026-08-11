@@ -6,6 +6,7 @@ import type {
   AgentTransportMetadata,
 } from "../agent-adapters/agent-adapter.types";
 import { canonicalJson, sha256Json } from "../domain/canonical-json";
+import { durableTransportIdentity } from "../domain/transport-identity";
 import { AgentEventConflictEntity } from "../entities/agent-event-conflict.entity";
 import { AgentEventEntity } from "../entities/agent-event.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
@@ -19,7 +20,12 @@ export class EventPayloadTooLargeError extends Error {
     this.name = "EventPayloadTooLargeError";
   }
 }
-const TERMINAL_ATTEMPT_STATUSES = ["SUCCESS", "FAILED", "TIMED_OUT", "CANCELLED"];
+const TERMINAL_ATTEMPT_STATUSES = [
+  "SUCCESS",
+  "FAILED",
+  "TIMED_OUT",
+  "CANCELLED",
+];
 
 export type EventApplication =
   | { disposition: "applied" }
@@ -38,10 +44,12 @@ export type EventListQuery = {
 /**
  * Application-layer AgentEvent semantics. Events are durable operational
  * evidence, never authoritative lifecycle state: they can project liveness
- * fields on a non-terminal attempt and prove worker activity
- * (DISPATCHED -> RUNNING), but they can never terminalize an attempt, change
- * a LogicalStep outcome, or create a StepAttempt. AgentResult remains the
- * only worker-originated terminal authority.
+ * fields on a non-terminal attempt, and events that prove execution activity
+ * (heartbeat/progress/log/artifact) transition DISPATCHED -> RUNNING — but
+ * events can never terminalize an attempt, change a LogicalStep outcome, or
+ * create a StepAttempt. `accepted` proves worker ownership, not handler
+ * execution, so it projects acceptedAt without transitioning. AgentResult
+ * remains the only worker-originated terminal authority.
  */
 @Injectable()
 export class AgentEventService {
@@ -73,7 +81,9 @@ export class AgentEventService {
       throw new EventPayloadTooLargeError(MAX_EVENT_CANONICAL_BYTES);
     }
     const payloadHash = sha256Json(event);
-    const receivedAt = new Date(transport.receivedAt ?? new Date().toISOString());
+    const receivedAt = new Date(
+      transport.receivedAt ?? new Date().toISOString(),
+    );
     const source = this.source(transport);
 
     return this.dataSource.transaction(async (manager) => {
@@ -242,16 +252,32 @@ export class AgentEventService {
     return {
       events,
       next:
-        hasMore && last ? { receivedAt: last.receivedAt, id: last.id } : undefined,
+        hasMore && last
+          ? { receivedAt: last.receivedAt, id: last.id }
+          : undefined,
     };
   }
 
   /**
    * Server-received liveness projection, only while the attempt is
    * non-terminal. Late events after a terminal result are still append-only
-   * evidence but never touch these columns. A DISPATCHED attempt becomes
-   * RUNNING once (guarded by the status predicate); startTime is preserved if
-   * already set.
+   * evidence but never touch these columns.
+   *
+   * `accepted` proves the Worker durably owns the invocation (e.g. it was
+   * enqueued behind a busy execution slot) but NOT that the handler has begun
+   * executing, so it projects `acceptedAt` without transitioning the attempt.
+   * Only events that prove actual execution activity (`heartbeat`,
+   * `progress`, `log`, `artifact`) transition a DISPATCHED attempt to
+   * RUNNING exactly once (guarded by the status predicate); `startTime` is
+   * preserved if already set.
+   *
+   * Arrival order between `completed`/`failed` and the terminal AgentResult
+   * is NOT execution authority: official Workers prioritize AgentResult and
+   * emit the terminal operational event only after the result callback
+   * completes, while a third-party runtime may deliver in any order. In every
+   * case AgentResult is terminal authority and the terminal event is
+   * append-only evidence, so `completed`/`failed` never transition the
+   * attempt and never terminalize it.
    */
   private async projectLiveness(
     manager: EntityManager,
@@ -276,16 +302,18 @@ export class AgentEventService {
         terminal: TERMINAL_ATTEMPT_STATUSES,
       })
       .execute();
-    await attemptRepository
-      .createQueryBuilder()
-      .update(StepAttemptEntity)
-      .set({
-        status: "RUNNING",
-        startTime: () => 'COALESCE("startTime", now())',
-      })
-      .where('"id" = :id', { id: stepAttemptId })
-      .andWhere('"status" = \'DISPATCHED\'')
-      .execute();
+    if (["heartbeat", "progress", "log", "artifact"].includes(event.type)) {
+      await attemptRepository
+        .createQueryBuilder()
+        .update(StepAttemptEntity)
+        .set({
+          status: "RUNNING",
+          startTime: () => 'COALESCE("startTime", now())',
+        })
+        .where('"id" = :id', { id: stepAttemptId })
+        .andWhere("\"status\" = 'DISPATCHED'")
+        .execute();
+    }
   }
 
   private async recordConflict(
@@ -323,21 +351,10 @@ export class AgentEventService {
     scope: string | null;
     messageId: string | null;
   } {
-    if (transport.adapter === "kafka") {
-      // Offsets are per-partition: scope must include the partition so the
-      // transport dedup index cannot collide across partitions.
-      return {
-        adapter: "kafka",
-        scope: transport.topic
-          ? `${transport.topic}#${transport.partition ?? 0}`
-          : null,
-        messageId: transport.offset ?? null,
-      };
-    }
-    return {
-      adapter: transport.adapter,
-      scope: transport.keyId ?? null,
-      messageId: transport.deliveryId ?? null,
-    };
+    // Durable transport identity, shared with ResultInboxService: the
+    // bounded storage constraints (varchar columns) are encoded once in
+    // durableTransportIdentity, and Kafka scopes are deterministically
+    // bounded when a long topic would overflow.
+    return durableTransportIdentity(transport);
   }
 }

@@ -127,7 +127,9 @@ describe("KafkaAgentAdapter", () => {
         new Error("password=secret broker.internal:9092"),
       );
 
-      await expect(adapter.start({ result: resultHandler, event: jest.fn() })).rejects.toMatchObject({
+      await expect(
+        adapter.start({ result: resultHandler, event: jest.fn() }),
+      ).rejects.toMatchObject({
         code: "ADAPTER_START_FAILED",
         adapter: "kafka",
         retryable: true,
@@ -138,12 +140,16 @@ describe("KafkaAgentAdapter", () => {
     it("cleans up a partial start so startup can be retried", async () => {
       kafka.subscribe.mockRejectedValueOnce(new Error("subscription failed"));
 
-      await expect(adapter.start({ result: resultHandler, event: jest.fn() })).rejects.toMatchObject({
+      await expect(
+        adapter.start({ result: resultHandler, event: jest.fn() }),
+      ).rejects.toMatchObject({
         code: "ADAPTER_START_FAILED",
       });
       expect(kafka.disconnect).toHaveBeenCalledTimes(1);
 
-      await expect(adapter.start({ result: resultHandler, event: jest.fn() })).resolves.toBeUndefined();
+      await expect(
+        adapter.start({ result: resultHandler, event: jest.fn() }),
+      ).resolves.toBeUndefined();
       expect(kafka.connect).toHaveBeenCalledTimes(2);
     });
 
@@ -348,7 +354,9 @@ describe("KafkaAgentAdapter", () => {
       const error = jest.spyOn(console, "error").mockImplementation();
       resultHandler.mockRejectedValue(new Error("processor failed"));
 
-      await expect(inbound(kafkaMessage(succeededResult))).rejects.toMatchObject({
+      await expect(
+        inbound(kafkaMessage(succeededResult)),
+      ).rejects.toMatchObject({
         code: "RESULT_HANDLER_FAILED",
         retryable: true,
       });
@@ -396,7 +404,9 @@ describe("KafkaAgentAdapter", () => {
       trace: { traceId: "execution-1", correlationId: "step-execution-1:1" },
       ...overrides,
     });
-    const eventMessage = (overrides: { body?: Record<string, unknown> } = {}) => ({
+    const eventMessage = (
+      overrides: { body?: Record<string, unknown> } = {},
+    ) => ({
       topic: "agentweave.agent.code-reviewer.event",
       partition: 2,
       message: {
@@ -448,10 +458,33 @@ describe("KafkaAgentAdapter", () => {
       // No throw: KafkaJS acknowledges the poison record.
     });
 
+    it.each([
+      ["eventId longer than varchar(255)", { eventId: "e".repeat(256) }],
+      ["sequence beyond PostgreSQL int32", { sequence: 2147483648 }],
+    ])(
+      "acks a schema-valid-before-tightening but storage-invalid event (%s) as poison, never redelivered",
+      async (_label, overrides) => {
+        const invalid = eventBody(overrides);
+        // The canonical contract rejects the event before any handler or
+        // persistence path; the poison record is acknowledged, so the
+        // partition is not stalled by an unbounded redelivery loop.
+        await inbound({
+          topic: "agentweave.agent.code-reviewer.event",
+          partition: 0,
+          message: {
+            key: Buffer.from("execution-1"),
+            value: Buffer.from(JSON.stringify(invalid)),
+            offset: "3",
+            timestamp: "1785024000000",
+          },
+        });
+
+        expect(eventHandler).not.toHaveBeenCalled();
+      },
+    );
+
     it("acks an oversized event as poison (never redelivered)", async () => {
-      eventHandler.mockRejectedValueOnce(
-        new EventPayloadTooLargeError(65536),
-      );
+      eventHandler.mockRejectedValueOnce(new EventPayloadTooLargeError(65536));
       const oversized = eventBody({ payload: { blob: "x".repeat(70 * 1024) } });
 
       // Non-retryable handler failures are acknowledged, never rethrown, so
@@ -474,9 +507,10 @@ describe("KafkaAgentAdapter", () => {
     it("propagates durable application failures so Kafka can redeliver", async () => {
       eventHandler.mockRejectedValueOnce(new Error("database unavailable"));
 
-      await expect(
-        inbound(eventMessage()),
-      ).rejects.toMatchObject({ code: "EVENT_HANDLER_FAILED", retryable: true });
+      await expect(inbound(eventMessage())).rejects.toMatchObject({
+        code: "EVENT_HANDLER_FAILED",
+        retryable: true,
+      });
     });
 
     it("does not normalize legacy event payloads (canonical-only ingestion)", async () => {

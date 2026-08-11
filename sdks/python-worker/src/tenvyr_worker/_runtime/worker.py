@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -60,7 +61,15 @@ from .idempotency import (
 from .safe_logger import NO_OP_LOGGER, safe_logger
 from .scheduler import RunScheduler
 
-MAX_EVENT_PAYLOAD_BYTES = 64 * 1024
+MAX_AGENT_EVENT_CANONICAL_BYTES = 64 * 1024
+
+# Upper bounds on the generated AgentEvent identity, mirroring the canonical
+# AgentEventV1 contract and the durable varchar(255)/integer storage:
+# ``{invocationId}:{sequence}`` may be at most 255 characters and sequence is
+# bounded by PostgreSQL int32. An official Worker must never schedule an event
+# whose generated identity the canonical contract would reject.
+MAX_AGENT_EVENT_ID_LENGTH = 255
+MAX_AGENT_EVENT_SEQUENCE = 2147483647
 
 
 class RunEventEmitter:
@@ -90,6 +99,14 @@ class RunEventEmitter:
         self._deliver = deliver
         self._now = now
         self._sequence = 0
+        # Emissions can originate from the event-loop thread (heartbeat task,
+        # runtime lifecycle) AND from handler worker threads (a sync handler
+        # running under asyncio.to_thread calls context.progress/log/artifact),
+        # so sequence allocation and identity-bearing body construction must be
+        # mutually exclusive. A threading.Lock (not an asyncio lock) is the
+        # smallest primitive that covers both thread kinds; network delivery
+        # happens outside the lock.
+        self._sequence_lock = threading.Lock()
         self._debug_noted = False
 
         target = cast(Mapping[str, object], invocation["target"])
@@ -117,24 +134,53 @@ class RunEventEmitter:
                 )
             return
         validated = validate_event_payload(payload)
-        sequence = self._sequence
-        self._sequence += 1
-        event: dict[str, JsonValue] = {
-            "schemaVersion": "1",
-            "eventId": f"{self._invocation_id}:{sequence}",
-            "invocationId": self._invocation_id,
-            "executionId": self._execution_id,
-            "stepExecutionId": self._step_execution_id,
-            "sequence": sequence,
-            "type": type,
-            "occurredAt": _timestamp(self._now()),
-            "payload": validated,
-            "trace": {
-                "traceId": self._trace_id,
-                "correlationId": self._correlation_id,
-            },
-            "metadata": {"runId": self._run_id},
-        }
+        # Sequence allocation and identity-bearing body construction are atomic
+        # across handler threads and the event-loop thread; delivery stays
+        # outside the lock so a slow network cannot stall other emissions.
+        with self._sequence_lock:
+            sequence = self._sequence
+            self._sequence += 1
+            event_id = f"{self._invocation_id}:{sequence}"
+            # Generated identity bounds: a contract-valid invocation can carry
+            # a long invocationId, so the constructed eventId is checked here.
+            # An identity outside the canonical AgentEventV1 bounds raises
+            # before any delivery callback is scheduled.
+            if sequence < 0 or sequence > MAX_AGENT_EVENT_SEQUENCE:
+                raise ValueError(
+                    "Agent event sequence "
+                    f"{sequence} is outside the 0..{MAX_AGENT_EVENT_SEQUENCE} range"
+                )
+            if len(event_id) > MAX_AGENT_EVENT_ID_LENGTH:
+                raise ValueError(
+                    "Generated Agent event id exceeds the "
+                    f"{MAX_AGENT_EVENT_ID_LENGTH}-character limit"
+                )
+            event: dict[str, JsonValue] = {
+                "schemaVersion": "1",
+                "eventId": event_id,
+                "invocationId": self._invocation_id,
+                "executionId": self._execution_id,
+                "stepExecutionId": self._step_execution_id,
+                "sequence": sequence,
+                "type": type,
+                "occurredAt": _timestamp(self._now()),
+                "payload": validated,
+                "trace": {
+                    "traceId": self._trace_id,
+                    "correlationId": self._correlation_id,
+                },
+                "metadata": {"runId": self._run_id},
+            }
+        # The 64 KiB size authority is the COMPLETE canonical event body — the
+        # same measurement the Orchestrator applies before durable application.
+        # A locally oversized event raises before any delivery callback is
+        # scheduled; it is never sent to the Orchestrator to be 400-rejected.
+        canonical_size = len(canonical_json(event).encode("utf-8"))
+        if canonical_size > MAX_AGENT_EVENT_CANONICAL_BYTES:
+            raise ValueError(
+                "Agent event canonical body exceeds the "
+                f"{MAX_AGENT_EVENT_CANONICAL_BYTES}-byte limit"
+            )
         raw_body = json.dumps(
             event,
             ensure_ascii=False,
@@ -147,8 +193,8 @@ class RunEventEmitter:
 def validate_event_payload(payload: object) -> dict[str, JsonValue]:
     """Validate and normalize an event payload to finite canonical JSON.
 
-    Raises ``TypeError`` for non-object or non-JSON payloads and ``ValueError``
-    when the canonical serialized payload exceeds the 64 KiB limit.
+    Raises ``TypeError`` for non-object or non-JSON payloads; the canonical
+    64 KiB limit is enforced on the COMPLETE event body in ``emit``.
     """
     if (
         payload is None
@@ -164,11 +210,6 @@ def validate_event_payload(payload: object) -> dict[str, JsonValue]:
         ) from None
     if not isinstance(converted, dict):
         raise TypeError("Agent event payload must be a JSON object")
-    size = len(canonical_json(converted).encode("utf-8"))
-    if size > MAX_EVENT_PAYLOAD_BYTES:
-        raise ValueError(
-            f"Agent event payload exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte limit"
-        )
     return converted
 
 

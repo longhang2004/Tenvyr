@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-07-28
+last_verified: 2026-08-11
 sources:
   - package.json
   - docs/reference/implementation-status.json
@@ -79,6 +79,10 @@ Developer tooling is not a Tenvyr production runtime feature.
 - Planned work: [roadmap index](roadmap/README.md) and
   [observability/provenance roadmap](roadmap/observability-provenance.md)
 - Plan policy: [plan lifecycle](plans/README.md)
+- Active plan: the [M3–M7 technical roadmap](plans/active/tenvyr-roadmap/ROADMAP.md),
+  beginning with the ready M3 executor architecture milestone
+- Closed M2 evidence: [independent review](archive/reviews/2026-08-11-m2-independent-closure.md)
+  and [historical execution program](archive/plans/m2-program/README.md)
 - Historical records: [archive policy and index](archive/README.md)
 
 Roadmap entries are not implementation claims. Active accepted plans belong in
