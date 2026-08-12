@@ -1,4 +1,5 @@
 import type { AgentInvocationV1, AgentResultV1, AgentEventV1 } from "@tenvyr/contracts";
+import type { ExecutorDescriptorV1 } from "../executors/executor-descriptor";
 
 export type AgentTransportMetadata = {
   adapter: string;
@@ -44,6 +45,31 @@ export type AgentDispatchReceipt = {
   dispatchId?: string;
 };
 
+/**
+ * M3-S2: best-effort cancel request for ONE dispatched invocation. The
+ * executor is expected to treat this as idempotent (keyed by invocationId).
+ */
+export type AgentCancelRequest = {
+  invocationId: string;
+  executionId: string;
+  /** Transport-neutral remote run identity from the dispatch receipt. */
+  dispatchId?: string;
+  reason: string;
+};
+
+/**
+ * M3-S2: best-effort cancel outcome. `delivered` records whether the executor
+ * acknowledged the request; it never reverses Tenvyr's committed cancellation
+ * authority, and a missing/negative acknowledgement is recorded evidence, not
+ * a state transition.
+ */
+export type AgentCancelReceipt = {
+  adapter: string;
+  invocationId: string;
+  delivered: boolean;
+  message?: string;
+};
+
 export interface AgentAdapter {
   readonly kind: string;
 
@@ -51,5 +77,25 @@ export interface AgentAdapter {
 
   stop(): Promise<void>;
 
-  invoke(invocation: AgentInvocationV1): Promise<AgentDispatchReceipt>;
+  /**
+   * Dispatches an invocation. `pinned` is the executor descriptor frozen on
+   * the attempt: when present, routing facts (executor kind and HTTP profile)
+   * come from the pinned descriptor and the live configuration may only
+   * resolve secret values for that exact profile. When absent, the legacy
+   * live-configuration routing (agent name → transport) applies.
+   */
+  invoke(
+    invocation: AgentInvocationV1,
+    pinned?: ExecutorDescriptorV1,
+  ): Promise<AgentDispatchReceipt>;
+
+  /**
+   * Optional capability: best-effort, idempotent cancellation of a dispatched
+   * invocation. Method absence means the executor cannot be cancelled —
+   * Tenvyr cancellation still commits, and the unsupported limitation is
+   * recorded as durable evidence. Implementations must bound their own
+   * runtime: a slow or failing cancel must never block Tenvyr's committed
+   * cancellation.
+   */
+  cancel?(request: AgentCancelRequest): Promise<AgentCancelReceipt>;
 }

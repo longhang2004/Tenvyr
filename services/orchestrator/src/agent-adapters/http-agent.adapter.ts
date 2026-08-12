@@ -6,7 +6,32 @@ import {
   parseHttpAgentRunRequest,
 } from "@tenvyr/contracts";
 import { Injectable } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { AgentAdapterError } from "./agent-adapter.errors";
+
+/**
+ * M7-S4: deterministic W3C traceparent (`00-<traceId>-<spanId>-01`).
+ * The trace id is the invocation's execution-scoped trace id normalized
+ * to 32 hex chars; the span id is a stable derivation of the invocation
+ * id (never a random value, so redeliveries and replicas agree). Returns
+ * null when the invocation carries no trace identity. Outbound-only:
+ * inbound trace headers are never trusted.
+ */
+export function w3cTraceparent(invocation: {
+  trace?: { traceId?: string; correlationId?: string };
+  invocationId?: string;
+}): string | null {
+  const traceId = invocation.trace?.traceId;
+  const invocationId = invocation.invocationId;
+  if (!traceId || !invocationId) return null;
+  const normalized = traceId.replace(/-/g, "").toLowerCase();
+  // W3C forbids an all-zero trace id; reject it like any malformed value.
+  if (!/^[0-9a-f]{32}$/.test(normalized) || normalized === "0".repeat(32)) {
+    return null;
+  }
+  const spanId = createHash("sha256").update(invocationId).digest("hex").slice(0, 16);
+  return `00-${normalized}-${spanId}-01`;
+}
 import type {
   AgentAdapter,
   AgentAdapterHandlers,
@@ -16,6 +41,7 @@ import type {
 import { AgentTransportConfigService } from "./agent-transport-config.service";
 import { verifyHttpCallbackSignature } from "./http-callback-auth";
 import { EventPayloadTooLargeError } from "../services/agent-event.service";
+import type { ExecutorDescriptorV1 } from "../executors/executor-descriptor";
 
 type HttpCallbackRequest = {
   agent: string;
@@ -79,6 +105,7 @@ export class HttpAgentAdapter implements AgentAdapter {
 
   async invoke(
     invocation: Parameters<AgentAdapter["invoke"]>[0],
+    pinned?: ExecutorDescriptorV1,
   ): Promise<AgentDispatchReceipt> {
     if (!this.handlers) {
       throw new AgentAdapterError(
@@ -94,6 +121,20 @@ export class HttpAgentAdapter implements AgentAdapter {
 
     const payload = parseAgentInvocation(invocation);
     const configuration = this.config.httpForAgent(payload.target.agent);
+    if (pinned && !configuration) {
+      // M3: the attempt is pinned to an HTTP executor whose live profile is
+      // missing or rotated (agent removed or no longer HTTP). Deterministic
+      // safe failure — never an automatic fallback to another executor.
+      throw new AgentAdapterError(
+        "EXECUTOR_PROFILE_MISMATCH",
+        this.kind,
+        `Pinned HTTP executor profile for agent "${payload.target.agent}" no longer matches live configuration`,
+        {
+          invocationId: payload.invocationId,
+          retryable: false,
+        },
+      );
+    }
     if (!configuration) {
       throw new AgentAdapterError(
         "HTTP_AGENT_NOT_CONFIGURED",
@@ -105,6 +146,28 @@ export class HttpAgentAdapter implements AgentAdapter {
         },
       );
     }
+    if (pinned && !pinned.httpProfile) {
+      // The router already guards this; keep the adapter strict so a direct
+      // caller can never fall back to live routing behind a pinned request.
+      throw new AgentAdapterError(
+        "EXECUTOR_PROFILE_MISMATCH",
+        this.kind,
+        "Pinned HTTP executor descriptor is missing its routing profile",
+        {
+          invocationId: payload.invocationId,
+          retryable: false,
+        },
+      );
+    }
+
+    // M3: routing facts come from the frozen descriptor when pinned; the live
+    // configuration only contributes secret values (bearer token, callback
+    // credentials) for that exact profile.
+    const submitUrl = pinned?.httpProfile?.submitUrl ?? configuration.submitUrl;
+    const requestTimeoutMs =
+      pinned?.httpProfile?.requestTimeoutMs ?? configuration.requestTimeoutMs;
+    const maxResponseBytes =
+      pinned?.httpProfile?.maxResponseBytes ?? configuration.maxResponseBytes;
 
     const request = parseHttpAgentRunRequest({
       schemaVersion: "1",
@@ -136,14 +199,14 @@ export class HttpAgentAdapter implements AgentAdapter {
     }
 
     const startedAt = Date.now();
-    const submitHost = new URL(configuration.submitUrl).host;
+    const submitHost = new URL(submitUrl).host;
     const controller = new AbortController();
     this.activeRequests.add(controller);
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, configuration.requestTimeoutMs);
+    }, requestTimeoutMs);
 
     try {
       const headers: Record<string, string> = {
@@ -156,7 +219,16 @@ export class HttpAgentAdapter implements AgentAdapter {
         headers.Authorization = `Bearer ${configuration.outboundAuthentication.token}`;
       }
 
-      const response = await fetch(configuration.submitUrl, {
+      // M7-S4: outbound-only W3C trace context. The orchestrator never
+      // TRUSTS inbound trace headers — this header is derived
+      // deterministically from the invocation's own trace identity, so
+      // foreign trace/baggage can never widen authority or capture.
+      const traceparent = w3cTraceparent(payload);
+      if (traceparent) {
+        headers.traceparent = traceparent;
+      }
+
+      const response = await fetch(submitUrl, {
         method: "POST",
         headers,
         body,
@@ -188,7 +260,7 @@ export class HttpAgentAdapter implements AgentAdapter {
 
       const responseBody = await this.readResponse(
         response,
-        configuration.maxResponseBytes,
+        maxResponseBytes,
         payload.invocationId,
       );
       let acceptedValue: unknown;

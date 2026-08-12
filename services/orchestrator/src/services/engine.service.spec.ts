@@ -87,6 +87,9 @@ describe("EngineService behavior", () => {
     outbox = {
       dispatchNext: jest.fn().mockResolvedValue({ outcome: "dispatched" }),
       dispatchAttempt: jest.fn().mockResolvedValue({ outcome: "dispatched" }),
+      notifyCancel: jest
+        .fn()
+        .mockResolvedValue({ notified: 0, unsupported: 0, unreachable: 0 }),
     };
     service = new EngineService(
       pipelineService,
@@ -586,5 +589,43 @@ describe("EngineService behavior", () => {
       undefined,
     );
     expect(outbox.dispatchAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits cancellation first, then best-effort notifies the executor", async () => {
+    executionService.cancelExecution = jest
+      .fn()
+      .mockResolvedValue({
+        ...execution,
+        status: "CANCELLED",
+        terminationReason: "Execution cancelled by request",
+      });
+
+    const cancelled = await service.cancelExecution("execution-1");
+
+    expect(executionService.cancelExecution).toHaveBeenCalledWith(
+      "execution-1",
+    );
+    // The executor notification is post-commit, best-effort, and uses the
+    // committed termination reason.
+    expect(outbox.notifyCancel).toHaveBeenCalledWith(
+      "execution-1",
+      "Execution cancelled by request",
+    );
+    expect(cancelled.status).toBe("CANCELLED");
+  });
+
+  it("never lets an executor notification failure reverse a committed cancellation", async () => {
+    executionService.cancelExecution = jest
+      .fn()
+      .mockResolvedValue({ ...execution, status: "CANCELLED" });
+    outbox.notifyCancel = jest
+      .fn()
+      .mockRejectedValue(new Error("unexpected notify bug"));
+
+    const cancelled = await service.cancelExecution("execution-1");
+
+    // The commit already happened; the notification failure is only warned.
+    expect(cancelled.status).toBe("CANCELLED");
+    expect(executionService.cancelExecution).toHaveBeenCalledTimes(1);
   });
 });

@@ -2,6 +2,7 @@ import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
+import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { sha256Json } from "../domain/canonical-json";
 import { ExecutionService } from "./execution.service";
@@ -68,7 +69,9 @@ describe("ExecutionService attempt history", () => {
         if (entity === StepAttemptEntity) return attemptRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
         if (entity === ExecutionEntity) return executionRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -186,7 +189,9 @@ describe("ExecutionService attempt history", () => {
         if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
         if (entity === StepAttemptEntity) return attemptRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -306,7 +311,9 @@ describe("ExecutionService attempt history", () => {
         if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
         if (entity === StepAttemptEntity) return attemptRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -432,7 +439,9 @@ describe("ExecutionService attempt history", () => {
         if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
         if (entity === StepAttemptEntity) return attemptRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -524,7 +533,9 @@ describe("ExecutionService attempt history", () => {
         if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
         if (entity === StepAttemptEntity) return attemptRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -617,7 +628,9 @@ describe("ExecutionService attempt history", () => {
         if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
         if (entity === StepAttemptEntity) return attemptRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -686,7 +699,9 @@ describe("ExecutionService cancellation and state machine", () => {
         if (entity === LogicalStepEntity) return logicalRepository;
         if (entity === ExecutionEntity) return executionRepository;
         if (entity === DispatchOutboxEntity) return outboxRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -809,7 +824,9 @@ describe("ExecutionService cancellation and state machine", () => {
         if (entity === ExecutionEntity) return executionRepository;
         if (entity === StepAttemptEntity || entity === DispatchOutboxEntity)
           return { createQueryBuilder: jest.fn() };
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -875,7 +892,9 @@ describe("ExecutionService materialization and reconciliation", () => {
         if (entity === ExecutionEntity) return executionRepository;
         if (entity === ExecutionPlanRevisionEntity) return planRepository;
         if (entity === LogicalStepEntity) return stepRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -993,7 +1012,9 @@ describe("ExecutionService materialization and reconciliation", () => {
         if (entity === ExecutionPlanRevisionEntity) return revisionRepository;
         if (entity === LogicalStepEntity) return stepRepository;
         if (entity === StepAttemptEntity) return attemptRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };
@@ -1033,7 +1054,9 @@ describe("ExecutionService materialization and reconciliation", () => {
     const manager = {
       getRepository: jest.fn((entity) => {
         if (entity === ExecutionEntity) return executionRepository;
-        throw new Error("unexpected repository");
+        if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
+      throw new Error("unexpected repository");
       }),
     };
     const dataSource = { transaction: jest.fn(async (work) => work(manager)) };

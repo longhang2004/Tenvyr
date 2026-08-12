@@ -97,6 +97,9 @@ export class KafkaAgentAdapter implements AgentAdapter {
 
   async invoke(
     invocation: Parameters<AgentAdapter["invoke"]>[0],
+    // Kafka routing is deterministic from the invocation's agent target; the
+    // pinned descriptor (M3) changes nothing for this executor.
+    _pinned?: Parameters<AgentAdapter["invoke"]>[1],
   ): Promise<AgentDispatchReceipt> {
     if (!this.started) {
       throw new AgentAdapterError(

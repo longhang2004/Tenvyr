@@ -7,6 +7,10 @@ import { SupervisionService } from "./supervision.service";
 import { EngineService } from "./engine.service";
 import { ResultInboxService } from "./result-inbox.service";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
+import type { DataSource } from "typeorm";
+import { ApprovalService } from "./approval.service";
+import { DelegationService } from "./delegation.service";
+import { ExecutionService } from "./execution.service";
 import { ExecutionEntity } from "../entities/execution.entity";
 
 const RECOVERY_BATCH = 100;
@@ -42,7 +46,27 @@ export class RuntimeRecoveryService implements OnModuleInit, OnModuleDestroy {
     private readonly inbox: ResultInboxService,
     private readonly engine: EngineService,
     private readonly supervision: SupervisionService,
-  ) {}
+    approvals?: ApprovalService,
+    executionService?: ExecutionService,
+    delegation?: DelegationService,
+  ) {
+    // M4-S4: the expiry sweep is owned by the recovery cycle; a default
+    // instance is bound lazily via the injected DATA_SOURCE.
+    this.approvals = approvals ?? new ApprovalService(this.dataSource);
+    this.delegation =
+      delegation ??
+      new DelegationService(
+        this.dataSource,
+        executionService ?? this.engine.executionService,
+      );
+  }
+
+  private readonly approvals: ApprovalService;
+  private readonly delegation: DelegationService;
+
+  private readonly dataSource: DataSource = (
+    this.outbox as unknown as { dataSource: DataSource }
+  ).dataSource;
 
   async onModuleInit(): Promise<void> {
     await this.recover();
@@ -59,6 +83,31 @@ export class RuntimeRecoveryService implements OnModuleInit, OnModuleDestroy {
     this.cycleInProgress = true;
     try {
       await this.expireAttempts(now);
+      // M4-S4: autonomous approval expiry — due requests terminalize their
+      // WAITING attempts deterministically (WAITING is never a retryable
+      // failure). Runs with the deadline sweep so expired approvals cannot
+      // re-enter the schedulable set in the same cycle.
+      await this.approvals.expireDue(undefined, now);
+      // M6-S3: delegation-request expiry is owned by the same cycle,
+      // error-isolated so one bad sweep cannot stop supervision or
+      // reconciliation.
+      try {
+        await this.delegation.expireDue(undefined, now);
+      } catch (error) {
+        console.warn("Delegation expiry sweep failed", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // M6-S4: the durable cancellation cascade (a cancelled parent never
+      // leaves a runnable child orphan; deterministic order, bounded,
+      // crash-resumable).
+      try {
+        await this.delegation.cancelOrphans(undefined, 20);
+      } catch (error) {
+        console.warn("Delegation orphan cascade failed", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
       // Deterministic supervision (acceptance timeout / stale heartbeat) runs
       // after persisted deadlines so Milestone-0 deadline authority is
       // unchanged, and before candidate reconciliation so terminalized

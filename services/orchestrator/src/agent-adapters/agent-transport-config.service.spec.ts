@@ -3,6 +3,7 @@ import {
   parseAgentTransportConfiguration,
   type HttpAgentTransportConfiguration,
 } from "./agent-transport-config.service";
+import { parseDelegationModes } from "./agent-transport-config.service";
 
 const httpConfiguration = {
   "remote-security-reviewer": {
@@ -36,7 +37,7 @@ describe("AgentTransportConfigService", () => {
     expect(config.agents.get("code-reviewer")).toBeUndefined();
     expect(config.agents.get("observability")).toBeUndefined();
     expect(new AgentTransportConfigService(config).forAgent("unknown")).toEqual(
-      { kind: "kafka" },
+      { kind: "kafka", delegationModes: ["opaque", "observed"] },
     );
   });
 
@@ -221,5 +222,35 @@ describe("AgentTransportConfigService", () => {
         message: expect.stringContaining("callback-secret"),
       }),
     );
+  });
+});
+
+describe("parseDelegationModes (M6-S5)", () => {
+  it("defaults to unrestricted when absent", () => {
+    expect(parseDelegationModes(undefined, "a")).toEqual(["opaque", "observed"]);
+    expect(parseDelegationModes(null, "a")).toEqual(["opaque", "observed"]);
+  });
+
+  it("accepts unique subsets", () => {
+    expect(parseDelegationModes(["opaque"], "a")).toEqual(["opaque"]);
+    expect(parseDelegationModes(["observed"], "a")).toEqual(["observed"]);
+    expect(parseDelegationModes(["opaque", "observed"], "a")).toEqual([
+      "opaque",
+      "observed",
+    ]);
+  });
+
+  it("rejects empty, duplicate, oversized, and invalid values", () => {
+    expect(() => parseDelegationModes([], "a")).toThrow(/delegationModes/);
+    expect(() => parseDelegationModes(["opaque", "opaque"], "a")).toThrow(
+      /delegationModes/,
+    );
+    expect(() => parseDelegationModes(["opaque", "observed", "opaque"], "a")).toThrow(
+      /delegationModes/,
+    );
+    expect(() => parseDelegationModes(["supervised"], "a")).toThrow(
+      /delegationModes/,
+    );
+    expect(() => parseDelegationModes("opaque", "a")).toThrow(/delegationModes/);
   });
 });

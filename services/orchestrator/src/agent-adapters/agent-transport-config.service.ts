@@ -1,7 +1,38 @@
 import { AgentAdapterError } from "./agent-adapter.errors";
+import {
+  buildExecutorDescriptor,
+  readExecutorDescriptor,
+  type ExecutorDescriptorV1,
+} from "../executors/executor-descriptor";
+
+export type DelegationMode = "opaque" | "observed";
+
+/** Operator-declared delegation capability (M6-S5 negotiation): the
+ *  modes the runtime is known to support. Absent = unrestricted. */
+export function parseDelegationModes(value: unknown, agent: string): DelegationMode[] {
+  if (value === undefined || value === null) {
+    // No declaration: unrestricted (pre-M6 behavior). The operator
+    // restricts by declaring the runtime's actual modes.
+    return ["opaque", "observed"];
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 2 ||
+    !value.every((mode) => mode === "opaque" || mode === "observed") ||
+    new Set(value).size !== value.length
+  ) {
+    throw invalidConfiguration(
+      `Agent "${agent}" delegationModes must be a unique subset of opaque, observed`,
+    );
+  }
+  return value as DelegationMode[];
+}
 
 export type KafkaAgentTransportConfiguration = {
   kind: "kafka";
+  /** M6-S5: runtime-advertised delegation modes (negotiation allowlist). */
+  delegationModes: DelegationMode[];
 };
 
 export type HttpAgentTransportConfiguration = {
@@ -14,6 +45,8 @@ export type HttpAgentTransportConfiguration = {
   };
   requestTimeoutMs: number;
   maxResponseBytes: number;
+  /** M6-S5: operator-declared delegation modes (negotiation allowlist). */
+  delegationModes: DelegationMode[];
 };
 
 export type AgentTransportConfiguration =
@@ -62,8 +95,11 @@ export function parseAgentTransportConfiguration(
     if (!agent || !isRecord(entry))
       throw invalidConfiguration("Every agent configuration must be an object");
     if (entry.kind === "kafka") {
-      assertOnlyKeys(entry, ["kind"], agent);
-      agents.set(agent, { kind: "kafka" });
+      assertOnlyKeys(entry, ["kind", "delegationModes"], agent);
+      agents.set(agent, {
+        kind: "kafka",
+        delegationModes: parseDelegationModes(entry.delegationModes, agent),
+      });
       continue;
     }
     if (entry.kind !== "http")
@@ -80,6 +116,7 @@ export function parseAgentTransportConfiguration(
         "callbackAuthentication",
         "requestTimeoutMs",
         "maxResponseBytes",
+        "delegationModes",
       ],
       agent,
     );
@@ -114,6 +151,7 @@ export function parseAgentTransportConfiguration(
       callbackAuthentication,
       requestTimeoutMs,
       maxResponseBytes,
+      delegationModes: parseDelegationModes(entry.delegationModes, agent),
     });
   }
 
@@ -164,7 +202,32 @@ export class AgentTransportConfigService {
   }
 
   forAgent(agent: string): AgentTransportConfiguration {
-    return this.configuration.agents.get(agent) ?? { kind: "kafka" };
+    return (
+      this.configuration.agents.get(agent) ?? {
+        kind: "kafka",
+        delegationModes: ["opaque", "observed"],
+      }
+    );
+  }
+
+  /**
+   * M3: resolves and freezes the bounded executor descriptor for an agent at
+   * attempt-claim time, mirroring `forAgent` routing semantics. The frozen
+   * descriptor becomes the attempt's executorSnapshot; dispatch later consumes
+   * exactly this pinned selection.
+   */
+  resolveExecutorDescriptor(agent: string): ExecutorDescriptorV1 {
+    return buildExecutorDescriptor(agent, this.forAgent(agent));
+  }
+
+  /**
+   * M3: reads the executor descriptor frozen on an attempt. Versioned
+   * descriptors are pinned; legacy `{ agent }` snapshots (M0–M2) are routed
+   * from live configuration exactly as before M3. Invalid snapshots raise a
+   * deterministic non-retryable configuration failure.
+   */
+  frozenDescriptor(snapshot: unknown): ExecutorDescriptorV1 {
+    return readExecutorDescriptor(snapshot, (agent) => this.forAgent(agent));
   }
 
   httpForAgent(agent: string): HttpAgentTransportConfiguration | undefined {

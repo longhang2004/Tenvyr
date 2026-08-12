@@ -39,6 +39,8 @@ prose. The conflict must still be corrected rather than ignored.
 - Transports: [adapter model](architecture/transports/adapter-model.md),
   [Kafka runtime v1](architecture/transports/kafka-runtime-v1.md), and
   [HTTP adapter v1](architecture/transports/http-agent-adapter-v1.md)
+- Executors: [local executor host](architecture/executors/local-executor-host.md)
+  and the [native integration matrix](architecture/executors/native-integrations.md)
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md), and the
   [machine parity ledger](architecture/workers/worker-sdk-parity.json)
@@ -79,10 +81,12 @@ Developer tooling is not a Tenvyr production runtime feature.
 - Planned work: [roadmap index](roadmap/README.md) and
   [observability/provenance roadmap](roadmap/observability-provenance.md)
 - Plan policy: [plan lifecycle](plans/README.md)
-- Active plan: the [M3–M7 technical roadmap](plans/active/tenvyr-roadmap/ROADMAP.md),
-  beginning with the ready M3 executor architecture milestone
+- Closed M3–M7 evidence: [independent review](archive/reviews/2026-08-12-m3-m7-independent-closure.md)
+  and [historical execution roadmap](archive/plans/tenvyr-roadmap/ROADMAP.md)
 - Closed M2 evidence: [independent review](archive/reviews/2026-08-11-m2-independent-closure.md)
   and [historical execution program](archive/plans/m2-program/README.md)
+- Open release boundary: the
+  [External Production Exposure Gate](archive/plans/tenvyr-roadmap/EXTERNAL_PRODUCTION_EXPOSURE_GATE.md)
 - Historical records: [archive policy and index](archive/README.md)
 
 Roadmap entries are not implementation claims. Active accepted plans belong in

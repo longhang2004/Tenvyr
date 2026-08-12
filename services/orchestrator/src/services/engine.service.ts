@@ -61,7 +61,9 @@ export type ReconcileOptions = {
 export class EngineService {
   constructor(
     private pipelineService: PipelineService,
-    private executionService: ExecutionService,
+    /** M6-S2: the engine's execution service (delegation materializes
+     *  children through it). */
+    readonly executionService: ExecutionService,
     @Inject(AGENT_ADAPTER)
     private agentAdapter: AgentAdapter,
     private readonly dispatchOutbox: DispatchOutboxService,
@@ -169,6 +171,24 @@ export class EngineService {
   async cancelExecution(executionId: string): Promise<ExecutionEntity> {
     const execution = await this.executionService.cancelExecution(executionId);
     await this.notifyGatewayUpdate(executionId);
+    // M3-S2: after Tenvyr cancellation is committed (attempts/execution
+    // CANCELLED, outbox retired), best-effort executor notification for
+    // dispatched attempts, gated by the frozen descriptor's cancel capability
+    // and the adapter's optional cancel method. Outcomes are durable evidence
+    // on the outbox rows; a failure here can never reverse or block the
+    // committed cancellation (notifyCancel never throws, and this guard keeps
+    // it that way even if a future bug surfaces).
+    try {
+      await this.dispatchOutbox.notifyCancel(
+        executionId,
+        execution.terminationReason ?? "Execution cancelled",
+      );
+    } catch (error) {
+      console.warn("Best-effort executor cancel notification failed", {
+        executionId,
+        reason: this.getErrorMessage(error),
+      });
+    }
     return execution;
   }
 
@@ -385,6 +405,18 @@ export class EngineService {
         console.log(
           `Step [${config.id}] condition evaluated to false. Skipping step.`,
         );
+        continue;
+      }
+      if (
+        claim.disposition === "budget_insufficient" ||
+        claim.disposition === "policy_denied" ||
+        claim.disposition === "approval_required" ||
+        claim.disposition === "runtime_capability" ||
+        claim.disposition === "authority_expired"
+      ) {
+        // The budget/policy/approval/capability outcome already
+        // transitioned the attempt/step; nothing to dispatch.
+        progressed = true;
         continue;
       }
       console.log(
@@ -652,6 +684,15 @@ export class EngineService {
     if (!claim) return false;
     if (claim.disposition === "projection_failed") {
       return true; // the execution already FAILED through the deterministic policy
+    }
+    if (
+      claim.disposition === "budget_insufficient" ||
+      claim.disposition === "policy_denied" ||
+      claim.disposition === "approval_required" ||
+      claim.disposition === "runtime_capability" ||
+      claim.disposition === "authority_expired"
+    ) {
+      return true; // the attempt/step already transitioned deterministically
     }
     if (claim.disposition === "skipped") {
       console.log(

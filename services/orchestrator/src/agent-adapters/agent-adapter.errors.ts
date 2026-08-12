@@ -17,7 +17,10 @@ export type AgentAdapterErrorCode =
   | 'CALLBACK_INVALID'
   | 'CALLBACK_AMBIGUOUS'
   | 'CALLBACK_HANDLER_UNAVAILABLE'
-  | 'EVENT_HANDLER_FAILED';
+  | 'EVENT_HANDLER_FAILED'
+  | 'EXECUTOR_DESCRIPTOR_INVALID'
+  | 'EXECUTOR_SNAPSHOT_INVALID'
+  | 'EXECUTOR_PROFILE_MISMATCH';
 
 type AgentAdapterErrorOptions = {
   invocationId?: string;

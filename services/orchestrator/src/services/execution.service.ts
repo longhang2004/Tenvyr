@@ -26,6 +26,12 @@ import { ArtifactEntity } from "../entities/artifact.entity";
 import { ArtifactProjectionResolver } from "./artifact-projection.resolver";
 import { sha256Json } from "../domain/canonical-json";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
+import { AgentTransportConfigService } from "../agent-adapters/agent-transport-config.service";
+import { BudgetLedgerService } from "./budget-ledger.service";
+import { BudgetError, parsePipelineBudget } from "../domain/budget";
+import { PolicyService } from "./policy.service";
+import { buildDispatchProposal } from "../domain/policy";
+import { ApprovalService } from "./approval.service";
 
 const TERMINAL_ATTEMPT_STATUSES: StepAttemptStatus[] = [
   "SUCCESS",
@@ -44,6 +50,7 @@ const ACTIVE_ATTEMPT_STATUSES: StepAttemptStatus[] = [
   "CREATED",
   "DISPATCHED",
   "RUNNING",
+  "WAITING",
 ];
 
 const CANCELLABLE_STEP_STATUSES: StepStatus[] = [
@@ -62,6 +69,11 @@ export type StepSchedulingClaim =
     }
   | { disposition: "skipped"; logicalStep: LogicalStepEntity }
   | { disposition: "projection_failed" }
+  | { disposition: "budget_insufficient" }
+  | { disposition: "policy_denied" }
+  | { disposition: "approval_required" }
+  | { disposition: "runtime_capability" }
+  | { disposition: "authority_expired" }
   | null;
 
 @Injectable()
@@ -78,7 +90,23 @@ export class ExecutionService {
     @Inject("DATA_SOURCE")
     private dataSource: DataSource,
     private readonly conditions: ConditionEvaluatorService = new ConditionEvaluatorService(),
-  ) {}
+    private readonly transportConfig: AgentTransportConfigService = new AgentTransportConfigService(),
+    budgetLedger?: BudgetLedgerService,
+    policyService?: PolicyService,
+    approvalService?: ApprovalService,
+  ) {
+    // M4-S2: default ledger bound to the injected DataSource so direct
+    // constructions (tests) and Nest DI both get a working instance.
+    this.budgetLedger =
+      budgetLedger ?? new BudgetLedgerService(this.dataSource);
+    this.policyService = policyService ?? new PolicyService(this.dataSource);
+    this.approvalService =
+      approvalService ?? new ApprovalService(this.dataSource);
+  }
+
+  private readonly budgetLedger: BudgetLedgerService;
+  private readonly policyService: PolicyService;
+  private readonly approvalService: ApprovalService;
 
   /**
    * Materialize an idempotent scheduling candidate, then make the scheduling
@@ -128,6 +156,32 @@ export class ExecutionService {
         .where('execution."id" = :id', { id: executionId })
         .getOne();
       if (!execution || execution.status !== "RUNNING") return null;
+      if (
+        execution.authorityDeadlineAt &&
+        execution.authorityDeadlineAt.getTime() <= now.getTime()
+      ) {
+        const failure = "AUTHORITY_DEADLINE_EXCEEDED";
+        logicalStep.status = "CANCELLED";
+        logicalStep.error = failure;
+        logicalStep.endTime = now;
+        logicalStep.nextAttemptAt = null;
+        execution.status = "FAILED";
+        execution.endTime = now;
+        execution.terminationReason = failure;
+        await logicalRepository.save(logicalStep);
+        await manager.getRepository(ExecutionEntity).save(execution);
+        return { disposition: "authority_expired" };
+      }
+      const attemptDeadlineAt = execution.authorityDeadlineAt
+        ? deadlineAt
+          ? new Date(
+              Math.min(
+                deadlineAt.getTime(),
+                execution.authorityDeadlineAt.getTime(),
+              ),
+            )
+          : execution.authorityDeadlineAt
+        : deadlineAt;
       if (!execution.activePlanRevisionId) {
         throw new Error(`Execution ${executionId} has no active plan revision`);
       }
@@ -239,9 +293,11 @@ export class ExecutionService {
               frozenSpecHash,
               inputSnapshot,
               contextSnapshot: null,
-              executorSnapshot: { agent: stepConfig.agent },
+              executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+                stepConfig.agent,
+              ),
               status: "FAILED",
-              deadlineAt,
+              deadlineAt: attemptDeadlineAt,
               terminalAt: now,
               error: failure,
               terminationReason: failure,
@@ -267,6 +323,171 @@ export class ExecutionService {
         }
       }
 
+      // M4-S2/S3: durable pre-dispatch failure — a policy DENY,
+      // REQUIRE_APPROVAL (S3: treated as a blocked disposition until S4
+      // adds the WAITING approval flow), or an insufficient budget grants
+      // NO work authority. The FAILED attempt follows the step's failure
+      // policy, exactly like the projection-failure path.
+      // M6-S5: capability negotiation — the step's declared delegation
+      // mode must be within the runtime's advertised modes (the operator
+      // declares them in AGENT_TRANSPORT_CONFIG; absent declaration =
+      // unrestricted). A mismatch is a deterministic safe failure: no work
+      // authority without the negotiated capability.
+      const negotiated = () => {
+        if (stepConfig.delegation !== "observed") return true;
+        const runtimeModes = this.transportConfig.forAgent(stepConfig.agent)
+          .delegationModes ?? ["opaque", "observed"];
+        return runtimeModes.includes("observed");
+      };
+
+      const failAttemptDurably = async (
+        failure: string,
+        disposition:
+          | "budget_insufficient"
+          | "policy_denied"
+          | "runtime_capability",
+      ) => {
+        await attemptRepository.save(
+          attemptRepository.create({
+            executionId,
+            logicalStepId: logicalStep.id,
+            planRevisionId: revision.id,
+            attemptNumber,
+            invocationId: `${logicalStep.id}:${attemptNumber}`,
+            frozenSpecHash,
+            inputSnapshot,
+            contextSnapshot,
+            executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+              stepConfig.agent,
+            ),
+            status: "FAILED",
+            deadlineAt: attemptDeadlineAt,
+            terminalAt: now,
+            error: failure,
+            terminationReason: failure,
+          }),
+        );
+
+        const retry =
+          stepConfig.onFailure === "retry" && attemptNumber < maxAttempts;
+        logicalStep.status = retry ? "RETRYING" : "FAILED";
+        logicalStep.error = failure;
+        logicalStep.endTime = retry ? null : now;
+        logicalStep.nextAttemptAt = retry ? now : null;
+        await logicalRepository.save(logicalStep);
+
+        if (!retry && stepConfig.onFailure !== "continue") {
+          execution.status = "FAILED";
+          execution.endTime = now;
+          execution.terminationReason = failure;
+          execution.output = { failedStep: stepConfig.id, error: failure };
+          await manager.getRepository(ExecutionEntity).save(execution);
+        }
+        return { disposition };
+      };
+
+      // M6-S5: capability negotiation — a mismatch is a deterministic safe
+      // failure BEFORE any dispatch authority.
+      if (!negotiated()) {
+        return failAttemptDurably(
+          `Runtime for agent "${stepConfig.agent}" does not support observed delegation`,
+          "runtime_capability",
+        );
+      }
+
+      // M4-S3: policy intercepts BEFORE side effects — before the budget
+      // reserve and before any dispatch. The append-only decision commits
+      // atomically with the intercepted action's outcome. An ALLOW decision
+      // without a successful required reservation grants no authority (the
+      // budget reserve below is that gate).
+      if (this.policyService.isConfigured()) {
+        const proposal = buildDispatchProposal(
+          `${logicalStep.id}:${attemptNumber}`,
+          {
+            executionId,
+            logicalStepId: logicalStep.id,
+            attemptNumber,
+            agent: stepConfig.agent,
+            executor: this.transportConfig.resolveExecutorDescriptor(
+              stepConfig.agent,
+            ).kind,
+          },
+        );
+        const decision = await this.policyService.evaluate(proposal, manager);
+        if (decision.effect === "DENY") {
+          return failAttemptDurably(
+            "Policy DENY: " + decision.reasons.join(", "),
+            "policy_denied",
+          );
+        }
+        if (decision.effect === "REQUIRE_APPROVAL") {
+          // M4-S4: durable ApprovalRequest + WAITING — the attempt makes
+          // NO autonomous progress (WAITING is never a retryable failure).
+          // Approving resumes the SAME attempt; the request is exactly-once.
+          const waitingAttempt = await attemptRepository.save(
+            attemptRepository.create({
+              executionId,
+              logicalStepId: logicalStep.id,
+              planRevisionId: revision.id,
+              attemptNumber,
+              invocationId: `${logicalStep.id}:${attemptNumber}`,
+              frozenSpecHash,
+              inputSnapshot,
+              contextSnapshot,
+              executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+                stepConfig.agent,
+              ),
+              status: "WAITING",
+              deadlineAt: attemptDeadlineAt,
+            }),
+          );
+          logicalStep.status = "WAITING";
+          logicalStep.error = "Approval required";
+          await logicalRepository.save(logicalStep);
+          await this.approvalService.request(proposal, manager);
+          void waitingAttempt;
+          return { disposition: "approval_required" };
+        }
+      }
+
+      // M4-S2: reserve before granting work authority. The reservation
+      // commits atomically with the attempt + outbox; insufficient budget
+      // becomes a durable FAILED attempt that follows the step's failure
+      // policy — no dispatch authority is granted without a reservation.
+      if (stepConfig.budget) {
+        try {
+          const account = await this.budgetLedger.ensureExecutionAccount(
+            manager,
+            executionId,
+            (
+              revision.plan as {
+                budget?: {
+                  parent?: { scopeType: string; scopeId: string };
+                  ceilings: Record<string, number>;
+                };
+              }
+            ).budget,
+            stepConfig.budget,
+          );
+          await this.budgetLedger.reserveForAttempt(manager, {
+            executionId,
+            logicalStepId: logicalStep.id,
+            attemptNumber,
+            invocationId: `${logicalStep.id}:${attemptNumber}`,
+            accountId: account.id,
+            budget: stepConfig.budget,
+          });
+        } catch (error) {
+          if (error instanceof BudgetError) {
+            return failAttemptDurably(
+              `Budget reservation failed: ${error.code}`,
+              "budget_insufficient",
+            );
+          }
+          throw error;
+        }
+      }
+
       const attempt = await attemptRepository.save(
         attemptRepository.create({
           executionId,
@@ -277,9 +498,11 @@ export class ExecutionService {
           frozenSpecHash,
           inputSnapshot,
           contextSnapshot,
-          executorSnapshot: { agent: stepConfig.agent },
+          executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+            stepConfig.agent,
+          ),
           status: "CREATED",
-          deadlineAt,
+          deadlineAt: attemptDeadlineAt,
         }),
       );
 
@@ -314,7 +537,7 @@ export class ExecutionService {
             input: inputSnapshot,
             attempt: attemptNumber,
             createdAt,
-            deadlineAt: deadlineAt?.toISOString(),
+            deadlineAt: attemptDeadlineAt?.toISOString(),
             ...(contextSnapshot ? { context: contextSnapshot } : {}),
             trace: {
               traceId: executionId,
@@ -370,16 +593,85 @@ export class ExecutionService {
     pipeline: PipelineEntity,
     input: unknown,
   ): Promise<ExecutionEntity> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction((manager) =>
+      this.materializeExecutionWithManager(manager, pipeline, input),
+    );
+  }
+
+  /**
+   * M6-S2: manager-aware execution materializer — execution row, plan
+   * revision 1, and logical step rows commit all-or-none inside the
+   * CALLER's transaction. Used by createExecution and by supervised
+   * delegation (a child execution materializes atomically with its
+   * authority decision).
+   */
+  /**
+   * M7-S3: bounded read of this execution's artifact exposure edges —
+   * the claim seam is the single exposure authority, so the read lives
+   * here (never in the capsule/provenance services).
+   */
+  async listArtifactExposures(
+    executionId: string,
+    limit = 100,
+    manager: EntityManager = this.dataSource.manager,
+  ): Promise<ArtifactExposureEntity[]> {
+    return manager
+      .getRepository(ArtifactExposureEntity)
+      .createQueryBuilder("exposure")
+      .innerJoin(
+        StepAttemptEntity,
+        "attempt",
+        'attempt."id" = exposure."stepAttemptId"',
+      )
+      .where('attempt."executionId" = :executionId', { executionId })
+      .orderBy("exposure.createdAt", "ASC")
+      .take(limit)
+      .getMany();
+  }
+
+  async countArtifactExposures(
+    executionId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ): Promise<number> {
+    return manager
+      .getRepository(ArtifactExposureEntity)
+      .createQueryBuilder("exposure")
+      .innerJoin(
+        StepAttemptEntity,
+        "attempt",
+        'attempt."id" = exposure."stepAttemptId"',
+      )
+      .where('attempt."executionId" = :executionId', { executionId })
+      .getCount();
+  }
+
+  async materializeExecutionWithManager(
+    manager: EntityManager,
+    pipeline: PipelineEntity,
+    input: unknown,
+    authorityDeadlineAt: Date | null = null,
+  ): Promise<ExecutionEntity> {
+    {
       const executionRepository = manager.getRepository(ExecutionEntity);
       const planRepository = manager.getRepository(ExecutionPlanRevisionEntity);
-      const plan = { schemaVersion: 1 as const, steps: pipeline.steps };
+      // M4-S5: the frozen plan carries the NORMALIZED budget envelope
+      // (parent scope + dimension ceilings), so the claim transaction can
+      // create the execution account from the approved plan — never from
+      // live pipeline mutation — regardless of the shape the operator
+      // stored.
+      const planBudget = parsePipelineBudget(pipeline.budget);
+      const plan = {
+        schemaVersion: 1 as const,
+        ...(planBudget === undefined ? {} : { budget: planBudget }),
+        steps: pipeline.steps,
+      };
       const pipelineHash =
         pipeline.contentHash ||
         sha256Json({
           name: pipeline.name,
           version: pipeline.version,
           description: pipeline.description,
+          ...(planBudget === undefined ? {} : { budget: planBudget }),
           steps: pipeline.steps,
         });
       let execution = await executionRepository.save(
@@ -396,6 +688,7 @@ export class ExecutionService {
           status: "PENDING",
           input,
           startTime: new Date(),
+          authorityDeadlineAt,
         }),
       );
       const revision = await planRepository.save(
@@ -437,7 +730,7 @@ export class ExecutionService {
         );
       }
       return execution;
-    });
+    }
   }
 
   /**
@@ -692,6 +985,18 @@ export class ExecutionService {
         attempt.terminationReason = reason;
       }
       if (attempts.length) await attemptRepository.save(attempts);
+
+      // M4-S2: cancelled attempts never complete, so their reservations are
+      // fully unused — release them in the SAME transaction (explicit
+      // authority action, unlike unreported terminal usage which stays
+      // consumed by default).
+      for (const attempt of attempts) {
+        await this.budgetLedger.releaseForAction(
+          manager,
+          attempt.invocationId,
+          "execution cancelled",
+        );
+      }
 
       for (const step of steps) {
         if (!CANCELLABLE_STEP_STATUSES.includes(step.status)) continue;

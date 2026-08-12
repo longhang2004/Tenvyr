@@ -365,4 +365,34 @@ describe("PipelineValidationService", () => {
       ).toThrow(/without proven ordering/);
     });
   });
+
+  describe("delegation mode", () => {
+    const validation = service;
+    const pipeline = (delegation: unknown) => ({
+      name: "d",
+      version: "1",
+      steps: [{ id: "extract", agent: "reader", delegation }],
+    });
+
+    it("accepts opaque and observed", () => {
+      expect(validation.validate(pipeline("opaque")).steps[0].delegation).toBe(
+        "opaque",
+      );
+      expect(validation.validate(pipeline("observed")).steps[0].delegation).toBe(
+        "observed",
+      );
+    });
+
+    it("rejects supervised, arrays, and garbage", () => {
+      expect(() => validation.validate(pipeline("supervised"))).toThrow(
+        /delegation must be one of/,
+      );
+      expect(() => validation.validate(pipeline(["observed"]))).toThrow(
+        /delegation must be one of/,
+      );
+      expect(() => validation.validate(pipeline(42))).toThrow(
+        /delegation must be one of/,
+      );
+    });
+  });
 });

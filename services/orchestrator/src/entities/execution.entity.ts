@@ -73,6 +73,10 @@ export class ExecutionEntity {
   @Column({ type: "timestamp", nullable: true })
   endTime: Date;
 
+  /** Optional hard authority deadline inherited by supervised children. */
+  @Column({ type: "timestamp", nullable: true })
+  authorityDeadlineAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

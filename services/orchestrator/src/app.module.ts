@@ -25,6 +25,12 @@ import { AgentEventService } from "./services/agent-event.service";
 import { SupervisionConfigService } from "./services/supervision-config.service";
 import { SupervisionService } from "./services/supervision.service";
 import { ExecutionStateService } from "./services/execution-state.service";
+import { BudgetLedgerService } from "./services/budget-ledger.service";
+import { PolicyService } from "./services/policy.service";
+import { ApprovalService } from "./services/approval.service";
+import { PlanProposalService } from "./services/plan-proposal.service";
+import { DelegationService } from "./services/delegation.service";
+import { ExecutionCapsuleService } from "./services/execution-capsule.service";
 
 @Module({
   imports: [],
@@ -58,6 +64,12 @@ import { ExecutionStateService } from "./services/execution-state.service";
     DispatchOutboxService,
     RuntimeRecoveryService,
     ExecutionStateService,
+    BudgetLedgerService,
+    PolicyService,
+    ApprovalService,
+    PlanProposalService,
+    DelegationService,
+    ExecutionCapsuleService,
   ],
   exports: [
     ...databaseProviders,
@@ -71,6 +83,12 @@ import { ExecutionStateService } from "./services/execution-state.service";
     ResultInboxService,
     DispatchOutboxService,
     ExecutionStateService,
+    BudgetLedgerService,
+    PolicyService,
+    ApprovalService,
+    PlanProposalService,
+    DelegationService,
+    ExecutionCapsuleService,
     AGENT_ADAPTER,
   ],
 })

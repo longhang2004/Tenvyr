@@ -43,6 +43,42 @@ Values below are variable names and source defaults, never production secret val
 
 HTTP agent transport is disabled when `AGENT_TRANSPORT_CONFIG` is absent or blank. When present, it must be a JSON object keyed by exact agent name. Each entry selects `kafka` or `http`; HTTP entries contain the submit URL, time/size limits, and names of environment variables holding bearer/callback secrets.
 
+M3 executor descriptors: at claim time the Orchestrator freezes a bounded,
+versioned, secret-free executor descriptor (executor kind, HTTP routing
+profile, capability flags, config hash) into the attempt's `executorSnapshot`.
+Every dispatch/redelivery consumes that frozen selection; rotation of
+`AGENT_TRANSPORT_CONFIG` after a claim can never silently reroute a pending
+outbox. Secret values (`tokenEnv`, `secretEnv`) are still resolved from the
+live environment for the exact pinned profile. A rotated/missing profile
+(agent removed or moved to another executor kind) is a deterministic
+non-retryable dispatch failure (`EXECUTOR_PROFILE_MISMATCH`), never an
+automatic fallback; workflow retry creates a new attempt with a fresh
+descriptor. Pre-M3 attempts with `{ agent }` snapshots keep routing from live
+configuration (Kafka default) and are never rewritten.
+
+## Local executor host (M3-S3)
+
+`@tenvyr/local-executor-host` is a trusted-code-only local process executor
+(no sandbox; run only commands you trust). Point an agent's
+`AGENT_TRANSPORT_CONFIG` entry at its `http://127.0.0.1:<port>/v1/runs`
+submit URL with a bearer token and shared callback key/secret, exactly like
+any other HTTP agent.
+
+| Variable                                       | Requirement and default                                                                                        |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `EXECUTOR_HOST_AGENTS`                         | Required JSON: agent name -> `{ command, args?, cwd?, env?, secrets?, wallTimeMs, maxStdoutBytes, maxStderrBytes, port, bearerTokenEnv }`. `command` must be an absolute path; `cwd` must resolve inside the allowlisted root; `env`/`secrets` map child variable names to host environment names (secret VALUES are never configured or logged). |
+| `EXECUTOR_HOST_ALLOWED_ROOT`                   | Required absolute working-root allowlist.                                                                      |
+| `EXECUTOR_HOST_STATE_DIR`                      | Required directory for per-agent run state files (orphan termination on restart).                              |
+| `EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS`       | Required comma-separated callback origins (the Orchestrator callback base URL).                                |
+| `EXECUTOR_HOST_CALLBACK_KEYS`                  | Required JSON `{ keyId: secret }` matching the agent's `callbackAuthentication`.                               |
+| `EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE`        | Optional; only exact `true` permits HTTP callback URLs. Default HTTPS-only.                                    |
+
+The child environment is exactly the configured `env` allowlist plus
+resolved `secrets` (include `PATH` if the command needs it). The process
+group is killed at the earlier of the invocation deadline and `wallTimeMs`
+(SIGTERM, then SIGKILL after 5s). See
+[docs/architecture/executors/local-executor-host.md](../architecture/executors/local-executor-host.md).
+
 | Variable                                     | Requirement and default                                                                                                 |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `AGENT_TRANSPORT_CONFIG`                     | Optional JSON; blank means every agent uses Kafka.                                                                      |

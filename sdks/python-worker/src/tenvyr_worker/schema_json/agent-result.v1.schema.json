@@ -45,6 +45,34 @@
         "costUsd": { "type": "number", "minimum": 0 }
       }
     },
+    "delegation": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "provider", "childId", "assertedAt"],
+        "properties": {
+          "schemaVersion": { "const": "1" },
+          "provider": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "childId": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "assertedAt": { "type": "string", "format": "date-time" },
+          "attributes": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "value"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "value": { "type": "string", "minLength": 1, "maxLength": 255 }
+              }
+            }
+          }
+        }
+      }
+    },
     "artifacts": {
       "type": "array",
       "items": {

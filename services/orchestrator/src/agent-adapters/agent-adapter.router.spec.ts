@@ -1,5 +1,6 @@
 import type { AgentInvocationV1 } from "@tenvyr/contracts";
 import { AgentAdapterRouter } from "./agent-adapter.router";
+import { buildExecutorDescriptor } from "../executors/executor-descriptor";
 
 const invocation = (agent: string, input: unknown = {}): AgentInvocationV1 => ({
   schemaVersion: "1",
@@ -61,7 +62,7 @@ describe("AgentAdapterRouter", () => {
     await router.start({ result: handler, event: jest.fn() });
     const receipt = await router.invoke(value);
 
-    expect(http.invoke).toHaveBeenCalledWith(value);
+    expect(http.invoke).toHaveBeenCalledWith(value, undefined);
     expect(kafka.invoke).not.toHaveBeenCalled();
     expect(receipt).toMatchObject({
       adapter: "http",
@@ -77,7 +78,7 @@ describe("AgentAdapterRouter", () => {
       await router.start({ result: handler, event: jest.fn() });
       const receipt = await router.invoke(value);
 
-      expect(kafka.invoke).toHaveBeenCalledWith(value);
+      expect(kafka.invoke).toHaveBeenCalledWith(value, undefined);
       expect(http.invoke).not.toHaveBeenCalled();
       expect(receipt.adapter).toBe("kafka");
     },
@@ -95,6 +96,61 @@ describe("AgentAdapterRouter", () => {
 
     expect(config.forAgent).toHaveBeenCalledWith("code-reviewer");
     expect(kafka.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes a pinned HTTP descriptor to HTTP even when live configuration rotated to Kafka", async () => {
+    const pinned = buildExecutorDescriptor("code-reviewer", {
+      kind: "http",
+      submitUrl: "https://pinned.example/v1/runs",
+      outboundAuthentication: { type: "none" },
+      callbackAuthentication: { keyId: "k", secret: "s" },
+      requestTimeoutMs: 1000,
+      maxResponseBytes: 1024,
+      delegationModes: ["opaque", "observed"],
+    });
+
+    await router.start({ result: handler, event: jest.fn() });
+    const receipt = await router.invoke(invocation("code-reviewer"), pinned);
+
+    // Live config says Kafka for code-reviewer; the frozen descriptor wins.
+    expect(http.invoke).toHaveBeenCalledWith(invocation("code-reviewer"), pinned);
+    expect(kafka.invoke).not.toHaveBeenCalled();
+    expect(receipt.adapter).toBe("http");
+  });
+
+  it("routes a pinned Kafka descriptor to Kafka even when live configuration is HTTP", async () => {
+    const pinned = buildExecutorDescriptor("remote-security-reviewer", {
+      kind: "kafka",
+      delegationModes: ["opaque", "observed"],
+    });
+
+    await router.start({ result: handler, event: jest.fn() });
+    const receipt = await router.invoke(invocation("remote-security-reviewer"), pinned);
+
+    expect(kafka.invoke).toHaveBeenCalledWith(
+      invocation("remote-security-reviewer"),
+      pinned,
+    );
+    expect(http.invoke).not.toHaveBeenCalled();
+    expect(receipt.adapter).toBe("kafka");
+  });
+
+  it("rejects a pinned HTTP descriptor without a routing profile", async () => {
+    const pinned = buildExecutorDescriptor("code-reviewer", {
+        kind: "kafka",
+        delegationModes: ["opaque", "observed"],
+      });
+    (pinned as any).kind = "http";
+    (pinned as any).httpProfile = undefined;
+
+    await router.start({ result: handler, event: jest.fn() });
+
+    await expect(router.invoke(invocation("code-reviewer"), pinned)).rejects.toMatchObject({
+      code: "EXECUTOR_PROFILE_MISMATCH",
+      retryable: false,
+    });
+    expect(http.invoke).not.toHaveBeenCalled();
+    expect(kafka.invoke).not.toHaveBeenCalled();
   });
 
   it.each([

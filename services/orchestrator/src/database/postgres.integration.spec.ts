@@ -34,6 +34,14 @@ import { ExecutionService } from "../services/execution.service";
 import { ResultInboxService } from "../services/result-inbox.service";
 import { ExecutionStateService } from "../services/execution-state.service";
 import { RuntimeRecoveryService } from "../services/runtime-recovery.service";
+import { AgentAdapterRouter } from "../agent-adapters/agent-adapter.router";
+import { HttpAgentAdapter } from "../agent-adapters/http-agent.adapter";
+import { w3cTraceparent } from "../agent-adapters/http-agent.adapter";
+import {
+  AgentTransportConfigService,
+  parseAgentTransportConfiguration,
+} from "../agent-adapters/agent-transport-config.service";
+import type { ExecutorDescriptorV1 } from "../executors/executor-descriptor";
 import { databaseOptions } from "./database.provider";
 import { MilestoneZeroFoundation1722270000000 } from "./migrations/1722270000000-MilestoneZeroFoundation";
 import { MilestoneOneAgentEvents1722270001000 } from "./migrations/1722270001000-MilestoneOneAgentEvents";
@@ -41,6 +49,30 @@ import { MilestoneTwoArtifactIdentity1722270002000 } from "./migrations/17222700
 import { MilestoneTwoExecutionState1722270003000 } from "./migrations/1722270003000-MilestoneTwoExecutionState";
 import { MilestoneTwoArtifactExposure1722270004000 } from "./migrations/1722270004000-MilestoneTwoArtifactExposure";
 import { MilestoneTwoStateWriteEvidence1722270005000 } from "./migrations/1722270005000-MilestoneTwoStateWriteEvidence";
+import { MilestoneFourBudgetLedger1722270006000 } from "./migrations/1722270006000-MilestoneFourBudgetLedger";
+import { BudgetLedgerService } from "../services/budget-ledger.service";
+import { PipelineService } from "../services/pipeline.service";
+import { PipelineValidationService } from "../services/pipeline-validation.service";
+import { ConditionEvaluatorService } from "../services/condition-evaluator.service";
+import { ApprovalService } from "../services/approval.service";
+import { PlanProposalService } from "../services/plan-proposal.service";
+import { DelegationService } from "../services/delegation.service";
+import { DelegationRequestEntity } from "../entities/delegation-request.entity";
+import { DelegationRequestConflictEntity } from "../entities/delegation-request-conflict.entity";
+import { DELEGATION_BOUNDS } from "../services/delegation.service";
+import { ExecutionCapsuleService } from "../services/execution-capsule.service";
+import { ExecutionExportEntity } from "../entities/execution-export.entity";
+import { ExecutionReplayEntity } from "../entities/execution-replay.entity";
+import { PlanProposalEntity } from "../entities/plan-proposal.entity";
+import { DelegationObservationEntity } from "../entities/delegation-observation.entity";
+import { DelegationObservationConflictEntity } from "../entities/delegation-observation-conflict.entity";
+import { PolicySnapshotEntity } from "../entities/policy-snapshot.entity";
+import { PolicyDecisionEntity } from "../entities/policy-decision.entity";
+import { ApprovalRequestEntity } from "../entities/approval-request.entity";
+import { PolicyService } from "../services/policy.service";
+import { BudgetAccountEntity } from "../entities/budget-account.entity";
+import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
+import { BudgetLedgerEntryEntity } from "../entities/budget-ledger-entry.entity";
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 /**
@@ -1850,7 +1882,12 @@ describeWithPostgres("PostgreSQL integration", () => {
     const executionRow = await dataSource
       .getRepository(ExecutionEntity)
       .findOne({ where: { id: execution.id } });
-    expect(executionRow?.status).toBe("CANCELLED");
+    // The first transaction to commit terminal authority wins. Cancellation
+    // wins only while the execution is non-terminal; if the watchdog result
+    // and reconciliation finish first, a later cancel cannot rewrite FAILED.
+    expect(executionRow?.status).toBe(
+      reloaded?.status === "CANCELLED" ? "CANCELLED" : "FAILED",
+    );
     const attempts = await dataSource.getRepository(StepAttemptEntity).count({
       where: { executionId: execution.id },
     });
@@ -6072,5 +6109,7009 @@ describeWithPostgres("PostgreSQL M2F hardening", () => {
     );
     expect(snapshot[0].contextSnapshot).toBeNull();
     await legacy.destroy();
+  });
+});
+
+describeWithPostgres("PostgreSQL M3 executor descriptors", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let inbox: ResultInboxService;
+
+  const httpEnv = (reader: Record<string, unknown> = {}) => ({
+    AGENT_TRANSPORT_CONFIG: JSON.stringify({
+      reader: {
+        kind: "http",
+        submitUrl: "https://reader-pinned.example/v1/runs",
+        outboundAuthentication: { type: "none" },
+        callbackAuthentication: {
+          keyId: "reader-key",
+          secretEnv: "READER_CALLBACK_SECRET",
+        },
+        requestTimeoutMs: 1000,
+        maxResponseBytes: 1024,
+        ...reader,
+      },
+    }),
+    HTTP_AGENT_CALLBACK_BASE_URL: "https://orchestrator.example",
+    READER_CALLBACK_SECRET: "reader-callback-secret",
+  });
+
+  const transportConfig = (env: NodeJS.ProcessEnv) =>
+    new AgentTransportConfigService(parseAgentTransportConfiguration(env));
+
+  const executionServiceWith = (config: AgentTransportConfigService) =>
+    new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+      undefined,
+      config,
+    );
+
+  const recordingAdapter = () => {
+    const calls: Array<{ invocation: unknown; pinned: unknown }> = [];
+    return {
+      calls,
+      adapter: {
+        kind: "test",
+        invoke: jest.fn(async (invocation: any, pinned: any) => {
+          calls.push({ invocation, pinned });
+          return {
+            adapter: "test",
+            invocationId: invocation.invocationId,
+            dispatchedAt: new Date().toISOString(),
+          };
+        }),
+      },
+    };
+  };
+
+  const seedExecution = async (
+    service: ExecutionService,
+    name: string,
+    steps: any[],
+  ) => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        steps,
+      }),
+    );
+    const execution = await service.createExecution(pipeline, {});
+    await service.reconcileExecution(execution.id);
+    return { pipeline, execution };
+  };
+
+  const claimExtract = async (service: ExecutionService, executionId: string) =>
+    service.claimRunnableStep(
+      executionId,
+      { id: "extract", agent: "reader" } as any,
+      { input: true },
+      1,
+    );
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    inbox = new ResultInboxService(dataSource);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("freezes a bounded versioned descriptor per attempt and dispatch consumes exactly it", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-freeze", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    const frozen = (claim as any).attempt
+      .executorSnapshot as ExecutorDescriptorV1;
+    expect(frozen).toMatchObject({
+      schemaVersion: "1",
+      executorId: "agent:reader",
+      agent: "reader",
+      kind: "http",
+      capabilities: { cancel: false },
+    });
+    expect(frozen.httpProfile).toEqual({
+      submitUrl: "https://reader-pinned.example/v1/runs",
+      requestTimeoutMs: 1000,
+      maxResponseBytes: 1024,
+    });
+    expect(frozen.configHash).toMatch(/^[0-9a-f]{64}$/);
+    // Credential values never enter the frozen evidence.
+    expect(JSON.stringify(frozen)).not.toContain("reader-callback-secret");
+
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].pinned).toEqual(frozen);
+
+    const reloaded = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: (claim as any).attempt.id } });
+    expect(reloaded?.status).toBe("DISPATCHED");
+    expect(reloaded?.executorSnapshot).toEqual(frozen);
+  });
+
+  it("redelivery of one outbox row reuses the same invocation and the same frozen descriptor", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-redelivery", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+    const frozen = (claim as any).attempt.executorSnapshot;
+
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    await outboxService.dispatchNext();
+    const outboxRow = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .findOne({ where: { stepAttemptId: (claim as any).attempt.id } });
+    expect(outboxRow?.status).toBe("DISPATCHED");
+
+    // Simulate a transport crash after dispatch: the record returns to
+    // PENDING and is redelivered later.
+    await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: "PENDING",
+        leaseExpiresAt: null,
+        leaseToken: null,
+        nextDispatchAt: new Date(Date.now() - 1000),
+      })
+      .where("id = :id", { id: outboxRow?.id })
+      .execute();
+
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1].invocation).toEqual(rec.calls[0].invocation);
+    expect(rec.calls[1].pinned).toEqual(rec.calls[0].pinned);
+    expect(rec.calls[1].pinned).toEqual(frozen);
+    const reloadedRow = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .findOne({ where: { id: outboxRow?.id } });
+    expect(reloadedRow?.dispatchCount).toBe(2);
+  });
+
+  it("workflow retry creates a distinct attempt with its own frozen descriptor evidence", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { pipeline, execution } = await seedExecution(service, "m3-retry", [
+      { id: "extract", agent: "reader", retries: 2, onFailure: "retry" },
+    ]);
+    const claim = await service.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", retries: 2 } as any,
+      { input: true },
+      3,
+    );
+    expect(claim?.disposition).toBe("claimed");
+
+    const adapter = {
+      kind: "http",
+      start: jest.fn(),
+      stop: jest.fn(),
+      invoke: jest
+        .fn()
+        .mockRejectedValueOnce(
+          new AgentAdapterError("HTTP_REJECTED", "http", "agent rejected", {
+            invocationId: "first",
+            retryable: false,
+            httpStatus: 400,
+          }),
+        )
+        .mockResolvedValue({
+          adapter: "http",
+          invocationId: "second",
+          dispatchedAt: new Date().toISOString(),
+        }),
+    };
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      adapter,
+      config,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({
+      outcome: "terminal_failure",
+      executionId: execution.id,
+    });
+
+    // The workflow retry policy keeps the step RETRYING; reconciliation
+    // claims a NEW attempt and dispatches it through the same outbox.
+    const engine = new EngineService(
+      {
+        findOne: jest.fn().mockResolvedValue({ id: pipeline.id, name: "p" }),
+      } as any,
+      executionServiceWith(config) as any,
+      adapter,
+      outboxService,
+    );
+    await engine.reconcileExecution(execution.id);
+
+    const attempts = await dataSource.getRepository(StepAttemptEntity).find({
+      where: { executionId: execution.id },
+      order: { attemptNumber: "ASC" },
+    });
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].status).toBe("FAILED");
+    expect(attempts[1].status).toBe("DISPATCHED");
+    // Workflow retry is a NEW attempt/invocation, never redelivery.
+    expect(attempts[1].invocationId).not.toBe(attempts[0].invocationId);
+    // Every attempt carries its own bounded frozen descriptor evidence.
+    for (const attempt of attempts) {
+      expect(attempt.executorSnapshot).toMatchObject({
+        schemaVersion: "1",
+        executorId: "agent:reader",
+        kind: "http",
+      });
+      expect(JSON.stringify(attempt.executorSnapshot)).not.toContain(
+        "reader-callback-secret",
+      );
+    }
+    expect(attempts[1].executorSnapshot).toEqual(attempts[0].executorSnapshot);
+  });
+
+  it("a profile rotated to another executor after freeze is a deterministic safe failure, never a reroute", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-rotation", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    // The operator rotates the agent to Kafka after the attempt froze.
+    const rotatedConfig = transportConfig({
+      ...httpEnv(),
+      AGENT_TRANSPORT_CONFIG: JSON.stringify({ reader: { kind: "kafka" } }),
+    });
+    const httpAdapter = new HttpAgentAdapter(rotatedConfig);
+    const router = new AgentAdapterRouter(
+      {
+        kind: "kafka",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest
+          .fn()
+          .mockRejectedValue(new Error("kafka must not be used")),
+      } as any,
+      httpAdapter,
+      rotatedConfig,
+    );
+    await router.start({ result: jest.fn(), event: jest.fn() });
+    try {
+      const outboxService = new DispatchOutboxService(
+        dataSource as any,
+        router as any,
+        rotatedConfig,
+      );
+      const disposition = await outboxService.dispatchNext();
+      expect(disposition).toEqual({
+        outcome: "terminal_failure",
+        executionId: execution.id,
+      });
+
+      // The pinned HTTP attempt fails deterministically; the outbox retires.
+      const attempt = await dataSource
+        .getRepository(StepAttemptEntity)
+        .findOne({ where: { id: (claim as any).attempt.id } });
+      expect(attempt?.status).toBe("FAILED");
+      expect(attempt?.error).toContain(
+        "Pinned HTTP executor profile for agent",
+      );
+      const outboxRow = await dataSource
+        .getRepository(DispatchOutboxEntity)
+        .findOne({ where: { stepAttemptId: attempt?.id } });
+      expect(outboxRow?.status).toBe("FAILED");
+      const step = await dataSource
+        .getRepository(LogicalStepEntity)
+        .findOne({ where: { executionId: execution.id } });
+      expect(step?.status).toBe("FAILED");
+    } finally {
+      await router.stop();
+    }
+  });
+
+  it("a still-HTTP rotation cannot silently reroute dispatch to a new URL", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-url-rotation", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    // The worker moved to a new address after the attempt froze.
+    const rotatedConfig = transportConfig(
+      httpEnv({ submitUrl: "https://reader-live.example/v1/runs" }),
+    );
+    const httpAdapter = new HttpAgentAdapter(rotatedConfig);
+    const router = new AgentAdapterRouter(
+      {
+        kind: "kafka",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest
+          .fn()
+          .mockRejectedValue(new Error("kafka must not be used")),
+      } as any,
+      httpAdapter,
+      rotatedConfig,
+    );
+    await router.start({ result: jest.fn(), event: jest.fn() });
+    const fetchMock = jest.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          schemaVersion: "1",
+          invocationId: (claim as any).attempt.invocationId,
+          runId: "run-1",
+          status: "accepted",
+          acceptedAt: new Date().toISOString(),
+        }),
+        {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    try {
+      const outboxService = new DispatchOutboxService(
+        dataSource as any,
+        router as any,
+        rotatedConfig,
+      );
+      const disposition = await outboxService.dispatchNext();
+      expect(disposition).toEqual({ outcome: "dispatched" });
+      // The dispatch still targets the URL frozen on the attempt.
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://reader-pinned.example/v1/runs",
+        expect.anything(),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      await router.stop();
+    }
+  });
+
+  it("an anomalous non-terminal snapshot is a deterministic terminal failure, never a guessed dispatch", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-bad-snapshot", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    // Corrupt the frozen evidence into a shape no M0–M3 writer produces.
+    await dataSource
+      .getRepository(StepAttemptEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ executorSnapshot: {} })
+      .where("id = :id", { id: (claim as any).attempt.id })
+      .execute();
+
+    const adapter = {
+      kind: "test",
+      start: jest.fn(),
+      stop: jest.fn(),
+      invoke: jest.fn().mockRejectedValue(new Error("must not dispatch")),
+    };
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      adapter as any,
+      config,
+    );
+    const disposition = await outboxService.dispatchNext();
+
+    expect(disposition).toEqual({
+      outcome: "terminal_failure",
+      executionId: execution.id,
+    });
+    expect(adapter.invoke).not.toHaveBeenCalled();
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: (claim as any).attempt.id } });
+    expect(attempt?.status).toBe("FAILED");
+    expect(attempt?.error).toContain("Executor snapshot");
+    const outboxRow = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .findOne({ where: { stepAttemptId: attempt?.id } });
+    expect(outboxRow?.status).toBe("FAILED");
+  });
+
+  it("legacy { agent } snapshots dispatch through live configuration and are never rewritten", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-legacy", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    // Replace the frozen descriptor with a pre-M3 legacy snapshot.
+    await dataSource
+      .getRepository(StepAttemptEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ executorSnapshot: { agent: "reader" } })
+      .where("id = :id", { id: (claim as any).attempt.id })
+      .execute();
+
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].pinned).toMatchObject({
+      schemaVersion: "1",
+      kind: "http",
+      agent: "reader",
+    });
+
+    // The legacy row is evidence: the compatibility reader never rewrites it.
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: (claim as any).attempt.id } });
+    expect(attempt?.executorSnapshot).toEqual({ agent: "reader" });
+  });
+
+  it("legacy snapshots of agents without HTTP configuration keep the Kafka default", async () => {
+    const config = transportConfig({});
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-legacy-kafka", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+    await dataSource
+      .getRepository(StepAttemptEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ executorSnapshot: { agent: "reader" } })
+      .where("id = :id", { id: (claim as any).attempt.id })
+      .execute();
+
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    expect(rec.calls[0].pinned).toMatchObject({
+      schemaVersion: "1",
+      kind: "kafka",
+      agent: "reader",
+    });
+    expect(
+      (rec.calls[0].pinned as ExecutorDescriptorV1).httpProfile,
+    ).toBeUndefined();
+  });
+
+  it("concurrent dispatch claims of one outbox row deliver the frozen descriptor exactly once", async () => {
+    const config = transportConfig(httpEnv());
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m3-concurrent", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+    const frozen = (claim as any).attempt.executorSnapshot;
+
+    const rec = recordingAdapter();
+    const first = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    const second = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    const [a, b] = await Promise.all([
+      first.dispatchNext(),
+      second.dispatchNext(),
+    ]);
+    expect([a.outcome, b.outcome].sort()).toEqual(["dispatched", "idle"]);
+    // One lease, one delivery, one pinned descriptor.
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].pinned).toEqual(frozen);
+  });
+
+  describe("M3-S2 cancellation", () => {
+    const cancelEngine = (
+      adapter: any,
+      config: AgentTransportConfigService,
+      pipelineId: string,
+    ): { engine: EngineService; outbox: DispatchOutboxService } => {
+      const outbox = new DispatchOutboxService(
+        dataSource as any,
+        adapter,
+        config,
+      );
+      const engine = new EngineService(
+        {
+          findOne: jest.fn().mockResolvedValue({ id: pipelineId, name: "p" }),
+        } as any,
+        executionServiceWith(config) as any,
+        adapter,
+        outbox,
+      );
+      return { engine, outbox };
+    };
+
+    const dispatchSeededClaim = async (outbox: DispatchOutboxService) => {
+      const disposition = await outbox.dispatchNext();
+      expect(disposition).toEqual({ outcome: "dispatched" });
+    };
+
+    it("cancels through the engine, retires the outbox, and records the unsupported limitation durably", async () => {
+      const config = transportConfig(httpEnv());
+      const service = executionServiceWith(config);
+      const { pipeline, execution } = await seedExecution(
+        service,
+        "m3-cancel",
+        [{ id: "extract", agent: "reader" }],
+      );
+      const claim = await claimExtract(service, execution.id);
+      expect(claim?.disposition).toBe("claimed");
+
+      const adapter = {
+        kind: "http",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest.fn().mockResolvedValue({
+          adapter: "http",
+          invocationId: (claim as any).attempt.invocationId,
+          dispatchedAt: new Date().toISOString(),
+          dispatchId: "run-1",
+        }),
+      };
+      const { engine, outbox } = cancelEngine(adapter, config, pipeline.id);
+      await dispatchSeededClaim(outbox);
+
+      const cancelled = await engine.cancelExecution(execution.id);
+      expect(cancelled.status).toBe("CANCELLED");
+
+      const attempt = await dataSource
+        .getRepository(StepAttemptEntity)
+        .findOne({ where: { id: (claim as any).attempt.id } });
+      expect(attempt?.status).toBe("CANCELLED");
+      const outboxRow = await dataSource
+        .getRepository(DispatchOutboxEntity)
+        .findOne({ where: { stepAttemptId: attempt?.id } });
+      expect(outboxRow?.status).toBe("COMPLETED");
+      // The frozen descriptor (cancel: false, honest for HTTP today) records
+      // the unsupported limitation as durable evidence on the outbox row.
+      expect(outboxRow?.error).toContain("cancel notification: unsupported");
+      // The adapter has no cancel method; nothing was notified.
+      expect(adapter.invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it("notifies the executor when the frozen descriptor declares cancel support, with the receipt's remote identity", async () => {
+      const config = transportConfig(httpEnv());
+      const service = executionServiceWith(config);
+      const { pipeline, execution } = await seedExecution(
+        service,
+        "m3-cancel-supported",
+        [{ id: "extract", agent: "reader" }],
+      );
+      const claim = await claimExtract(service, execution.id);
+      expect(claim?.disposition).toBe("claimed");
+
+      const cancel = jest.fn().mockResolvedValue({
+        adapter: "http",
+        invocationId: (claim as any).attempt.invocationId,
+        delivered: true,
+      });
+      const adapter = {
+        kind: "http",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest.fn().mockResolvedValue({
+          adapter: "http",
+          invocationId: (claim as any).attempt.invocationId,
+          dispatchedAt: new Date().toISOString(),
+          dispatchId: "run-1",
+        }),
+        cancel,
+      };
+      const { engine, outbox } = cancelEngine(adapter, config, pipeline.id);
+      await dispatchSeededClaim(outbox);
+
+      // The supported capability is not producible by the honest production
+      // resolver (kafka/http cannot cancel); craft the frozen evidence for a
+      // reviewed executor that can.
+      await dataSource
+        .getRepository(StepAttemptEntity)
+        .createQueryBuilder()
+        .update()
+        .set({
+          executorSnapshot: {
+            schemaVersion: "1",
+            executorId: "agent:reader",
+            agent: "reader",
+            kind: "http",
+            configHash: "c".repeat(64),
+            capabilities: { cancel: true },
+            httpProfile: {
+              submitUrl: "https://reader-pinned.example/v1/runs",
+              requestTimeoutMs: 1000,
+              maxResponseBytes: 1024,
+            },
+          },
+        })
+        .where("id = :id", { id: (claim as any).attempt.id })
+        .execute();
+
+      await engine.cancelExecution(execution.id);
+
+      expect(cancel).toHaveBeenCalledWith({
+        invocationId: (claim as any).attempt.invocationId,
+        executionId: execution.id,
+        dispatchId: "run-1",
+        reason: "Execution cancelled by request",
+      });
+      const outboxRow = await dataSource
+        .getRepository(DispatchOutboxEntity)
+        .findOne({ where: { stepAttemptId: (claim as any).attempt.id } });
+      // Delivered cancels are recorded as evidence (and as the idempotency
+      // marker), never as a limitation.
+      expect(outboxRow?.error).toContain("cancel notification: delivered");
+    });
+
+    it("records unreachable when the executor cannot be reached, and never blocks the committed cancellation", async () => {
+      const config = transportConfig(httpEnv());
+      const service = executionServiceWith(config);
+      const { pipeline, execution } = await seedExecution(
+        service,
+        "m3-cancel-unreachable",
+        [{ id: "extract", agent: "reader" }],
+      );
+      const claim = await claimExtract(service, execution.id);
+      expect(claim?.disposition).toBe("claimed");
+
+      const cancel = jest.fn().mockRejectedValue(
+        new AgentAdapterError(
+          "HTTP_CONNECTION_FAILED",
+          "http",
+          "executor down",
+          {
+            retryable: true,
+          },
+        ),
+      );
+      const adapter = {
+        kind: "http",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest.fn().mockResolvedValue({
+          adapter: "http",
+          invocationId: (claim as any).attempt.invocationId,
+          dispatchedAt: new Date().toISOString(),
+          dispatchId: "run-1",
+        }),
+        cancel,
+      };
+      const { engine, outbox } = cancelEngine(adapter, config, pipeline.id);
+      await dispatchSeededClaim(outbox);
+      await dataSource
+        .getRepository(StepAttemptEntity)
+        .createQueryBuilder()
+        .update()
+        .set({
+          executorSnapshot: {
+            schemaVersion: "1",
+            executorId: "agent:reader",
+            agent: "reader",
+            kind: "http",
+            configHash: "c".repeat(64),
+            capabilities: { cancel: true },
+            httpProfile: {
+              submitUrl: "https://reader-pinned.example/v1/runs",
+              requestTimeoutMs: 1000,
+              maxResponseBytes: 1024,
+            },
+          },
+        })
+        .where("id = :id", { id: (claim as any).attempt.id })
+        .execute();
+
+      const cancelled = await engine.cancelExecution(execution.id);
+
+      // Tenvyr cancellation still wins; the failure is durable evidence.
+      expect(cancelled.status).toBe("CANCELLED");
+      const outboxRow = await dataSource
+        .getRepository(DispatchOutboxEntity)
+        .findOne({ where: { stepAttemptId: (claim as any).attempt.id } });
+      expect(outboxRow?.error).toContain("cancel notification: unreachable");
+    });
+
+    it("never marks attempts that succeeded before the cancellation", async () => {
+      const config = transportConfig(httpEnv());
+      const service = executionServiceWith(config);
+      const { pipeline, execution } = await seedExecution(
+        service,
+        "m3-cancel-sibling",
+        [{ id: "extract", agent: "reader" }],
+      );
+      const claim = await claimExtract(service, execution.id);
+      expect(claim?.disposition).toBe("claimed");
+
+      const adapter = {
+        kind: "http",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest.fn().mockResolvedValue({
+          adapter: "http",
+          invocationId: (claim as any).attempt.invocationId,
+          dispatchedAt: new Date().toISOString(),
+          dispatchId: "run-1",
+        }),
+      };
+      const { engine, outbox } = cancelEngine(adapter, config, pipeline.id);
+      await dispatchSeededClaim(outbox);
+
+      // The step completes BEFORE the cancellation: SUCCESS evidence.
+      const result: AgentResultV1 = {
+        schemaVersion: "1",
+        invocationId: (claim as any).attempt.invocationId,
+        executionId: execution.id,
+        stepExecutionId: (claim as any).logicalStep.id,
+        status: "succeeded",
+        output: { done: true } as JsonValue,
+        completedAt: new Date().toISOString(),
+      };
+      await inbox.apply(result, {
+        adapter: "http",
+        receivedAt: new Date().toISOString(),
+      });
+      const succeeded = await dataSource
+        .getRepository(StepAttemptEntity)
+        .findOne({ where: { id: (claim as any).attempt.id } });
+      expect(succeeded?.status).toBe("SUCCESS");
+
+      // Cancelling the execution afterwards must not notify or mark the
+      // succeeded attempt.
+      await engine.cancelExecution(execution.id);
+
+      const outboxRow = await dataSource
+        .getRepository(DispatchOutboxEntity)
+        .findOne({ where: { stepAttemptId: (claim as any).attempt.id } });
+      expect(outboxRow?.error).toBeNull();
+    });
+
+    it("is idempotent: a repeated cancellation never re-notifies the executor", async () => {
+      const config = transportConfig(httpEnv());
+      const service = executionServiceWith(config);
+      const { pipeline, execution } = await seedExecution(
+        service,
+        "m3-cancel-idempotent",
+        [{ id: "extract", agent: "reader" }],
+      );
+      const claim = await claimExtract(service, execution.id);
+      expect(claim?.disposition).toBe("claimed");
+
+      const cancel = jest.fn().mockResolvedValue({
+        adapter: "http",
+        invocationId: (claim as any).attempt.invocationId,
+        delivered: true,
+      });
+      const adapter = {
+        kind: "http",
+        start: jest.fn(),
+        stop: jest.fn(),
+        invoke: jest.fn().mockResolvedValue({
+          adapter: "http",
+          invocationId: (claim as any).attempt.invocationId,
+          dispatchedAt: new Date().toISOString(),
+          dispatchId: "run-1",
+        }),
+        cancel,
+      };
+      const { engine, outbox } = cancelEngine(adapter, config, pipeline.id);
+      await dispatchSeededClaim(outbox);
+      await dataSource
+        .getRepository(StepAttemptEntity)
+        .createQueryBuilder()
+        .update()
+        .set({
+          executorSnapshot: {
+            schemaVersion: "1",
+            executorId: "agent:reader",
+            agent: "reader",
+            kind: "http",
+            configHash: "c".repeat(64),
+            capabilities: { cancel: true },
+            httpProfile: {
+              submitUrl: "https://reader-pinned.example/v1/runs",
+              requestTimeoutMs: 1000,
+              maxResponseBytes: 1024,
+            },
+          },
+        })
+        .where("id = :id", { id: (claim as any).attempt.id })
+        .execute();
+
+      await engine.cancelExecution(execution.id);
+      await engine.cancelExecution(execution.id);
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describeWithPostgres("PostgreSQL M4-S1 budget ledger", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let ledger: BudgetLedgerService;
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "budget_ledger_entries", "budget_reservations",
+       "budget_accounts" CASCADE`,
+    );
+  });
+
+  const ledgerEntryCount = async (accountId: string): Promise<number> => {
+    const rows = await dataSource.query(
+      `SELECT count(*) AS n FROM "budget_ledger_entries" WHERE "accountId" = $1`,
+      [accountId],
+    );
+    return Number(rows[0].n);
+  };
+
+  it("creates a hierarchical account chain and rejects child ceilings above the parent grant", async () => {
+    const root = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "tenant-1",
+      ceilings: { currency_micros: 1_000_000, tokens: 10_000 },
+    });
+    const child = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "execution-1",
+      parentAccountId: root.id,
+      ceilings: { tokens: 2_000 },
+    });
+    expect(child.parentAccountId).toBe(root.id);
+
+    await expect(
+      ledger.createAccount({
+        scopeType: "execution",
+        scopeId: "execution-2",
+        parentAccountId: root.id,
+        ceilings: { tokens: 20_000 },
+      }),
+    ).rejects.toMatchObject({ code: "CHILD_CEILING_EXCEEDS_PARENT" });
+
+    // Unknown dimensions are rejected; same scope is rejected once.
+    await expect(
+      ledger.createAccount({
+        scopeType: "tenant",
+        scopeId: "tenant-1",
+        ceilings: { tokens: 100 },
+      }),
+    ).rejects.toMatchObject({ code: "SCOPE_ALREADY_EXISTS" });
+  });
+
+  it("100 concurrent reservations on one account never overspend the ceiling", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "concurrent-1",
+      ceilings: { tokens: 50 },
+    });
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 100 }, (_, index) =>
+        ledger.reserve({
+          accountId: account.id,
+          dimension: "tokens",
+          amount: 1,
+          idempotencyKey: `concurrent-${index}`,
+        }),
+      ),
+    );
+    const fulfilled = outcomes.filter((o) => o.status === "fulfilled").length;
+    const rejected = outcomes.filter((o) => o.status === "rejected");
+
+    expect(fulfilled).toBe(50);
+    expect(rejected).toHaveLength(50);
+    for (const outcome of rejected) {
+      expect((outcome as PromiseRejectedResult).reason).toMatchObject({
+        code: "INSUFFICIENT_BUDGET",
+      });
+    }
+    const projection = await ledger.projection(account.id);
+    expect(projection.available.tokens).toBe(0);
+    expect(await ledgerEntryCount(account.id)).toBe(50);
+  });
+
+  it("concurrent reservations on sibling accounts never overspend the shared ancestor", async () => {
+    const root = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "tenant-shared",
+      ceilings: { tokens: 30 },
+    });
+    const left = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "left",
+      parentAccountId: root.id,
+      ceilings: { tokens: 30 },
+    });
+    const right = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "right",
+      parentAccountId: root.id,
+      ceilings: { tokens: 30 },
+    });
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 60 }, (_, index) =>
+        ledger.reserve({
+          accountId: index % 2 === 0 ? left.id : right.id,
+          dimension: "tokens",
+          amount: 1,
+          idempotencyKey: `sibling-${index}`,
+        }),
+      ),
+    );
+    const fulfilled = outcomes.filter((o) => o.status === "fulfilled").length;
+
+    // The ancestor ceiling (30) is the binding constraint across both
+    // siblings; each sibling's own ceiling (30) never binds alone.
+    expect(fulfilled).toBe(30);
+    const rootProjection = await ledger.projection(root.id);
+    expect(rootProjection.available.tokens).toBe(0);
+    // Each child keeps its own ceiling remainder (30 − own debits); the
+    // ancestor ceiling (30) is the binding cross-sibling constraint and is
+    // exactly exhausted. New reservations on either child would now fail on
+    // the ancestor check.
+    const leftProjection = await ledger.projection(left.id);
+    const rightProjection = await ledger.projection(right.id);
+    expect(
+      (leftProjection.available.tokens ?? 0) +
+        (rightProjection.available.tokens ?? 0),
+    ).toBe(30);
+  });
+
+  it("a duplicate reserve is exactly once; a conflicting key is rejected and the first stays authoritative", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "idempotent-1",
+      ceilings: { tokens: 100 },
+    });
+    const first = await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 10,
+      idempotencyKey: "same-key",
+    });
+    const replay = await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 10,
+      idempotencyKey: "same-key",
+    });
+
+    expect(replay.id).toBe(first.id);
+    expect(replay.status).toBe("ACTIVE");
+    expect(await ledgerEntryCount(account.id)).toBe(1);
+
+    await expect(
+      ledger.reserve({
+        accountId: account.id,
+        dimension: "tokens",
+        amount: 20,
+        idempotencyKey: "same-key",
+      }),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+
+    // The first reservation is still authoritative and still debits.
+    const projection = await ledger.projection(account.id);
+    expect(projection.available.tokens).toBe(90);
+  });
+
+  it("reserve → commit → release settles exactly the used amount with full ledger evidence", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "settle-1",
+      ceilings: { currency_micros: 1_000_000 },
+    });
+    const reservation = await ledger.reserve({
+      accountId: account.id,
+      dimension: "currency_micros",
+      amount: 600_000,
+      idempotencyKey: "settle-reserve",
+      source: "unknown",
+    });
+
+    const committed = await ledger.commit({
+      reservationId: reservation.id,
+      amount: 420_000,
+      source: "actual",
+      evidence: { attemptId: "attempt-1" },
+    });
+    expect(committed.status).toBe("COMMITTED");
+    expect(
+      (await ledger.projection(account.id)).available.currency_micros,
+    ).toBe(1_000_000 - 600_000);
+
+    const released = await ledger.release({
+      reservationId: reservation.id,
+      amount: 180_000,
+      source: "unknown",
+      reason: "unused reservation",
+    });
+    expect(released.status).toBe("RELEASED");
+    expect(
+      (await ledger.projection(account.id)).available.currency_micros,
+    ).toBe(1_000_000 - 420_000);
+    // Append-only evidence: reserve (account) + commit + release entries.
+    expect(await ledgerEntryCount(account.id)).toBe(3);
+
+    // Committing or releasing again is rejected — exactly one settlement.
+    await expect(
+      ledger.commit({ reservationId: reservation.id, amount: 1 }),
+    ).rejects.toMatchObject({ code: "RESERVATION_NOT_ACTIVE" });
+    await expect(
+      ledger.release({ reservationId: reservation.id, amount: 1 }),
+    ).rejects.toMatchObject({ code: "RESERVATION_NOT_ACTIVE" });
+  });
+
+  it("commit and release amounts never exceed the reservation", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "settle-2",
+      ceilings: { tokens: 100 },
+    });
+    const reservation = await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 10,
+      idempotencyKey: "settle-2-reserve",
+    });
+    await expect(
+      ledger.commit({ reservationId: reservation.id, amount: 11 }),
+    ).rejects.toMatchObject({ code: "RESERVATION_AMOUNT_EXCEEDED" });
+    await expect(
+      ledger.release({ reservationId: reservation.id, amount: 11 }),
+    ).rejects.toMatchObject({ code: "RESERVATION_AMOUNT_EXCEEDED" });
+  });
+
+  it("release can never exceed the UNUSED portion: committed work is never refunded", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "settle-3",
+      ceilings: { currency_micros: 1_000_000 },
+    });
+    const reservation = await ledger.reserve({
+      accountId: account.id,
+      dimension: "currency_micros",
+      amount: 600_000,
+      idempotencyKey: "settle-3-reserve",
+      source: "unknown",
+    });
+    await ledger.commit({
+      reservationId: reservation.id,
+      amount: 420_000,
+      source: "actual",
+    });
+
+    // Releasing the full reservation would mint availability out of the
+    // committed 420_000 of real usage — rejected.
+    await expect(
+      ledger.release({ reservationId: reservation.id, amount: 600_000 }),
+    ).rejects.toMatchObject({ code: "RESERVATION_AMOUNT_EXCEEDED" });
+
+    // Releasing exactly the unused 180_000 is the legal settlement.
+    await ledger.release({ reservationId: reservation.id, amount: 180_000 });
+    const projection = await ledger.projection(account.id);
+    expect(projection.available.currency_micros).toBe(1_000_000 - 420_000);
+  });
+
+  it("N concurrent identical-key reserves produce exactly one reservation and one entry", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "concurrent-key",
+      ceilings: { tokens: 100 },
+    });
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        ledger.reserve({
+          accountId: account.id,
+          dimension: "tokens",
+          amount: 10,
+          idempotencyKey: "the-same-key",
+        }),
+      ),
+    );
+    const fulfilled = outcomes.filter((o) => o.status === "fulfilled");
+    expect(fulfilled).toHaveLength(20);
+    const ids = new Set(
+      fulfilled.map((o) => (o as PromiseFulfilledResult<any>).value.id),
+    );
+    expect(ids.size).toBe(1);
+    expect(await ledgerEntryCount(account.id)).toBe(1);
+    const projection = await ledger.projection(account.id);
+    expect(projection.available.tokens).toBe(90);
+  });
+
+  it("the same idempotency key on a different account is a conflict, never a silent steal", async () => {
+    const first = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "key-owner",
+      ceilings: { tokens: 100 },
+    });
+    const second = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "key-other",
+      ceilings: { tokens: 100 },
+    });
+    await ledger.reserve({
+      accountId: first.id,
+      dimension: "tokens",
+      amount: 10,
+      idempotencyKey: "cross-account-key",
+    });
+    await expect(
+      ledger.reserve({
+        accountId: second.id,
+        dimension: "tokens",
+        amount: 10,
+        idempotencyKey: "cross-account-key",
+      }),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    // The first reservation stays authoritative; the second account is
+    // untouched.
+    expect((await ledger.projection(second.id)).available.tokens).toBe(100);
+  });
+
+  it("derived entry keys never collide with legitimate reserve keys", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "entry-key-collision",
+      ceilings: { tokens: 100 },
+    });
+    const reservation = await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 10,
+      idempotencyKey: "collision-root",
+    });
+    await ledger.commit({
+      reservationId: reservation.id,
+      amount: 5,
+      source: "actual",
+    });
+
+    // Entry keys are `${key}:<accountId>` / `${key}:commit`, so a reserve
+    // key that merely LOOKS like a derived key is a legitimate independent
+    // reservation (the entry unique index cannot misfire).
+    const sibling = await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 10,
+      idempotencyKey: "collision-root:commit",
+    });
+    expect(sibling.status).toBe("ACTIVE");
+    expect(await ledgerEntryCount(account.id)).toBe(3);
+  });
+
+  it("adjust applies a signed correction and refuses to drive availability negative", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "adjust-1",
+      ceilings: { tokens: 100 },
+    });
+    await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 60,
+      idempotencyKey: "adjust-reserve",
+    });
+    await ledger.adjust({
+      accountId: account.id,
+      dimension: "tokens",
+      delta: 50,
+      reason: "operator top-up",
+    });
+    expect((await ledger.projection(account.id)).available.tokens).toBe(90);
+
+    await expect(
+      ledger.adjust({
+        accountId: account.id,
+        dimension: "tokens",
+        delta: -200,
+        reason: "mistake",
+      }),
+    ).rejects.toMatchObject({ code: "AVAILABILITY_NEGATIVE" });
+  });
+
+  it("the ledger projection rebuilds from append-only truth after restart", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "restart-1",
+      ceilings: { tokens: 1_000 },
+    });
+    const reservation = await ledger.reserve({
+      accountId: account.id,
+      dimension: "tokens",
+      amount: 300,
+      idempotencyKey: "restart-reserve",
+    });
+    await ledger.commit({
+      reservationId: reservation.id,
+      amount: 250,
+      source: "actual",
+    });
+    await ledger.release({
+      reservationId: reservation.id,
+      amount: 50,
+      source: "unknown",
+    });
+
+    // Simulate a restart: a NEW service instance rebuilds the projection
+    // purely from the persisted ledger.
+    const freshLedger = new BudgetLedgerService(dataSource as any);
+    const projection = await freshLedger.projection(account.id);
+    expect(projection.available.tokens).toBe(1_000 - 250);
+  });
+
+  it("migration is repeat-safe and the upgrade chain preserves rows", async () => {
+    // The migration is already applied by runMigrations; running it again
+    // must be a no-op (IF NOT EXISTS) that preserves rows.
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "migration-1",
+      ceilings: { tokens: 10 },
+    });
+    const runner = dataSource.createQueryRunner();
+    try {
+      await new MilestoneFourBudgetLedger1722270006000().up(runner);
+    } finally {
+      await runner.release();
+    }
+    const reloaded = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({ where: { id: account.id } });
+    expect(reloaded?.ceilings).toEqual({ tokens: 10 });
+  });
+});
+
+describeWithPostgres("PostgreSQL M4-S2 enforcement wiring", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let inbox: ResultInboxService;
+  let ledger: BudgetLedgerService;
+
+  const pipeline = (name: string, steps: any[], budget?: any) => ({
+    name,
+    version: "1.0",
+    description: "M4-S2 fixture",
+    ...(budget === undefined ? {} : { budget }),
+    steps,
+  });
+
+  const seed = async (steps: any[], budget?: any) => {
+    const stored = await dataSource
+      .getRepository(PipelineEntity)
+      .save(
+        dataSource
+          .getRepository(PipelineEntity)
+          .create(
+            pipeline(
+              `m4s2-${Math.random().toString(36).slice(2)}`,
+              steps,
+              budget,
+            ),
+          ),
+      );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const claim = (executionId: string, step: any, maxAttempts = 1) =>
+    executionService.claimRunnableStep(
+      executionId,
+      step,
+      { input: true },
+      maxAttempts,
+    );
+
+  const applyResult = async (
+    executionId: string,
+    claimResult: any,
+    output: unknown,
+    usage?: unknown,
+  ) => {
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: claimResult.attempt.invocationId,
+      executionId,
+      stepExecutionId: claimResult.logicalStep.id,
+      status: "succeeded",
+      output: output as JsonValue,
+      completedAt: new Date().toISOString(),
+      ...(usage === undefined
+        ? {}
+        : { usage: usage as AgentResultV1["usage"] }),
+    };
+    return inbox.apply(result, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+  };
+
+  const accountProjection = async (executionId: string) => {
+    const account = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: { scopeType: "execution", scopeId: executionId },
+      });
+    return account ? ledger.projection(account.id) : null;
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    inbox = new ResultInboxService(dataSource as any);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "budget_ledger_entries", "budget_reservations", "budget_accounts",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("reserves before work authority: the reservation commits atomically with the attempt and outbox", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { tokens: 1000 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+
+    expect(claimResult?.disposition).toBe("claimed");
+    const projection = await accountProjection(execution.id);
+    expect(projection?.available.tokens).toBe(900);
+    const reservation = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .findOne({
+        where: { actionRef: (claimResult as any).attempt.invocationId },
+      });
+    expect(reservation?.status).toBe("ACTIVE");
+    expect(reservation?.amount).toBe("100");
+  });
+
+  it("an insufficient budget grants NO work authority: durable FAILED attempt, no outbox", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 500 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 500 },
+    });
+
+    expect(claimResult?.disposition).toBe("budget_insufficient");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("FAILED");
+    expect(attempt?.error).toContain("Budget reservation failed");
+    const outboxCount = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .count({ where: { stepAttemptId: attempt?.id } });
+    expect(outboxCount).toBe(0);
+    // No reservation was minted.
+    const projection = await accountProjection(execution.id);
+    expect(projection?.available.tokens).toBe(100);
+  });
+
+  it("reconciles canonical usage and releases the unused remainder in the result transaction", async () => {
+    const { execution } = await seed(
+      [
+        {
+          id: "extract",
+          agent: "reader",
+          budget: { tokens: 1000, currency_micros: 500_000 },
+        },
+      ],
+      { tokens: 1000, currency_micros: 500_000 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 1000, currency_micros: 500_000 },
+    });
+    await applyResult(
+      execution.id,
+      claimResult,
+      { done: true },
+      { totalTokens: 400, costUsd: 0.1 },
+    );
+
+    const projection = await accountProjection(execution.id);
+    // tokens: 1000 − reserve 1000 + release 600 = 600; micros: 500000 − 500000 + 400000 = 400000.
+    expect(projection?.available.tokens).toBe(600);
+    expect(projection?.available.currency_micros).toBe(400_000);
+    const reservations = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .find({
+        where: { actionRef: (claimResult as any).attempt.invocationId },
+      });
+    // Both settled: the final status is RELEASED; the commit is ledger
+    // evidence, not a terminal status.
+    expect(reservations.map((r) => r.status)).toEqual(["RELEASED", "RELEASED"]);
+    const entries = await dataSource
+      .getRepository(BudgetLedgerEntryEntity)
+      .find({ where: { reservationId: In(reservations.map((r) => r.id)) } });
+    const commits = entries.filter((e) => e.operation === "commit");
+    expect(commits.map((c) => Number(c.amount)).sort((a, b) => a - b)).toEqual([
+      400, 100_000,
+    ]);
+    const releases = entries.filter((e) => e.operation === "release");
+    expect(releases.map((r) => Number(r.amount)).sort((a, b) => a - b)).toEqual(
+      [600, 400_000],
+    );
+  });
+
+  it("a terminal result without usage leaves the reservation consumed (unknown is never zero)", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    await applyResult(execution.id, claimResult, { done: true });
+
+    const projection = await accountProjection(execution.id);
+    expect(projection?.available.tokens).toBe(0);
+    const reservation = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .findOne({
+        where: { actionRef: (claimResult as any).attempt.invocationId },
+      });
+    expect(reservation?.status).toBe("ACTIVE");
+  });
+
+  it("workflow retries charge independently: each attempt owns its own reservation", async () => {
+    const { execution } = await seed(
+      [
+        {
+          id: "extract",
+          agent: "reader",
+          retries: 2,
+          onFailure: "retry",
+          budget: { tokens: 50 },
+        },
+      ],
+      { tokens: 100 },
+    );
+    const first = await claim(
+      execution.id,
+      {
+        id: "extract",
+        agent: "reader",
+        retries: 2,
+        budget: { tokens: 50 },
+      },
+      3,
+    );
+    expect(first?.disposition).toBe("claimed");
+
+    const adapter = {
+      kind: "http",
+      start: jest.fn(),
+      stop: jest.fn(),
+      invoke: jest
+        .fn()
+        .mockRejectedValueOnce(
+          new AgentAdapterError("HTTP_REJECTED", "http", "rejected", {
+            invocationId: "first",
+            retryable: false,
+            httpStatus: 400,
+          }),
+        )
+        .mockResolvedValue({
+          adapter: "http",
+          invocationId: "second",
+          dispatchedAt: new Date().toISOString(),
+        }),
+    };
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      adapter as any,
+    );
+    await outboxService.dispatchNext();
+
+    const engine = new EngineService(
+      {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: (execution as any).pipelineId, name: "p" }),
+      } as any,
+      executionService as any,
+      adapter as any,
+      outboxService,
+    );
+    await engine.reconcileExecution(execution.id);
+
+    const attempts = await dataSource.getRepository(StepAttemptEntity).find({
+      where: { executionId: execution.id },
+      order: { attemptNumber: "ASC" },
+    });
+    expect(attempts).toHaveLength(2);
+    const reservations = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .find({ where: { actionRef: In(attempts.map((a) => a.invocationId)) } });
+    // Attempt 1's reservation was released by the dispatch failure; attempt
+    // 2 reserved independently (50 again, distinct keys).
+    expect(reservations).toHaveLength(2);
+    const byRef = new Map(reservations.map((r) => [r.actionRef, r]));
+    expect(byRef.get(attempts[0].invocationId)?.status).toBe("RELEASED");
+    expect(byRef.get(attempts[1].invocationId)?.status).toBe("ACTIVE");
+    expect(byRef.get(attempts[1].invocationId)?.idempotencyKey).not.toBe(
+      byRef.get(attempts[0].invocationId)?.idempotencyKey,
+    );
+    // Net ledger position: attempt 1 released fully, attempt 2 still holds 50.
+    expect((await accountProjection(execution.id))?.available.tokens).toBe(50);
+  });
+
+  it("cancellation releases the full reservation in the cancel transaction", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    await executionService.cancelExecution(execution.id);
+
+    const projection = await accountProjection(execution.id);
+    expect(projection?.available.tokens).toBe(100);
+    const reservation = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .findOne({
+        where: { actionRef: (claimResult as any).attempt.invocationId },
+      });
+    expect(reservation?.status).toBe("RELEASED");
+  });
+
+  it("manager-passed ledger operations join the owner transaction and roll back with it", async () => {
+    const account = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "atomic-rollback",
+      ceilings: { tokens: 100 },
+    });
+    await expect(
+      dataSource.transaction(async (manager) => {
+        await ledger.reserve(
+          {
+            accountId: account.id,
+            dimension: "tokens",
+            amount: 50,
+            idempotencyKey: "rollback-key",
+          },
+          manager,
+        );
+        throw new Error("forced rollback after reservation");
+      }),
+    ).rejects.toThrow("forced rollback");
+
+    // Nothing persisted: the reservation joined the outer transaction.
+    expect(
+      await dataSource
+        .getRepository(BudgetReservationEntity)
+        .count({ where: { idempotencyKey: "rollback-key" } }),
+    ).toBe(0);
+    expect((await ledger.projection(account.id)).available.tokens).toBe(100);
+  });
+
+  it("a late result for an attempt already terminalized by dispatch failure is applied without re-entering the ledger", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    expect(claimResult?.disposition).toBe("claimed");
+
+    // The dispatch fails non-retryably: attempt FAILED, reservation released.
+    const adapter = {
+      kind: "http",
+      start: jest.fn(),
+      stop: jest.fn(),
+      invoke: jest.fn().mockRejectedValue(
+        new AgentAdapterError("HTTP_REJECTED", "http", "rejected", {
+          invocationId: "first",
+          retryable: false,
+          httpStatus: 400,
+        }),
+      ),
+    };
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      adapter as any,
+    );
+    await outboxService.dispatchNext();
+
+    // A LATE worker result for the same invocation arrives afterwards. It
+    // must become APPLIED duplicate evidence without touching the released
+    // reservation (no RESERVATION_NOT_ACTIVE rollback / poison loop).
+    // The apply must NOT throw and must NOT re-enter the ledger (the
+    // RESERVATION_NOT_ACTIVE rollback regression); the already-authoritative
+    // terminal outcome is recorded as a conflict disposition.
+    const applied = await applyResult(
+      execution.id,
+      claimResult,
+      { done: true },
+      { totalTokens: 10 },
+    );
+    expect(["applied", "duplicate", "conflict"]).toContain(applied.disposition);
+    const reservation = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .findOne({
+        where: { actionRef: (claimResult as any).attempt.invocationId },
+      });
+    expect(reservation?.status).toBe("RELEASED");
+    expect((await accountProjection(execution.id))?.available.tokens).toBe(100);
+    // No ledger activity was minted by the late delivery.
+    const entries = await dataSource
+      .getRepository(BudgetLedgerEntryEntity)
+      .find({ where: { reservationId: reservation?.id } });
+    expect(entries.filter((e) => e.operation === "commit").length).toBe(0);
+  });
+
+  it("a result racing cancellation settles exactly once with one authority", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    expect(claimResult?.disposition).toBe("claimed");
+
+    const [application, cancellation] = await Promise.all([
+      applyResult(
+        execution.id,
+        claimResult,
+        { done: true },
+        { totalTokens: 40 },
+      ),
+      executionService.cancelExecution(execution.id),
+    ]);
+    expect(application.disposition).toBeDefined();
+    expect(cancellation.status).toBe("CANCELLED");
+
+    // Whatever won, the ledger settles exactly once: the reservation is
+    // either RELEASED (cancel won) or RELEASED (result settled); never
+    // ACTIVE and never double-settled.
+    const reservation = await dataSource
+      .getRepository(BudgetReservationEntity)
+      .findOne({
+        where: { actionRef: (claimResult as any).attempt.invocationId },
+      });
+    expect(["RELEASED", "RELEASED"]).toContain(reservation?.status);
+    const entries = await dataSource
+      .getRepository(BudgetLedgerEntryEntity)
+      .find({ where: { reservationId: reservation?.id } });
+    expect(
+      entries.filter((e) => e.operation === "commit").length,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      entries.filter((e) => e.operation === "release").length,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      (await accountProjection(execution.id))?.available.tokens,
+    ).toBeGreaterThanOrEqual(0);
+  });
+
+  it("restart finds outstanding reservations and the projection stays authoritative", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 200 } }],
+      { tokens: 200 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 200 },
+    });
+
+    // Simulate a crash before any result: fresh instances rebuild state
+    // purely from durable rows.
+    const freshLedger = new BudgetLedgerService(dataSource as any);
+    const freshInbox = new ResultInboxService(dataSource as any);
+    const projection = await freshLedger.projection(
+      (
+        await freshLedger.ensureExecutionAccount(
+          dataSource.manager,
+          execution.id,
+          { ceilings: { tokens: 200 } },
+          { tokens: 200 },
+        )
+      ).id,
+    );
+    expect(projection.available.tokens).toBe(0);
+
+    // The result still reconciles deterministically afterwards.
+    await applyResult(
+      execution.id,
+      claimResult,
+      { done: true },
+      { totalTokens: 80 },
+    );
+    const after = await accountProjection(execution.id);
+    expect(after?.available.tokens).toBe(120);
+  });
+});
+
+describeWithPostgres("PostgreSQL M4-S3 policy boundary", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+
+  const seed = async (steps: any[], budget?: any) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m4s3-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M4-S3 fixture",
+        ...(budget === undefined ? {} : { budget }),
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const claim = (executionId: string, step: any, maxAttempts = 1) =>
+    executionService.claimRunnableStep(
+      executionId,
+      step,
+      { input: true },
+      maxAttempts,
+    );
+
+  const decisionCount = async (proposalId: string): Promise<number> =>
+    dataSource
+      .getRepository(PolicyDecisionEntity)
+      .count({ where: { proposalId } });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "policy_decisions", "policy_snapshots",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("a DENY decision grants no work authority: durable FAILED attempt, decision evidence committed atomically", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: "deny-banned",
+          actionType: "dispatch",
+          effect: "DENY",
+          agents: ["banned-agent"],
+        },
+      ],
+    });
+    const { execution } = await seed([
+      { id: "extract", agent: "banned-agent" },
+    ]);
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "banned-agent",
+    });
+
+    expect(claimResult?.disposition).toBe("policy_denied");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("FAILED");
+    expect(attempt?.error).toContain("Policy DENY");
+    const outboxCount = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .count({ where: { stepAttemptId: attempt?.id } });
+    expect(outboxCount).toBe(0);
+    // The append-only decision committed with the intercepted action.
+    const decisions = await dataSource
+      .getRepository(PolicyDecisionEntity)
+      .find();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({
+      effect: "DENY",
+      targetAgent: "banned-agent",
+      policyVersion: 1,
+    });
+    expect(decisions[0].proposalHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(decisions[0].policyHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("an ALLOW decision still requires the budget reservation (ALLOW alone grants no authority)", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [{ id: "allow-all", actionType: "dispatch", effect: "ALLOW" }],
+    });
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 500 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 500 },
+    });
+
+    // Policy said ALLOW, but the budget reserve failed → no work authority.
+    expect(claimResult?.disposition).toBe("budget_insufficient");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("FAILED");
+    expect(attempt?.error).toContain("Budget reservation failed");
+    const decisions = await dataSource
+      .getRepository(PolicyDecisionEntity)
+      .find();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].effect).toBe("ALLOW");
+  });
+
+  it("REQUIRE_APPROVAL is evaluated and recorded; S4 upgrades the disposition to a WAITING attempt", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: "approve-kafka",
+          actionType: "dispatch",
+          effect: "REQUIRE_APPROVAL",
+          executors: ["kafka"],
+        },
+      ],
+    });
+    const { execution } = await seed([
+      { id: "extract", agent: "remote-security-reviewer" },
+    ]);
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "remote-security-reviewer",
+    });
+
+    // M4-S4: REQUIRE_APPROVAL is a durable WAITING disposition (never a
+    // retryable failure); the decision evidence is recorded with it.
+    expect(claimResult?.disposition).toBe("approval_required");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("WAITING");
+    const decisions = await dataSource
+      .getRepository(PolicyDecisionEntity)
+      .find();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].effect).toBe("REQUIRE_APPROVAL");
+  });
+
+  it("the snapshot is frozen once per version; rotation requires a version bump", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [
+        { id: "r", actionType: "dispatch", effect: "DENY", agents: ["a"] },
+      ],
+    });
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    await claim(execution.id, { id: "extract", agent: "reader" });
+
+    const snapshots = await dataSource
+      .getRepository(PolicySnapshotEntity)
+      .find();
+    expect(snapshots).toHaveLength(1);
+
+    // Rotating the SAME version with different rules is a deterministic
+    // safe failure, not a silent policy change.
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [{ id: "r2", actionType: "dispatch", effect: "ALLOW" }],
+    });
+    const { execution: rotated } = await seed([
+      { id: "extract", agent: "reader" },
+    ]);
+    await expect(
+      claim(rotated.id, { id: "extract", agent: "reader" }),
+    ).rejects.toMatchObject({ code: "POLICY_VERSION_CONFLICT" });
+
+    // A version bump is the legal rotation path.
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 2,
+      rules: [{ id: "r2", actionType: "dispatch", effect: "ALLOW" }],
+    });
+    const { execution: rotatedV2 } = await seed([
+      { id: "extract", agent: "reader" },
+    ]);
+    const second = await claim(rotatedV2.id, {
+      id: "extract",
+      agent: "reader",
+    });
+    expect(second?.disposition).toBe("claimed");
+    expect(await dataSource.getRepository(PolicySnapshotEntity).count()).toBe(
+      2,
+    );
+  });
+
+  it("no policy configured → no decisions, behavior unchanged", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+    });
+    expect(claimResult?.disposition).toBe("claimed");
+    expect(await dataSource.getRepository(PolicyDecisionEntity).count()).toBe(
+      0,
+    );
+  });
+});
+
+describeWithPostgres("PostgreSQL M4-S4 approvals and WAITING", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let approvals: ApprovalService;
+
+  const seed = async (steps: any[], budget?: any) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m4s4-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M4-S4 fixture",
+        ...(budget === undefined ? {} : { budget }),
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const claim = (executionId: string, step: any, maxAttempts = 1) =>
+    executionService.claimRunnableStep(
+      executionId,
+      step,
+      { input: true },
+      maxAttempts,
+    );
+
+  const requireApprovalPolicy = (executor = "kafka") =>
+    JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: "approve-kafka",
+          actionType: "dispatch",
+          effect: "REQUIRE_APPROVAL",
+          executors: [executor],
+        },
+      ],
+    });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    approvals = new ApprovalService(dataSource as any);
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "approval_requests", "policy_decisions", "policy_snapshots",
+       "budget_ledger_entries", "budget_reservations", "budget_accounts",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("REQUIRE_APPROVAL produces a durable PENDING request, a WAITING attempt, a WAITING step, and NO outbox", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+    });
+
+    expect(claimResult?.disposition).toBe("approval_required");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("WAITING");
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(step?.status).toBe("WAITING");
+    const outboxCount = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .count({ where: { stepAttemptId: attempt?.id } });
+    expect(outboxCount).toBe(0);
+    const request = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({
+        where: { executionId: execution.id },
+      });
+    expect(request).toMatchObject({
+      status: "PENDING",
+      targetExecutor: "kafka",
+    });
+    expect(request?.proposalHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("approving resumes the SAME attempt: WAITING → CREATED + outbox + dispatch; replay never re-executes", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { tokens: 100 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const stepRow = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${stepRow?.id}:1`;
+
+    const approved = await approvals.approve(
+      proposalId,
+      undefined,
+      "operator approved",
+    );
+    expect(approved.status).toBe("APPROVED");
+
+    const reloaded = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { id: attempt?.id },
+    });
+    expect(reloaded?.status).toBe("CREATED");
+    expect(reloaded?.invocationId).toBe(attempt?.invocationId);
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(step?.status).toBe("RUNNING");
+    // Exactly one outbox row for the SAME invocation.
+    const outboxRows = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .find({
+        where: { stepAttemptId: attempt?.id },
+      });
+    expect(outboxRows).toHaveLength(1);
+    expect((outboxRows[0].invocation as any).invocationId).toBe(
+      attempt?.invocationId,
+    );
+    // The budget was reserved at approval time.
+    const account = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: { scopeType: "execution", scopeId: execution.id },
+      });
+    expect(account).not.toBeNull();
+
+    // Replay: approving again returns the same outcome and mints nothing.
+    const replay = await approvals.approve(proposalId);
+    expect(replay.status).toBe("APPROVED");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: attempt?.id },
+      }),
+    ).toBe(1);
+
+    // The engine dispatches the resumed attempt exactly once.
+    const adapter = {
+      kind: "http",
+      start: jest.fn(),
+      stop: jest.fn(),
+      invoke: jest.fn().mockResolvedValue({
+        adapter: "http",
+        invocationId: attempt?.invocationId,
+        dispatchedAt: new Date().toISOString(),
+      }),
+    };
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      adapter as any,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    expect(adapter.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("denying the request fails the attempt durably and the step follows its failure policy", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    await claim(execution.id, { id: "extract", agent: "reader" });
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${step?.id}:1`;
+
+    const denied = await approvals.deny(proposalId, undefined, "not this week");
+    expect(denied.status).toBe("DENIED");
+
+    const reloaded = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { id: attempt?.id },
+    });
+    expect(reloaded?.status).toBe("FAILED");
+    expect(reloaded?.terminationReason).toBe("Approval denied");
+    const reloadedStep = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({
+        where: { executionId: execution.id },
+      });
+    expect(reloadedStep?.status).toBe("FAILED");
+    const executionRow = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({
+        where: { id: execution.id },
+      });
+    expect(executionRow?.status).toBe("FAILED");
+  });
+
+  it("expiry terminalizes the WAITING attempt deterministically; the recovery sweep finds due requests", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    await claim(execution.id, { id: "extract", agent: "reader" });
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${step?.id}:1`;
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+
+    // Force the request into the past.
+    await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where("proposalId = :proposalId", { proposalId })
+      .execute();
+
+    const expired = await approvals.expire(proposalId);
+    expect(expired?.status).toBe("EXPIRED");
+    const reloaded = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { id: attempt?.id },
+    });
+    expect(reloaded?.status).toBe("FAILED");
+    expect(reloaded?.terminationReason).toBe("Approval expired");
+
+    // The autonomous sweep finds a NEW due request.
+    const { execution: second } = await seed([
+      { id: "extract", agent: "reader" },
+    ]);
+    await claim(second.id, { id: "extract", agent: "reader" });
+    const secondStep = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({
+        where: { executionId: second.id },
+      });
+    await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where("logicalStepId = :logicalStepId", {
+        logicalStepId: secondStep?.id,
+      })
+      .execute();
+    const swept = await approvals.expireDue(undefined, new Date());
+    expect(swept).toBe(1);
+    const secondAttempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({
+        where: { executionId: second.id },
+      });
+    expect(secondAttempt?.status).toBe("FAILED");
+  });
+
+  it("WAITING attempts are cancelled like any other active attempt", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    await claim(execution.id, { id: "extract", agent: "reader" });
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+
+    const cancelled = await executionService.cancelExecution(execution.id);
+    expect(cancelled.status).toBe("CANCELLED");
+    const reloaded = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { id: attempt?.id },
+    });
+    expect(reloaded?.status).toBe("CANCELLED");
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(step?.status).toBe("CANCELLED");
+  });
+
+  it("approve with insufficient budget at resume time fails durably with NO outbox", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 500 } }],
+      { tokens: 100 },
+    );
+    await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 500 },
+    });
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${step?.id}:1`;
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+
+    const approved = await approvals.approve(proposalId, undefined, "go");
+
+    // The request records APPROVED (the operator decided) but the budget
+    // gate failed: the attempt is FAILED and NO outbox was minted.
+    expect(approved.status).toBe("APPROVED");
+    const reloaded = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { id: attempt?.id },
+    });
+    expect(reloaded?.status).toBe("FAILED");
+    expect(reloaded?.error).toContain("Budget reservation failed");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: attempt?.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("an approval outcome never overwrites a cancelled attempt (cancel then expire/deny)", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    await claim(execution.id, { id: "extract", agent: "reader" });
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${step?.id}:1`;
+
+    await executionService.cancelExecution(execution.id);
+
+    // Expiry and deny run AFTER the cancellation: the CANCELLED authority
+    // must survive (no FAILED overwrite, execution stays CANCELLED).
+    await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where("proposalId = :proposalId", { proposalId })
+      .execute();
+    const expired = await approvals.expire(proposalId);
+    expect(expired?.status).toBe("EXPIRED");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("CANCELLED");
+    const executionRow = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({
+        where: { id: execution.id },
+      });
+    expect(executionRow?.status).toBe("CANCELLED");
+
+    // Approving after the expiry is an exactly-once replay: the earlier
+    // EXPIRED decision is authoritative and nothing resumes.
+    const approved = await approvals.approve(proposalId, undefined, "late");
+    expect(approved.status).toBe("EXPIRED");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: attempt?.id },
+      }),
+    ).toBe(0);
+    const attemptAgain = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({
+        where: { id: attempt?.id },
+      });
+    expect(attemptAgain?.status).toBe("CANCELLED");
+  });
+
+  it("approval vs cancel race settles exactly once under the row locks", async () => {
+    process.env.TENVYR_POLICY = requireApprovalPolicy();
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    await claim(execution.id, { id: "extract", agent: "reader" });
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${step?.id}:1`;
+
+    const [approved, cancelled] = await Promise.all([
+      approvals.approve(proposalId),
+      executionService.cancelExecution(execution.id),
+    ]);
+    expect(approved.status).toBeDefined();
+    expect(cancelled.status).toBe("CANCELLED");
+
+    // One authority: either the request is APPROVED and the attempt was
+    // resumed then cancelled, or the request stayed PENDING/expired with a
+    // CANCELLED attempt — never a dispatched second identity.
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(["CANCELLED", "CANCELLED"]).toContain(attempt?.status);
+    const outboxCount = await dataSource
+      .getRepository(DispatchOutboxEntity)
+      .count({ where: { stepAttemptId: attempt?.id } });
+    expect(outboxCount).toBeLessThanOrEqual(1);
+  });
+});
+
+describeWithPostgres("PostgreSQL M4-S5 hierarchy completeness", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let ledger: BudgetLedgerService;
+  let approvals: ApprovalService;
+
+  const seed = async (steps: any[], budget?: any) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m4s5-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M4-S5 fixture",
+        ...(budget === undefined ? {} : { budget }),
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const claim = (executionId: string, step: any, maxAttempts = 1) =>
+    executionService.claimRunnableStep(
+      executionId,
+      step,
+      { input: true },
+      maxAttempts,
+    );
+
+  const available = async (accountId: string, dimension = "tokens") =>
+    (await ledger.projection(accountId)).available[dimension] ?? 0;
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    approvals = new ApprovalService(dataSource as any);
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "approval_requests", "policy_decisions", "policy_snapshots",
+       "budget_ledger_entries", "budget_reservations", "budget_accounts",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("adjust propagates to the whole chain: a child top-up debits its ancestors", async () => {
+    const root = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "adjust-tenant",
+      ceilings: { tokens: 1_000 },
+    });
+    const child = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "adjust-exec",
+      parentAccountId: root.id,
+      ceilings: { tokens: 500 },
+    });
+    await ledger.reserve({
+      accountId: child.id,
+      dimension: "tokens",
+      amount: 100,
+      idempotencyKey: "adjust-pre",
+    });
+
+    await ledger.adjust({
+      accountId: child.id,
+      dimension: "tokens",
+      delta: 200,
+      reason: "operator top-up",
+    });
+
+    // Both accounts carry the adjust entry: child 500−100+200, tenant
+    // 1000−100−200 — the child can never exceed the ancestor's REMAINING
+    // grant.
+    expect(await available(child.id)).toBe(600);
+    expect(await available(root.id)).toBe(700);
+    // Invariant: child available <= ancestor available.
+    expect(await available(child.id)).toBeLessThanOrEqual(
+      await available(root.id),
+    );
+
+    // A top-up beyond the ancestor's remaining grant is rejected.
+    await expect(
+      ledger.adjust({
+        accountId: child.id,
+        dimension: "tokens",
+        delta: 800,
+        reason: "too much",
+      }),
+    ).rejects.toMatchObject({ code: "AVAILABILITY_NEGATIVE" });
+    expect(await available(child.id)).toBe(600);
+    expect(await available(root.id)).toBe(700);
+  });
+
+  it("a negative adjust on a child credits its ancestors back", async () => {
+    const root = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "reduce-tenant",
+      ceilings: { tokens: 1_000 },
+    });
+    const child = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "reduce-exec",
+      parentAccountId: root.id,
+      ceilings: { tokens: 500 },
+    });
+    await ledger.adjust({
+      accountId: child.id,
+      dimension: "tokens",
+      delta: 100,
+      reason: "grant increase",
+    });
+    await ledger.adjust({
+      accountId: child.id,
+      dimension: "tokens",
+      delta: -100,
+      reason: "correction",
+    });
+
+    expect(await available(child.id)).toBe(500);
+    expect(await available(root.id)).toBe(1_000);
+  });
+
+  it("a mixed operation sequence never lets a child exceed its ancestor's remaining grant", async () => {
+    const tenant = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "property-tenant",
+      ceilings: { tokens: 1_000 },
+    });
+    const plan = await ledger.createAccount({
+      scopeType: "plan",
+      scopeId: "property-plan",
+      parentAccountId: tenant.id,
+      ceilings: { tokens: 800 },
+    });
+    const execution = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "property-exec",
+      parentAccountId: plan.id,
+      ceilings: { tokens: 400 },
+    });
+
+    const sequence: Array<() => Promise<unknown>> = [
+      () =>
+        ledger.reserve({
+          accountId: execution.id,
+          dimension: "tokens",
+          amount: 100,
+          idempotencyKey: "p1",
+        }),
+      () =>
+        ledger.reserve({
+          accountId: execution.id,
+          dimension: "tokens",
+          amount: 50,
+          idempotencyKey: "p2",
+        }),
+      () =>
+        ledger.adjust({
+          accountId: execution.id,
+          dimension: "tokens",
+          delta: 150,
+          reason: "top-up",
+        }),
+      () =>
+        ledger.reserve({
+          accountId: plan.id,
+          dimension: "tokens",
+          amount: 200,
+          idempotencyKey: "p3",
+        }),
+      () =>
+        ledger.adjust({
+          accountId: plan.id,
+          dimension: "tokens",
+          delta: -100,
+          reason: "reduce",
+        }),
+      () =>
+        ledger.reserve({
+          accountId: execution.id,
+          dimension: "tokens",
+          amount: 300,
+          idempotencyKey: "p4",
+        }),
+    ];
+    const outcomes: string[] = [];
+    for (const step of sequence) {
+      try {
+        await step();
+        outcomes.push("ok");
+      } catch (error) {
+        outcomes.push((error as { code?: string }).code ?? "error");
+      }
+    }
+    // The final reserve is rejected: the child cannot exceed the ancestor's
+    // REMAINING grant even after the operator top-ups and reductions.
+    expect(outcomes).toEqual([
+      "ok",
+      "ok",
+      "ok",
+      "ok",
+      "ok",
+      "INSUFFICIENT_BUDGET",
+    ]);
+
+    // The dynamic boundary: the child may spend exactly up to the
+    // ancestor's remaining grant (200) but no more — even though the
+    // child's own ceiling (400) has room.
+    await ledger.reserve({
+      accountId: execution.id,
+      dimension: "tokens",
+      amount: 200,
+      idempotencyKey: "p5",
+    });
+    await expect(
+      ledger.reserve({
+        accountId: execution.id,
+        dimension: "tokens",
+        amount: 201,
+        idempotencyKey: "p6",
+      }),
+    ).rejects.toMatchObject({ code: "INSUFFICIENT_BUDGET" });
+  });
+
+  it("activates execution-account parentage from the plan: the chain reserve debits the operator tenant", async () => {
+    const tenant = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "plan-parent",
+      ceilings: { tokens: 500 },
+    });
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      { parent: { scopeType: "tenant", scopeId: "plan-parent" }, tokens: 300 },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    expect(claimResult?.disposition).toBe("claimed");
+
+    const account = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: { scopeType: "execution", scopeId: execution.id },
+      });
+    expect(account?.parentAccountId).toBe(tenant.id);
+    // The execution grant is a subset of the tenant grant.
+    expect(account?.ceilings).toEqual({ tokens: 300 });
+    // The reserve debited BOTH the execution account and the tenant.
+    expect(await available(account!.id)).toBe(200);
+    expect(await available(tenant.id)).toBe(400);
+  });
+
+  it("a missing parent account is a deterministic safe failure: no work authority", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      {
+        parent: { scopeType: "tenant", scopeId: "does-not-exist" },
+        tokens: 300,
+      },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+
+    expect(claimResult?.disposition).toBe("budget_insufficient");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("FAILED");
+    expect(attempt?.error).toContain("ACCOUNT_NOT_FOUND");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: attempt?.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("child ceilings exceeding the parent grant are rejected at claim", async () => {
+    const tenant = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "subset-tenant",
+      ceilings: { tokens: 100 },
+    });
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      {
+        parent: { scopeType: "tenant", scopeId: "subset-tenant" },
+        tokens: 500,
+      },
+    );
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+
+    expect(claimResult?.disposition).toBe("budget_insufficient");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.error).toContain("CHILD_CEILING_EXCEEDS_PARENT");
+  });
+
+  it("the validated budget envelope round-trips through the REAL pipeline service", async () => {
+    const tenant = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "roundtrip-tenant",
+      ceilings: { tokens: 500 },
+    });
+    const pipelineService = new PipelineService(
+      dataSource.getRepository(PipelineEntity) as any,
+      new PipelineValidationService(new ConditionEvaluatorService() as any),
+    );
+    const stored = await pipelineService.create({
+      name: `roundtrip-${Math.random().toString(36).slice(2)}`,
+      version: "1.0",
+      description: "round-trip fixture",
+      budget: {
+        parent: { scopeType: "tenant", scopeId: "roundtrip-tenant" },
+        tokens: 300,
+      },
+      steps: [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+    });
+    // The stored definition carries the NORMALIZED envelope; executing it
+    // must re-parse idempotently.
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    const claimResult = await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    expect(claimResult?.disposition).toBe("claimed");
+    const account = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: { scopeType: "execution", scopeId: execution.id },
+      });
+    expect(account?.parentAccountId).toBe(tenant.id);
+    expect(await available(tenant.id)).toBe(400);
+  });
+
+  it("the child subset rule is enforced against the DIRECT parent, not a sorted ancestor", async () => {
+    const tenant = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "direct-parent-tenant",
+      ceilings: { tokens: 1_000 },
+    });
+    const plan = await ledger.createAccount({
+      scopeType: "plan",
+      scopeId: "direct-parent-plan",
+      parentAccountId: tenant.id,
+      ceilings: { tokens: 500 },
+    });
+    // Child ceiling within the tenant (600 <= 1000) but ABOVE the direct
+    // plan grant (500) — must be rejected against the DIRECT parent.
+    await expect(
+      ledger.createAccount({
+        scopeType: "execution",
+        scopeId: "direct-parent-exec",
+        parentAccountId: plan.id,
+        ceilings: { tokens: 600 },
+      }),
+    ).rejects.toMatchObject({ code: "CHILD_CEILING_EXCEEDS_PARENT" });
+    // Within the direct parent's grant: accepted.
+    const ok = await ledger.createAccount({
+      scopeType: "execution",
+      scopeId: "direct-parent-exec2",
+      parentAccountId: plan.id,
+      ceilings: { tokens: 400 },
+    });
+    expect(ok.parentAccountId).toBe(plan.id);
+  });
+
+  it("approve-resume with a parent chain debits the tenant too", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: "approve-kafka",
+          actionType: "dispatch",
+          effect: "REQUIRE_APPROVAL",
+          executors: ["kafka"],
+        },
+      ],
+    });
+    const tenant = await ledger.createAccount({
+      scopeType: "tenant",
+      scopeId: "approve-parent",
+      ceilings: { tokens: 500 },
+    });
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 100 } }],
+      {
+        parent: { scopeType: "tenant", scopeId: "approve-parent" },
+        tokens: 300,
+      },
+    );
+    await claim(execution.id, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 100 },
+    });
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    const proposalId = `${step?.id}:1`;
+
+    await approvals.approve(proposalId);
+
+    // The approval-time reserve debited the execution account AND the
+    // tenant: 300−100 / 500−100.
+    const account = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: { scopeType: "execution", scopeId: execution.id },
+      });
+    expect(await available(account!.id)).toBe(200);
+    expect(await available(tenant.id)).toBe(400);
+  });
+});
+
+describeWithPostgres("PostgreSQL M5-S2 proposals", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let proposals: PlanProposalService;
+
+  const seed = async (steps: any[], budget?: any) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m5s2-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M5-S2 fixture",
+        ...(budget === undefined ? {} : { budget }),
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const activeRevision = async (executionId: string) => {
+    const execution = await dataSource.getRepository(ExecutionEntity).findOne({
+      where: { id: executionId },
+    });
+    return dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { id: execution?.activePlanRevisionId } });
+  };
+
+  const logicalStepIds = async (executionId: string) =>
+    (
+      await dataSource.getRepository(LogicalStepEntity).find({
+        where: { executionId },
+        order: { createdAt: "ASC" },
+      })
+    ).map((step) => step.stepId);
+
+  const patchFor = (baseRevision: number, operations: any[]) => ({
+    schemaVersion: 1,
+    baseRevision,
+    operations,
+  });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "plan_proposals", "budget_ledger_entries", "budget_reservations",
+       "budget_accounts", "policy_decisions", "policy_snapshots",
+       "approval_requests", "dispatch_outbox", "step_attempts",
+       "step_executions", "execution_plan_revisions", "executions",
+       "pipelines" CASCADE`,
+    );
+  });
+
+  it("propose persists an immutable PENDING proposal numbered per execution", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const first = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    const second = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        { op: "addStep", step: { id: "publish", agent: "writer" } },
+      ]),
+    );
+    expect(first.status).toBe("PENDING");
+    expect(first.proposalNumber).toBe(1);
+    expect(second.proposalNumber).toBe(2);
+    expect(first.baseRevision).toBe(1);
+    expect(first.proposalHash).toHaveLength(64);
+
+    // An invalid patch never persists a row.
+    await expect(
+      proposals.propose(execution.id, patchFor(1, [{ op: "removeStep" }])),
+    ).rejects.toThrow();
+    const count = await dataSource.getRepository(PlanProposalEntity).count({
+      where: { executionId: execution.id },
+    });
+    expect(count).toBe(2);
+  });
+
+  it("activate atomically accepts: new revision, materialized steps, pointer switch, terminal decision", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader" },
+      { id: "review", agent: "reviewer", dependsOn: ["extract"] },
+    ]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "addStep",
+          step: { id: "load", agent: "writer", dependsOn: ["extract"] },
+        },
+        {
+          op: "replaceUnfrozenStep",
+          stepId: "review",
+          step: { id: "review", agent: "reviewer", timeout: "30s" },
+        },
+      ]),
+    );
+
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("ACCEPTED");
+
+    const revision = await activeRevision(execution.id);
+    expect(revision?.revisionNumber).toBe(2);
+    expect(revision?.parentRevisionId).not.toBeNull();
+    expect(revision?.baseRevision).toBe(1);
+    expect(revision?.plan.steps.map((s) => s.id)).toEqual([
+      "extract",
+      "review",
+      "load",
+    ]);
+    expect((revision?.plan.steps[1] as { timeout?: string }).timeout).toBe(
+      "30s",
+    );
+    expect(revision?.validationResult).toMatchObject({
+      valid: true,
+      proposalId: proposal.id,
+      addedSteps: ["load"],
+      replacedSteps: ["review"],
+    });
+
+    // Added logical rows materialized in the same transaction.
+    expect((await logicalStepIds(execution.id)).sort()).toEqual([
+      "extract",
+      "load",
+      "review",
+    ]);
+    const addedRow = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "load" },
+    });
+    expect(addedRow?.agent).toBe("writer");
+    expect(addedRow?.status).toBe("PENDING");
+
+    // Terminal + idempotent.
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(stored?.status).toBe("ACCEPTED");
+    expect(stored?.decidedAt).not.toBeNull();
+    const again = await proposals.activate(proposal.id);
+    expect(again.decision).toBe("ACCEPTED");
+    expect(await activeRevision(execution.id)).toMatchObject({
+      revisionNumber: 2,
+    });
+  });
+
+  it("concurrent activation of the SAME proposal never overwrites the committed decision", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    const [ra, rb] = await Promise.all([
+      proposals.activate(proposal.id),
+      proposals.activate(proposal.id),
+    ]);
+    // Both calls observe the SAME terminal decision.
+    expect(ra.decision).toBe(rb.decision);
+    expect(["ACCEPTED", "STALE"]).toContain(ra.decision);
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    // The stored decision is final and matches what the callers saw.
+    expect(stored?.status).toBe(ra.decision);
+    if (ra.decision === "ACCEPTED") {
+      expect(await activeRevision(execution.id)).toMatchObject({
+        revisionNumber: 2,
+      });
+    } else {
+      expect(await activeRevision(execution.id)).toMatchObject({
+        revisionNumber: 1,
+      });
+    }
+  });
+
+  it("a proposal on a moved base becomes STALE and nothing activates", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const first = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    expect((await proposals.activate(first.id)).decision).toBe("ACCEPTED");
+
+    // Same base (1) — the active revision is now 2.
+    const stale = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        { op: "addStep", step: { id: "publish", agent: "writer" } },
+      ]),
+    );
+    const result = await proposals.activate(stale.id);
+    expect(result.decision).toBe("STALE");
+    expect(result.reason).toContain("no longer active");
+    expect(await activeRevision(execution.id)).toMatchObject({
+      revisionNumber: 2,
+    });
+    expect((await logicalStepIds(execution.id)).sort()).toEqual([
+      "extract",
+      "load",
+    ]);
+  });
+
+  it("concurrent same-base activations: exactly one ACCEPTED, the other STALE", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const a = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    const b = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        { op: "addStep", step: { id: "publish", agent: "writer" } },
+      ]),
+    );
+    const [ra, rb] = await Promise.all([
+      proposals.activate(a.id),
+      proposals.activate(b.id),
+    ]);
+    const decisions = [ra.decision, rb.decision].sort();
+    expect(decisions).toEqual(["ACCEPTED", "STALE"]);
+    const revision = await activeRevision(execution.id);
+    expect(revision?.revisionNumber).toBe(2);
+    // Only the winner's steps materialized.
+    const ids = await logicalStepIds(execution.id);
+    expect(ids.length).toBe(2);
+  });
+
+  it("a replacement targeting a frozen step is REJECTED with no side effects", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader" },
+      { id: "review", agent: "reviewer", dependsOn: ["extract"] },
+    ]);
+    // Freeze "extract" by claiming it (no dependencies, immediately
+    // runnable).
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("claimed");
+
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "replaceUnfrozenStep",
+          stepId: "extract",
+          step: { id: "extract", agent: "other" },
+        },
+      ]),
+    );
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("REJECTED");
+    expect(result.reason).toContain("frozen");
+    expect(await activeRevision(execution.id)).toMatchObject({
+      revisionNumber: 1,
+    });
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(stored?.status).toBe("REJECTED");
+  });
+
+  it("an invalid candidate (duplicate id) is REJECTED with no side effects", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        { op: "addStep", step: { id: "extract", agent: "writer" } },
+      ]),
+    );
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("REJECTED");
+    expect(result.reason).toContain("invalid");
+    expect(await activeRevision(execution.id)).toMatchObject({
+      revisionNumber: 1,
+    });
+  });
+
+  it("steps added by activation are schedulable by the real claim path", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "addStep",
+          step: { id: "load", agent: "writer", dependsOn: ["extract"] },
+        },
+      ]),
+    );
+    expect((await proposals.activate(proposal.id)).decision).toBe("ACCEPTED");
+
+    // "extract" must be terminal before "load" is schedulable.
+    await dataSource
+      .getRepository(LogicalStepEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ status: "COMPLETED" })
+      .where('"executionId" = :executionId', { executionId: execution.id })
+      .andWhere('"stepId" = :stepId', { stepId: "extract" })
+      .execute();
+    // Reconcile promotes the added step from PENDING to READY now that its
+    // dependency is terminal.
+    await executionService.reconcileExecution(execution.id);
+
+    // The claim uses the ACTIVE revision's spec for the added step.
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "load", agent: "writer", dependsOn: ["extract"] },
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("claimed");
+    if (claim?.disposition !== "claimed") {
+      throw new Error(`claim failed: ${claim?.disposition}`);
+    }
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { logicalStepId: claim.logicalStep.id },
+    });
+    expect(attempt?.planRevisionId).toBe(
+      (await activeRevision(execution.id))?.id,
+    );
+  });
+
+  it("a budgeted execution carries its grant into the new revision", async () => {
+    const { execution } = await seed(
+      [{ id: "extract", agent: "reader", budget: { tokens: 50 } }],
+      { tokens: 200 },
+    );
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    expect((await proposals.activate(proposal.id)).decision).toBe("ACCEPTED");
+    const revision = await activeRevision(execution.id);
+    expect(revision?.plan).toMatchObject({
+      budget: { ceilings: { tokens: 200 } },
+    });
+  });
+});
+
+describeWithPostgres("PostgreSQL M5-S3 planner trigger", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let inbox: ResultInboxService;
+  let proposals: PlanProposalService;
+  let ledger: BudgetLedgerService;
+
+  const seed = async (steps: any[]) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m5s3-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M5-S3 fixture",
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const applyResult = async (
+    executionId: string,
+    claimResult: any,
+    output: unknown,
+    status: "succeeded" | "failed" = "succeeded",
+  ) => {
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: claimResult.attempt.invocationId,
+      executionId,
+      stepExecutionId: claimResult.logicalStep.id,
+      status,
+      output: output as JsonValue,
+      completedAt: new Date().toISOString(),
+    };
+    return inbox.apply(result, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    inbox = new ResultInboxService(dataSource as any, ledger, proposals);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "plan_proposals", "budget_ledger_entries", "budget_reservations",
+       "budget_accounts", "policy_decisions", "policy_snapshots",
+       "approval_requests", "result_conflicts", "result_inbox",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("a completed planner step persists its output as a PENDING proposal pinned to the active revision", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader" },
+      { id: "plan", agent: "planner", planner: true, dependsOn: ["extract"] },
+    ]);
+    // Complete "extract" so "plan" becomes runnable.
+    const extractClaim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (extractClaim?.disposition !== "claimed") throw new Error("claim 1");
+    await applyResult(execution.id, extractClaim, { done: true });
+    await executionService.reconcileExecution(execution.id);
+
+    const planClaim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "plan", agent: "planner", planner: true, dependsOn: ["extract"] },
+      { input: true },
+      1,
+    );
+    if (planClaim?.disposition !== "claimed") throw new Error("claim 2");
+    const patch = {
+      schemaVersion: 1,
+      baseRevision: 99, // untrusted — must be overridden
+      operations: [{ op: "addStep", step: { id: "load", agent: "writer" } }],
+    };
+    const application = await applyResult(execution.id, planClaim, patch);
+    expect(application.disposition).toBe("applied");
+
+    const stored = await dataSource.getRepository(PlanProposalEntity).findOne({
+      where: { executionId: execution.id },
+      order: { createdAt: "DESC" },
+    });
+    expect(stored).not.toBeNull();
+    expect(stored?.status).toBe("PENDING");
+    expect(stored?.source).toBe("planner");
+    // The planner's declared baseRevision (99) was overridden with the
+    // ACTIVE revision.
+    expect(stored?.baseRevision).toBe(1);
+    expect(stored?.proposal).toMatchObject({
+      schemaVersion: 1,
+      baseRevision: 1,
+    });
+    expect(stored?.proposalHash).toHaveLength(64);
+
+    // The step completed and the proposal is activatable through the real
+    // activation path.
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "plan" },
+    });
+    expect(step?.status).toBe("COMPLETED");
+    expect((await proposals.activate(stored!.id)).decision).toBe("ACCEPTED");
+  });
+
+  it("an invalid planner output is a deterministic rejection following the failure policy", async () => {
+    const { execution } = await seed([
+      { id: "plan", agent: "planner", planner: true },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "plan", agent: "planner", planner: true },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+
+    const application = await applyResult(execution.id, claim, {
+      not: "a patch",
+    });
+    expect(application.disposition).toBe("applied");
+
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "plan" },
+    });
+    expect(step?.status).toBe("FAILED");
+    expect(step?.error).toContain("PLANNER_PROPOSAL_INVALID");
+    expect(
+      await dataSource.getRepository(PlanProposalEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(0);
+    const executionRow = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: execution.id } });
+    expect(executionRow?.status).toBe("FAILED");
+  });
+
+  it("an invalid planner output with onFailure retry schedules a retry", async () => {
+    const { execution } = await seed([
+      { id: "plan", agent: "planner", planner: true, onFailure: "retry" },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "plan", agent: "planner", planner: true, onFailure: "retry" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    // Allow one retry (the materialized row defaults to maxAttempts 1).
+    await dataSource
+      .getRepository(LogicalStepEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ maxAttempts: 2 })
+      .where('"executionId" = :executionId', { executionId: execution.id })
+      .execute();
+
+    await applyResult(execution.id, claim, { not: "a patch" });
+
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "plan" },
+    });
+    expect(step?.status).toBe("RETRYING");
+    expect(step?.nextAttemptAt).not.toBeNull();
+  });
+
+  it("a patch-shaped output on a NON-planner step never creates a proposal", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+
+    await applyResult(execution.id, claim, {
+      schemaVersion: 1,
+      baseRevision: 1,
+      operations: [{ op: "addStep", step: { id: "load", agent: "writer" } }],
+    });
+
+    expect(
+      await dataSource.getRepository(PlanProposalEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("a planner step whose state-write postcondition fails never proposes", async () => {
+    const { execution } = await seed([
+      {
+        id: "plan",
+        agent: "planner",
+        planner: true,
+        stateWrites: [{ key: "blocked", fromOutput: "/result" }],
+      },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      {
+        id: "plan",
+        agent: "planner",
+        planner: true,
+        stateWrites: [{ key: "blocked", fromOutput: "/result" }],
+      },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    // The output has no "/result" pointer, so the state-write postcondition
+    // deterministically rejects (TENVYR_STATE_WRITE_POINTER_MISSING).
+    await applyResult(execution.id, claim, {
+      schemaVersion: 1,
+      baseRevision: 1,
+      operations: [{ op: "addStep", step: { id: "load", agent: "writer" } }],
+    });
+
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "plan" },
+    });
+    expect(step?.status).toBe("FAILED");
+    expect(step?.error).toContain("TENVYR_STATE_WRITE_REJECTED");
+    expect(
+      await dataSource.getRepository(PlanProposalEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("a planner result arriving after the execution is terminal proposes nothing", async () => {
+    const { execution } = await seed([
+      { id: "plan", agent: "planner", planner: true },
+      { id: "other", agent: "writer" },
+    ]);
+    // Claim BOTH steps while the execution is still RUNNING (a late result
+    // is a result already in flight when the run turns terminal).
+    const planClaim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "plan", agent: "planner", planner: true },
+      { input: true },
+      1,
+    );
+    if (planClaim?.disposition !== "claimed") throw new Error("claim");
+    const otherClaim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "other", agent: "writer" },
+      { input: true },
+      1,
+    );
+    if (otherClaim?.disposition !== "claimed") throw new Error("claim");
+    // Fail "other" -> the execution becomes FAILED.
+    await applyResult(execution.id, otherClaim, null, "failed");
+    const executionRow = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: execution.id } });
+    expect(executionRow?.status).toBe("FAILED");
+
+    // The late planner success still settles its own step facts but
+    // proposes nothing.
+    await applyResult(execution.id, planClaim, {
+      schemaVersion: 1,
+      baseRevision: 1,
+      operations: [{ op: "addStep", step: { id: "load", agent: "writer" } }],
+    });
+
+    expect(
+      await dataSource.getRepository(PlanProposalEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(0);
+    const planStep = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "plan" },
+    });
+    expect(planStep?.status).toBe("COMPLETED");
+  });
+});
+
+describeWithPostgres("PostgreSQL M5-S4 proposal policy", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let proposals: PlanProposalService;
+  let approvals: ApprovalService;
+
+  const seed = async (steps: any[]) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m5s4-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M5-S4 fixture",
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const patchFor = (baseRevision: number, operations: any[]) => ({
+    schemaVersion: 1,
+    baseRevision,
+    operations,
+  });
+
+  const setPolicy = (rules: any[], version = 1) => {
+    process.env.TENVYR_POLICY = JSON.stringify({ version, rules });
+  };
+
+  const decisions = async (executionId: string) =>
+    dataSource
+      .getRepository(PolicyDecisionEntity)
+      .find({ where: { executionId }, order: { createdAt: "ASC" } });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    approvals = new ApprovalService(dataSource as any, undefined, proposals);
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "plan_proposals", "policy_decisions", "policy_snapshots",
+       "approval_requests", "budget_ledger_entries", "budget_reservations",
+       "budget_accounts", "dispatch_outbox", "step_attempts",
+       "step_executions", "execution_plan_revisions", "executions",
+       "pipelines" CASCADE`,
+    );
+  });
+
+  it("an ALLOW rule lets activation proceed and records the decision evidence", async () => {
+    setPolicy([
+      { id: "allow-plans", actionType: "plan_patch", effect: "ALLOW" },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("ACCEPTED");
+
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: execution.id, revisionNumber: 2 } });
+    expect(revision).not.toBeNull();
+    const evidence = await decisions(execution.id);
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].actionType).toBe("plan_patch");
+    expect(evidence[0].proposalId).toBe(`plan:${proposal.id}`);
+    expect(evidence[0].effect).toBe("ALLOW");
+  });
+
+  it("a DENY rule rejects the proposal with no side effects", async () => {
+    setPolicy([{ id: "deny-plans", actionType: "plan_patch", effect: "DENY" }]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("REJECTED");
+    expect(result.reason).toContain("Policy DENY");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+    const evidence = await decisions(execution.id);
+    expect(evidence[0].effect).toBe("DENY");
+  });
+
+  it("REQUIRE_APPROVAL leaves the proposal PENDING with a durable request; approval activates it", async () => {
+    setPolicy([
+      {
+        id: "approve-plans",
+        actionType: "plan_patch",
+        effect: "REQUIRE_APPROVAL",
+      },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("PENDING");
+    expect(result.reason).toContain("Awaiting approval");
+
+    const request = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({
+        where: { proposalId: `plan:${proposal.id}` },
+      });
+    expect(request).not.toBeNull();
+    expect(request?.actionType).toBe("plan_patch");
+    expect(request?.status).toBe("PENDING");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+    const storedProposal = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(storedProposal?.status).toBe("PENDING");
+
+    await approvals.approve(`plan:${proposal.id}`);
+
+    const approved = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({ where: { proposalId: `plan:${proposal.id}` } });
+    expect(approved?.status).toBe("APPROVED");
+    const activated = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(activated?.status).toBe("ACCEPTED");
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: execution.id, revisionNumber: 2 } });
+    expect(revision?.plan.steps.map((step) => step.id)).toContain("load");
+  });
+
+  it("a stale approved proposal stays STALE: approval rechecks the base revision", async () => {
+    setPolicy([
+      {
+        id: "approve-plans",
+        actionType: "plan_patch",
+        effect: "REQUIRE_APPROVAL",
+      },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const first = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    // The intercept (which creates the request) happens inside activate.
+    expect((await proposals.activate(first.id)).decision).toBe("PENDING");
+
+    // The stale proposal is intercepted while the base is still 1...
+    const stale = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        { op: "addStep", step: { id: "publish", agent: "writer" } },
+      ]),
+    );
+    expect((await proposals.activate(stale.id)).decision).toBe("PENDING");
+
+    // ...then the first proposal activates and moves the base to 2.
+    await approvals.approve(`plan:${first.id}`);
+    expect(
+      (
+        await dataSource
+          .getRepository(PlanProposalEntity)
+          .findOne({ where: { id: first.id } })
+      )?.status,
+    ).toBe("ACCEPTED");
+
+    // Approving the stale proposal rechecks the base: it stays STALE.
+    await approvals.approve(`plan:${stale.id}`);
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: stale.id } });
+    expect(stored?.status).toBe("STALE");
+    const request = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({ where: { proposalId: `plan:${stale.id}` } });
+    expect(request?.status).toBe("APPROVED");
+    expect(request?.decisionNote).toContain("STALE");
+  });
+
+  it("a policy that rotates to DENY between interception and approval rejects the approved proposal", async () => {
+    setPolicy([
+      {
+        id: "approve-plans",
+        actionType: "plan_patch",
+        effect: "REQUIRE_APPROVAL",
+      },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    expect((await proposals.activate(proposal.id)).decision).toBe("PENDING");
+
+    // The operator rotates the policy (version bump) to DENY before
+    // approving.
+    setPolicy(
+      [{ id: "deny-plans", actionType: "plan_patch", effect: "DENY" }],
+      2,
+    );
+    await approvals.approve(`plan:${proposal.id}`);
+
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(stored?.status).toBe("REJECTED");
+    expect(stored?.decisionReason).toContain("Policy DENY");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+  });
+
+  it("denying a plan_patch request rejects the proposal and never touches attempts", async () => {
+    setPolicy([
+      {
+        id: "approve-plans",
+        actionType: "plan_patch",
+        effect: "REQUIRE_APPROVAL",
+      },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    expect((await proposals.activate(proposal.id)).decision).toBe("PENDING");
+
+    await approvals.deny(`plan:${proposal.id}`);
+
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(stored?.status).toBe("REJECTED");
+    expect(stored?.decisionReason).toContain("denied");
+    const request = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({ where: { proposalId: `plan:${proposal.id}` } });
+    expect(request?.status).toBe("DENIED");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+  });
+
+  it("expiring a due plan_patch request (sweep) rejects the proposal and the sweep survives", async () => {
+    setPolicy([
+      {
+        id: "approve-plans",
+        actionType: "plan_patch",
+        effect: "REQUIRE_APPROVAL",
+      },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    expect((await proposals.activate(proposal.id)).decision).toBe("PENDING");
+    // Make the request overdue.
+    await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where('"proposalId" = :proposalId', {
+        proposalId: `plan:${proposal.id}`,
+      })
+      .execute();
+
+    const expired = await approvals.expireDue(undefined, new Date());
+    expect(expired).toBe(1);
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(stored?.status).toBe("REJECTED");
+    const request = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({ where: { proposalId: `plan:${proposal.id}` } });
+    expect(request?.status).toBe("EXPIRED");
+    // The sweep still processes other requests after the plan_patch one.
+    expect(await approvals.expireDue(undefined, new Date())).toBe(0);
+  });
+
+  it("a dispatch policy alone does not intercept plan activation", async () => {
+    setPolicy([
+      { id: "deny-dispatch", actionType: "dispatch", effect: "DENY" },
+    ]);
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    // No plan_patch rule matches: the default effect for an unmatched
+    // actionType is ALLOW (per the policy domain), so activation proceeds.
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("ACCEPTED");
+  });
+});
+
+describeWithPostgres("PostgreSQL M5-S5 closure", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let proposals: PlanProposalService;
+
+  const seed = async (steps: any[]) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m5s5-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M5-S5 fixture",
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const patchFor = (baseRevision: number, operations: any[]) => ({
+    schemaVersion: 1,
+    baseRevision,
+    operations,
+  });
+
+  const claimCount = async (executionId: string) =>
+    dataSource.getRepository(StepAttemptEntity).count({
+      where: { executionId },
+    });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "plan_proposals", "policy_decisions", "policy_snapshots",
+       "approval_requests", "budget_ledger_entries", "budget_reservations",
+       "budget_accounts", "dispatch_outbox", "step_attempts",
+       "step_executions", "execution_plan_revisions", "executions",
+       "pipelines" CASCADE`,
+    );
+  });
+
+  it("a planner-sourced proposal can never add another planner step", async () => {
+    const { execution } = await seed([
+      { id: "plan", agent: "planner", planner: true },
+    ]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "addStep",
+          step: { id: "plan2", agent: "planner", planner: true },
+        },
+      ]),
+      "planner",
+    );
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("REJECTED");
+    expect(result.reason).toContain("planner steps");
+    expect(await claimCount(execution.id)).toBe(0);
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+
+    // Operator-sourced proposals MAY add planner steps.
+    const operatorProposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "addStep",
+          step: { id: "plan2", agent: "planner", planner: true },
+        },
+      ]),
+      "operator",
+    );
+    expect((await proposals.activate(operatorProposal.id)).decision).toBe(
+      "ACCEPTED",
+    );
+  });
+
+  it("a planner-sourced proposal cannot CONVERT an existing step into a planner step", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader" },
+      { id: "plan", agent: "planner", planner: true },
+    ]);
+    // replaceUnfrozenStep of the unfrozen "extract" with planner: true —
+    // the id exists, so the addStep-only check would have missed this.
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "replaceUnfrozenStep",
+          stepId: "extract",
+          step: { id: "extract", agent: "reader", planner: true },
+        },
+      ]),
+      "planner",
+    );
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("REJECTED");
+    expect(result.reason).toContain("planner steps");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+
+    // The operator may perform the same conversion.
+    const operatorProposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "replaceUnfrozenStep",
+          stepId: "extract",
+          step: { id: "extract", agent: "reader", planner: true },
+        },
+      ]),
+      "operator",
+    );
+    expect((await proposals.activate(operatorProposal.id)).decision).toBe(
+      "ACCEPTED",
+    );
+  });
+
+  it("claim-versus-patch races serialize on the execution lock into consistent outcomes", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader", timeout: "5s" },
+    ]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [
+        {
+          op: "replaceUnfrozenStep",
+          stepId: "extract",
+          step: { id: "extract", agent: "reader", timeout: "30s" },
+        },
+      ]),
+    );
+    const newSpec = { id: "extract", agent: "reader", timeout: "30s" };
+
+    const [activation, claim] = await Promise.all([
+      proposals.activate(proposal.id),
+      executionService.claimRunnableStep(
+        execution.id,
+        newSpec,
+        { input: true },
+        1,
+      ),
+    ]);
+
+    if (activation.decision === "ACCEPTED") {
+      // The claim ran against revision 2 (the replaced spec).
+      expect(claim?.disposition).toBe("claimed");
+      if (claim?.disposition !== "claimed") throw new Error("claim");
+      const attempt = await dataSource
+        .getRepository(StepAttemptEntity)
+        .findOne({ where: { logicalStepId: claim.logicalStep.id } });
+      const revision = await dataSource
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({ where: { id: attempt?.planRevisionId } });
+      expect(revision?.revisionNumber).toBe(2);
+      expect(attempt?.frozenSpecHash).toBe(sha256Json(newSpec));
+    } else {
+      // The claim won the lock first: the attempt froze revision 1's spec
+      // and the activation saw a frozen step.
+      expect(activation.decision).toBe("REJECTED");
+      expect(activation.reason).toContain("frozen");
+      expect(claim?.disposition).toBe("claimed");
+      if (claim?.disposition !== "claimed") throw new Error("claim");
+      const attempt = await dataSource
+        .getRepository(StepAttemptEntity)
+        .findOne({ where: { logicalStepId: claim.logicalStep.id } });
+      const revision = await dataSource
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({ where: { id: attempt?.planRevisionId } });
+      expect(revision?.revisionNumber).toBe(1);
+    }
+  });
+
+  it("a proposal already terminalized before activation returns the stored decision without side effects", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    // Simulate a concurrent deny that terminalized the proposal first.
+    await dataSource
+      .getRepository(PlanProposalEntity)
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: "REJECTED",
+        decisionReason: "Approval denied",
+        decidedAt: new Date(),
+      })
+      .where("id = :id", { id: proposal.id })
+      .execute();
+
+    const result = await proposals.activate(proposal.id);
+    expect(result.decision).toBe("REJECTED");
+    expect(result.reason).toContain("denied");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+    expect(await claimCount(execution.id)).toBe(0);
+  });
+
+  it.each(["COMPLETED", "FAILED", "CANCELLED"] as const)(
+    "a %s execution cannot activate a new plan revision",
+    async (status) => {
+      const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+      const proposal = await proposals.propose(
+        execution.id,
+        patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+      );
+      await dataSource
+        .getRepository(ExecutionEntity)
+        .createQueryBuilder()
+        .update()
+        .set({ status, endTime: new Date() })
+        .where("id = :id", { id: execution.id })
+        .execute();
+
+      const result = await proposals.activate(proposal.id);
+      expect(result.decision).toBe("STALE");
+      expect(result.reason).toContain(status);
+      expect(
+        await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+          where: { executionId: execution.id },
+        }),
+      ).toBe(1);
+    },
+  );
+
+  it("crash mid-activation: the aborted transaction leaves the proposal PENDING with zero side effects", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const proposal = await proposals.propose(
+      execution.id,
+      patchFor(1, [{ op: "addStep", step: { id: "load", agent: "writer" } }]),
+    );
+    // Simulate a crash AFTER the activation's writes: an outer transaction
+    // runs the whole activation and then aborts (throws) — everything the
+    // activation wrote must roll back together.
+    await expect(
+      dataSource.transaction(async (manager) => {
+        await proposals.activateWithManager(manager, proposal.id);
+        throw new Error("simulated crash after activation writes");
+      }),
+    ).rejects.toThrow("simulated crash");
+
+    const stored = await dataSource
+      .getRepository(PlanProposalEntity)
+      .findOne({ where: { id: proposal.id } });
+    expect(stored?.status).toBe("PENDING");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(1);
+    expect(await claimCount(execution.id)).toBe(0);
+
+    // The untouched proposal activates normally afterwards (retryable).
+    expect((await proposals.activate(proposal.id)).decision).toBe("ACCEPTED");
+    expect(
+      await dataSource.getRepository(ExecutionPlanRevisionEntity).count({
+        where: { executionId: execution.id },
+      }),
+    ).toBe(2);
+  });
+});
+
+describeWithPostgres("PostgreSQL M6-S1 observed evidence", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let inbox: ResultInboxService;
+  let ledger: BudgetLedgerService;
+  let proposals: PlanProposalService;
+
+  const seed = async (steps: any[]) => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m6s1-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M6-S1 fixture",
+        steps,
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const applyResult = async (
+    executionId: string,
+    claimResult: any,
+    output: unknown,
+    delegation?: any[],
+  ) => {
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: claimResult.attempt.invocationId,
+      executionId,
+      stepExecutionId: claimResult.logicalStep.id,
+      status: "succeeded",
+      output: output as JsonValue,
+      completedAt: new Date().toISOString(),
+      ...(delegation === undefined ? {} : { delegation: delegation as any }),
+    };
+    return inbox.apply(result, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+  };
+
+  const observationCount = async () =>
+    dataSource.getRepository(DelegationObservationEntity).count();
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    inbox = new ResultInboxService(dataSource as any, ledger, proposals);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "delegation_observation_conflicts", "delegation_observations",
+       "plan_proposals", "state_write_evidence", "artifacts",
+       "result_conflicts", "result_inbox", "dispatch_outbox",
+       "step_attempts", "step_executions", "execution_plan_revisions",
+       "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("observed mode records bounded evidence correlated to the parent attempt", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+
+    const observation = {
+      schemaVersion: "1",
+      provider: "codex",
+      childId: "child-123",
+      assertedAt: new Date().toISOString(),
+      attributes: [{ name: "model", value: "gpt-5" }],
+    };
+    await applyResult(execution.id, claim, { done: true }, [observation]);
+
+    const rows = await dataSource
+      .getRepository(DelegationObservationEntity)
+      .find();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      stepAttemptId: claim.attempt.id,
+      invocationId: claim.attempt.invocationId,
+      executionId: execution.id,
+      observationId: "codex:child-123",
+      provider: "codex",
+      childId: "child-123",
+    });
+    expect(rows[0].payloadHash).toHaveLength(64);
+    // Evidence is inert: the step completed normally and nothing else moved.
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "extract" },
+    });
+    expect(step?.status).toBe("COMPLETED");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: claim.attempt.id },
+      }),
+    ).toBe(1); // the original dispatch row only — no new scheduling
+  });
+
+  it("duplicate evidence deliveries are idempotent", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const observation = {
+      schemaVersion: "1",
+      provider: "claude",
+      childId: "child-9",
+      assertedAt: new Date().toISOString(),
+    };
+
+    const payload = {
+      schemaVersion: "1" as const,
+      invocationId: claim.attempt.invocationId,
+      executionId: execution.id,
+      stepExecutionId: claim.logicalStep.id,
+      status: "succeeded" as const,
+      output: { done: true },
+      completedAt: "2026-08-11T00:00:00.000Z",
+      delegation: [observation],
+    };
+    const first = await inbox.apply(payload as any, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+    expect(first.disposition).toBe("applied");
+    // Byte-identical redelivery (transport replay).
+    const duplicate = await inbox.apply(payload as any, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+    expect(duplicate.disposition).toBe("duplicate");
+    expect(await observationCount()).toBe(1);
+  });
+
+  it("a different-payload redelivery is a result-level conflict; the canonical observation stays authoritative", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const first = {
+      schemaVersion: "1",
+      provider: "codex",
+      childId: "child-1",
+      assertedAt: "2026-08-11T00:00:00.000Z",
+    };
+    const different = {
+      ...first,
+      attributes: [{ name: "model", value: "different" }],
+    };
+    const firstApplication = await applyResult(
+      execution.id,
+      claim,
+      { done: true },
+      [first],
+    );
+    expect(firstApplication.disposition).toBe("applied");
+    // A redelivery with a different payload is a RESULT-level conflict
+    // (canonical application is exactly-once per attempt), retained in
+    // result_conflicts; the canonical observation row is untouched.
+    const conflictingApplication = await applyResult(
+      execution.id,
+      claim,
+      { done: true },
+      [different],
+    );
+    expect(conflictingApplication.disposition).toBe("conflict");
+
+    expect(await observationCount()).toBe(1);
+    const resultConflicts = await dataSource
+      .getRepository(ResultConflictEntity)
+      .find();
+    expect(resultConflicts.length).toBeGreaterThanOrEqual(1);
+    const canonical = await dataSource
+      .getRepository(DelegationObservationEntity)
+      .findOne({ where: { observationId: "codex:child-1" } });
+    expect(canonical?.payload).toEqual(first);
+    // The observation-level conflict table is defense-in-depth for future
+    // channels; the canonical result flow never reaches it.
+    expect(
+      await dataSource
+        .getRepository(DelegationObservationConflictEntity)
+        .count(),
+    ).toBe(0);
+  });
+
+  it("duplicate provider:childId within ONE result is retained as an observation conflict", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const first = {
+      schemaVersion: "1",
+      provider: "codex",
+      childId: "child-dupe",
+      assertedAt: "2026-08-11T00:00:00.000Z",
+    };
+    const different = {
+      ...first,
+      attributes: [{ name: "model", value: "different" }],
+    };
+    const application = await applyResult(execution.id, claim, { done: true }, [
+      first,
+      different,
+    ]);
+    expect(application.disposition).toBe("applied");
+
+    expect(await observationCount()).toBe(1);
+    const canonical = await dataSource
+      .getRepository(DelegationObservationEntity)
+      .findOne({ where: { observationId: "codex:child-dupe" } });
+    expect(canonical?.payload).toEqual(first);
+    const conflicts = await dataSource
+      .getRepository(DelegationObservationConflictEntity)
+      .find();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({
+      observationId: "codex:child-dupe",
+      conflictKind: "identity_payload",
+    });
+    expect(conflicts[0].payload).toEqual(different);
+  });
+
+  it("opaque steps record nothing even when evidence arrives", async () => {
+    const { execution } = await seed([{ id: "extract", agent: "reader" }]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    await applyResult(execution.id, claim, { done: true }, [
+      {
+        schemaVersion: "1",
+        provider: "codex",
+        childId: "child-hidden",
+        assertedAt: new Date().toISOString(),
+      },
+    ]);
+    expect(await observationCount()).toBe(0);
+  });
+
+  it("a step without delegation evidence produces no rows", async () => {
+    const { execution } = await seed([
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    await applyResult(execution.id, claim, { done: true });
+    expect(await observationCount()).toBe(0);
+  });
+});
+
+describeWithPostgres("PostgreSQL M6-S2 supervised delegation", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let delegation: DelegationService;
+
+  const seedParent = async () => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m6s2-parent-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M6-S2 parent fixture",
+        steps: [{ id: "extract", agent: "reader" }],
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const seedChildPipeline = async () => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m6s2-child-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M6-S2 child fixture",
+        steps: [{ id: "child-step", agent: "writer" }],
+      }),
+    );
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    delegation = new DelegationService(dataSource as any, executionService);
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "dispatch_outbox",
+       "step_attempts", "step_executions", "execution_plan_revisions",
+       "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("request is idempotent per (parentAttemptId, requestId)", async () => {
+    const { execution } = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+
+    const expiresAt = new Date(Date.now() + 60_000);
+    const first = await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-1",
+      requestedAgent: "writer",
+      expiresAt,
+    });
+    expect(first.disposition).toBe("created");
+    const replay = await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-1",
+      requestedAgent: "writer",
+      expiresAt,
+    });
+    expect(replay.disposition).toBe("replayed");
+    expect(replay.request.id).toBe(first.request.id);
+    expect(
+      await dataSource.getRepository(DelegationRequestEntity).count(),
+    ).toBe(1);
+  });
+
+  it("retains a same-identity different-payload conflict without creating authority", async () => {
+    const { execution } = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const expiresAt = new Date(Date.now() + 60_000);
+    const canonical = await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "conflicting-request",
+      requestedAgent: "writer",
+      expiresAt,
+    });
+    const conflict = await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "conflicting-request",
+      requestedAgent: "different-agent",
+      expiresAt,
+    });
+
+    expect(conflict.disposition).toBe("conflict");
+    expect(conflict.request.id).toBe(canonical.request.id);
+    expect(
+      await dataSource.getRepository(DelegationRequestEntity).count(),
+    ).toBe(1);
+    const evidence = await dataSource
+      .getRepository(DelegationRequestConflictEntity)
+      .find();
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      parentAttemptId: claim.attempt.id,
+      requestId: "conflicting-request",
+      conflictKind: "PAYLOAD_MISMATCH",
+    });
+  });
+
+  it("approve materializes the child execution atomically with the decision", async () => {
+    const { execution } = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const childPipeline = await seedChildPipeline();
+    const { request } = await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-2",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const result = await delegation.approve(
+      claim.attempt.id,
+      "sub-2",
+      childPipeline,
+    );
+    expect(result.decision).toBe("APPROVED");
+    expect(result.childExecutionId).not.toBeNull();
+
+    // The child is a full execution: revision 1 + logical steps.
+    const child = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: result.childExecutionId! } });
+    expect(child).not.toBeNull();
+    expect(child?.pipelineId).toBe(childPipeline.id);
+    expect(child?.input).toMatchObject({
+      delegatedFrom: execution.id,
+    });
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: result.childExecutionId! } });
+    expect(revision?.revisionNumber).toBe(1);
+    const steps = await dataSource.getRepository(LogicalStepEntity).find({
+      where: { executionId: result.childExecutionId! },
+    });
+    expect(steps.map((step) => step.stepId)).toEqual(["child-step"]);
+
+    // The request row links the child (the relation).
+    const stored = await dataSource
+      .getRepository(DelegationRequestEntity)
+      .findOne({ where: { id: request.id } });
+    expect(stored?.status).toBe("APPROVED");
+    expect(stored?.childExecutionId).toBe(result.childExecutionId);
+
+    // The child is schedulable through the real claim path.
+    await executionService.reconcileExecution(result.childExecutionId!);
+    const childClaim = await executionService.claimRunnableStep(
+      result.childExecutionId!,
+      { id: "child-step", agent: "writer" },
+      { input: true },
+      1,
+    );
+    expect(childClaim?.disposition).toBe("claimed");
+  });
+
+  it("approve replay never creates a second child", async () => {
+    const { execution } = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const childPipeline = await seedChildPipeline();
+    await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-3",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const first = await delegation.approve(
+      claim.attempt.id,
+      "sub-3",
+      childPipeline,
+    );
+    const replay = await delegation.approve(
+      claim.attempt.id,
+      "sub-3",
+      childPipeline,
+    );
+    expect(first.decision).toBe("APPROVED");
+    expect(replay.decision).toBe("APPROVED");
+    expect(replay.childExecutionId).toBe(first.childExecutionId);
+    expect(
+      await dataSource.getRepository(ExecutionEntity).count({
+        where: { pipelineId: childPipeline.id },
+      }),
+    ).toBe(1);
+  });
+
+  it("concurrent approves of the same request materialize exactly one child", async () => {
+    const { execution } = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const childPipeline = await seedChildPipeline();
+    await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-4",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const [a, b] = await Promise.all([
+      delegation.approve(claim.attempt.id, "sub-4", childPipeline),
+      delegation.approve(claim.attempt.id, "sub-4", childPipeline),
+    ]);
+    expect(a.decision).toBe("APPROVED");
+    expect(b.decision).toBe("APPROVED");
+    expect(a.childExecutionId).toBe(b.childExecutionId);
+    expect(
+      await dataSource.getRepository(ExecutionEntity).count({
+        where: { pipelineId: childPipeline.id },
+      }),
+    ).toBe(1);
+  });
+
+  it("a request whose attempt does not belong to the declared execution is rejected", async () => {
+    const { execution } = await seedParent();
+    const other = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+
+    await expect(
+      delegation.request({
+        parentExecutionId: other.execution.id,
+        parentAttemptId: claim.attempt.id,
+        requestId: "sub-mismatch",
+        requestedAgent: "writer",
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+    ).rejects.toThrow(/does not belong to execution/);
+    expect(
+      await dataSource.getRepository(DelegationRequestEntity).count(),
+    ).toBe(0);
+  });
+
+  it("reject terminalizes without a child; an expired request is never approved", async () => {
+    const { execution } = await seedParent();
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const childPipeline = await seedChildPipeline();
+
+    await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-reject",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const rejected = await delegation.reject(
+      claim.attempt.id,
+      "sub-reject",
+      "not needed",
+    );
+    expect(rejected.decision).toBe("REJECTED");
+    expect(rejected.childExecutionId).toBeNull();
+    // Approving a rejected request is a replay of the terminal decision.
+    const lateApprove = await delegation.approve(
+      claim.attempt.id,
+      "sub-reject",
+      childPipeline,
+    );
+    expect(lateApprove.decision).toBe("REJECTED");
+    expect(lateApprove.childExecutionId).toBeNull();
+
+    await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-old",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    const expired = await delegation.approve(
+      claim.attempt.id,
+      "sub-old",
+      childPipeline,
+    );
+    expect(expired.decision).toBe("EXPIRED");
+    expect(expired.childExecutionId).toBeNull();
+    expect(
+      await dataSource.getRepository(ExecutionEntity).count({
+        where: { pipelineId: childPipeline.id },
+      }),
+    ).toBe(0);
+
+    // The expiry sweep terminalizes due requests deterministically.
+    const swept = await delegation.expireDue(undefined, new Date());
+    expect(swept).toBe(0);
+  });
+});
+
+describeWithPostgres("PostgreSQL M6-S3 delegation lifecycle", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let delegation: DelegationService;
+  let inbox: ResultInboxService;
+  let ledger: BudgetLedgerService;
+  let proposals: PlanProposalService;
+
+  const seedParent = async () => {
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m6s3-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M6-S3 fixture",
+        steps: [{ id: "extract", agent: "reader" }],
+      }),
+    );
+    const execution = await executionService.createExecution(stored, {});
+    await executionService.reconcileExecution(execution.id);
+    return { stored, execution };
+  };
+
+  const claimParent = async (execution: any) => {
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    return claim;
+  };
+
+  const supervisionFor = (
+    agent: string,
+    expectation: Record<string, unknown>,
+  ) =>
+    new SupervisionService(
+      dataSource.getRepository(StepAttemptEntity),
+      new SupervisionConfigService({
+        ...process.env,
+        ORCHESTRATOR_SUPERVISION_CONFIG: JSON.stringify({
+          [agent]: { heartbeat: expectation },
+        }),
+      }),
+      inbox,
+      null as any,
+    );
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    delegation = new DelegationService(dataSource as any, executionService);
+    proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    inbox = new ResultInboxService(dataSource as any, ledger, proposals);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "dispatch_outbox",
+       "step_attempts", "step_executions", "execution_plan_revisions",
+       "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("observed evidence never promotes to a delegation request (no channel mixing)", async () => {
+    const { execution } = await seedParent();
+    // Re-seed with an observed step for evidence correlation.
+    const stored = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: `m6s3-obs-${Math.random().toString(36).slice(2)}`,
+        version: "1.0",
+        description: "M6-S3 observed fixture",
+        steps: [{ id: "extract", agent: "reader", delegation: "observed" }],
+      }),
+    );
+    const observedExecution = await executionService.createExecution(
+      stored,
+      {},
+    );
+    await executionService.reconcileExecution(observedExecution.id);
+    const claim = await executionService.claimRunnableStep(
+      observedExecution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: claim.attempt.invocationId,
+      executionId: observedExecution.id,
+      stepExecutionId: claim.logicalStep.id,
+      status: "succeeded",
+      output: { done: true },
+      completedAt: new Date().toISOString(),
+      delegation: [
+        {
+          schemaVersion: "1",
+          provider: "codex",
+          childId: "child-evidence",
+          assertedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    await inbox.apply(result, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+
+    expect(
+      await dataSource.getRepository(DelegationObservationEntity).count(),
+    ).toBe(1);
+    expect(
+      await dataSource.getRepository(DelegationRequestEntity).count(),
+    ).toBe(0);
+    expect(execution.status).toBe("PENDING");
+  });
+
+  it("a delegation request never suspends the parent attempt: the parent completes normally and the child runs independently", async () => {
+    const { execution } = await seedParent();
+    const claim = await claimParent(execution);
+    await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-life",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    // The parent attempt is still RUNNING (no wait state introduced).
+    const running = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: claim.attempt.id } });
+    expect(running?.status).toBe("CREATED");
+
+    // The parent's normal result applies: the attempt terminalizes
+    // independently of the pending request.
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: claim.attempt.invocationId,
+      executionId: execution.id,
+      stepExecutionId: claim.logicalStep.id,
+      status: "succeeded",
+      output: { done: true },
+      completedAt: new Date().toISOString(),
+    };
+    const application = await inbox.apply(result, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+    expect(application.disposition).toBe("applied");
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: execution.id, stepId: "extract" },
+    });
+    expect(step?.status).toBe("COMPLETED");
+    const request = await dataSource
+      .getRepository(DelegationRequestEntity)
+      .findOne({ where: { parentAttemptId: claim.attempt.id } });
+    expect(request?.status).toBe("PENDING");
+  });
+
+  it("supervision terminalizes a stale parent attempt even with a PENDING delegation request", async () => {
+    const { execution } = await seedParent();
+    const claim = await claimParent(execution);
+    await delegation.request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "sub-stale",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    // Simulate dispatch: RUNNING with a backdated server-side startTime and
+    // dispatchedAt (the supervision scan keys on dispatchedAt).
+    const startTime = new Date(Date.now() - 31_000);
+    await dataSource
+      .getRepository(StepAttemptEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ status: "RUNNING", startTime, dispatchedAt: startTime })
+      .where("id = :id", { id: claim.attempt.id })
+      .execute();
+
+    const supervision = supervisionFor("reader", {
+      expected: true,
+      startupGraceMs: 30_000,
+      staleAfterMs: 30_000,
+    });
+    await supervision.evaluate(new Date(startTime.getTime() + 29_000));
+    const notDue = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: claim.attempt.id } });
+    expect(notDue?.status).toBe("RUNNING");
+
+    // The pending request is NOT a heartbeat exemption.
+    await supervision.evaluate(new Date(startTime.getTime() + 31_000));
+    const timedOut = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: claim.attempt.id } });
+    expect(timedOut?.status).toBe("TIMED_OUT");
+    expect(timedOut?.error).toContain("AGENT_HEARTBEAT_STALE");
+    const request = await dataSource
+      .getRepository(DelegationRequestEntity)
+      .findOne({ where: { parentAttemptId: claim.attempt.id } });
+    // The request is NOT auto-approved by the parent's outcome; the expiry
+    // sweep (owned by the recovery cycle) terminalizes it deterministically.
+    expect(request?.status).toBe("PENDING");
+    const swept = await delegation.expireDue(
+      undefined,
+      new Date(Date.now() + 120_000),
+    );
+    expect(swept).toBe(1);
+    expect(
+      (
+        await dataSource
+          .getRepository(DelegationRequestEntity)
+          .findOne({ where: { parentAttemptId: claim.attempt.id } })
+      )?.status,
+    ).toBe("EXPIRED");
+  });
+});
+
+describeWithPostgres("PostgreSQL M6-S4 inheritance and cascade", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let delegation: DelegationService;
+  let ledger: BudgetLedgerService;
+
+  const seedPipeline = async (name: string, steps: any[], budget?: any) => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        description: `${name} fixture`,
+        ...(budget === undefined ? {} : { budget }),
+        steps,
+      }),
+    );
+  };
+
+  const seedExecution = async (pipeline: PipelineEntity) => {
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    return execution;
+  };
+
+  const claim = async (execution: any, step: any) => {
+    // Children materialize PENDING; reconcile promotes them like the
+    // recovery cycle would.
+    await executionService.reconcileExecution(execution.id);
+    const result = await executionService.claimRunnableStep(
+      execution.id,
+      step,
+      { input: true },
+      1,
+    );
+    if (result?.disposition !== "claimed") throw new Error("claim");
+    return result;
+  };
+
+  const requestFor = (
+    parentExecutionId: string,
+    attemptId: string,
+    requestId: string,
+  ) =>
+    delegation.request({
+      parentExecutionId,
+      parentAttemptId: attemptId,
+      requestId,
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    ledger = new BudgetLedgerService(dataSource as any);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    delegation = new DelegationService(dataSource as any, executionService);
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "dispatch_outbox",
+       "step_attempts", "step_executions", "execution_plan_revisions",
+       "executions", "pipelines", "budget_ledger_entries",
+       "budget_reservations", "budget_accounts" CASCADE`,
+    );
+  });
+
+  it("server-derived depth bounds: a request at maxDepth + 1 is rejected", async () => {
+    const parentPipeline = await seedPipeline("depth-p1", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const parent = await seedExecution(parentPipeline);
+    const parentClaim = await claim(parent, { id: "extract", agent: "reader" });
+    const childPipeline = await seedPipeline("depth-c1", [
+      { id: "extract", agent: "writer" },
+    ]);
+    const l1 = await requestFor(parent.id, parentClaim.attempt.id, "l1");
+    expect(l1.request.childDepth).toBe(1);
+    const approve1 = await delegation.approve(
+      parentClaim.attempt.id,
+      "l1",
+      childPipeline,
+    );
+
+    // Level 2: the child's own execution.
+    const child1 = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: approve1.childExecutionId! } });
+    const child1Claim = await claim(child1!, {
+      id: "extract",
+      agent: "writer",
+    });
+    const l2 = await requestFor(child1!.id, child1Claim.attempt.id, "l2");
+    expect(l2.request.childDepth).toBe(2);
+    const approve2 = await delegation.approve(
+      child1Claim.attempt.id,
+      "l2",
+      childPipeline,
+    );
+
+    // Level 3: the grandchild.
+    const child2 = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: approve2.childExecutionId! } });
+    const child2Claim = await claim(child2!, {
+      id: "extract",
+      agent: "writer",
+    });
+    const l3 = await requestFor(child2!.id, child2Claim.attempt.id, "l3");
+    expect(l3.request.childDepth).toBe(3);
+    const approve3 = await delegation.approve(
+      child2Claim.attempt.id,
+      "l3",
+      childPipeline,
+    );
+
+    // Level 4 exceeds maxDepth: rejected at request time.
+    const child3 = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: approve3.childExecutionId! } });
+    const child3Claim = await claim(child3!, {
+      id: "extract",
+      agent: "writer",
+    });
+    await expect(
+      requestFor(child3!.id, child3Claim.attempt.id, "l4"),
+    ).rejects.toThrow(/depth exceeds/);
+  });
+
+  it("fanout bound: an attempt cannot exceed the per-attempt request limit", async () => {
+    const pipeline = await seedPipeline("fanout-p", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await seedExecution(pipeline);
+    const attempt = await claim(execution, { id: "extract", agent: "reader" });
+    for (let i = 0; i < DELEGATION_BOUNDS.maxRequestsPerAttempt; i += 1) {
+      await requestFor(execution.id, attempt.attempt.id, `f-${i}`);
+    }
+    await expect(
+      requestFor(execution.id, attempt.attempt.id, "f-over"),
+    ).rejects.toThrow(/fanout exceeds/);
+  });
+
+  it("serializes 100 concurrent fanout requests at the hard ceiling", async () => {
+    const pipeline = await seedPipeline("fanout-race", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await seedExecution(pipeline);
+    const attempt = await claim(execution, { id: "extract", agent: "reader" });
+
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 100 }, (_, index) =>
+        requestFor(execution.id, attempt.attempt.id, `race-${index}`),
+      ),
+    );
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(DELEGATION_BOUNDS.maxRequestsPerAttempt);
+    expect(
+      await dataSource.getRepository(DelegationRequestEntity).count({
+        where: { parentAttemptId: attempt.attempt.id },
+      }),
+    ).toBe(DELEGATION_BOUNDS.maxRequestsPerAttempt);
+  });
+
+  it("applies the delegate policy before materializing a child", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 61,
+      rules: [{ id: "deny-delegate", actionType: "delegate", effect: "DENY" }],
+    });
+    const pipeline = await seedPipeline("delegate-policy-parent", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await seedExecution(pipeline);
+    const attempt = await claim(execution, { id: "extract", agent: "reader" });
+    const childPipeline = await seedPipeline("delegate-policy-child", [
+      { id: "extract", agent: "writer" },
+    ]);
+    await requestFor(execution.id, attempt.attempt.id, "denied-child");
+
+    const decision = await delegation.approve(
+      attempt.attempt.id,
+      "denied-child",
+      childPipeline,
+    );
+    expect(decision.decision).toBe("REJECTED");
+    expect(decision.reason).toContain("Policy DENY");
+    expect(
+      await dataSource.getRepository(PolicyDecisionEntity).count({
+        where: { executionId: execution.id, actionType: "delegate" },
+      }),
+    ).toBe(1);
+    expect(
+      await dataSource.getRepository(ExecutionEntity).count({
+        where: { pipelineId: childPipeline.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("freezes the parent attempt deadline onto every child attempt", async () => {
+    const parentPipeline = await seedPipeline("deadline-parent", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const parent = await seedExecution(parentPipeline);
+    const parentDeadline = new Date(Date.now() + 60_000);
+    const parentClaim = await executionService.claimRunnableStep(
+      parent.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+      parentDeadline,
+    );
+    if (parentClaim?.disposition !== "claimed") throw new Error("claim");
+    const childPipeline = await seedPipeline("deadline-child", [
+      { id: "extract", agent: "writer" },
+    ]);
+    await requestFor(parent.id, parentClaim.attempt.id, "deadline-child");
+    const approved = await delegation.approve(
+      parentClaim.attempt.id,
+      "deadline-child",
+      childPipeline,
+    );
+    const child = await dataSource.getRepository(ExecutionEntity).findOne({
+      where: { id: approved.childExecutionId! },
+    });
+    expect(child?.authorityDeadlineAt).toEqual(parentDeadline);
+
+    await executionService.reconcileExecution(child!.id);
+    const childClaim = await executionService.claimRunnableStep(
+      child!.id,
+      { id: "extract", agent: "writer" },
+      { input: true },
+      1,
+      new Date(parentDeadline.getTime() + 60_000),
+    );
+    expect(childClaim?.disposition).toBe("claimed");
+    if (childClaim?.disposition !== "claimed") throw new Error("claim");
+    expect(childClaim.attempt.deadlineAt).toEqual(parentDeadline);
+  });
+
+  it("budget subset: a child grant beyond the parent's grant is rejected; within is approved", async () => {
+    const parentPipeline = await seedPipeline(
+      "budget-p",
+      [{ id: "extract", agent: "reader", budget: { tokens: 40 } }],
+      { tokens: 100 },
+    );
+    const parent = await seedExecution(parentPipeline);
+    const attempt = await claim(parent, {
+      id: "extract",
+      agent: "reader",
+      budget: { tokens: 40 },
+    });
+
+    const tooBig = await seedPipeline(
+      "budget-big",
+      [{ id: "extract", agent: "writer", budget: { tokens: 200 } }],
+      { tokens: 200 },
+    );
+    await requestFor(parent.id, attempt.attempt.id, "big");
+    const bigResult = await delegation.approve(
+      attempt.attempt.id,
+      "big",
+      tooBig,
+    );
+    expect(bigResult.decision).toBe("REJECTED");
+    expect(bigResult.reason).toContain("exceeds the parent grant");
+
+    const within = await seedPipeline(
+      "budget-small",
+      [{ id: "extract", agent: "writer", budget: { tokens: 50 } }],
+      { tokens: 50 },
+    );
+    await requestFor(parent.id, attempt.attempt.id, "small");
+    const smallResult = await delegation.approve(
+      attempt.attempt.id,
+      "small",
+      within,
+    );
+    expect(smallResult.decision).toBe("APPROVED");
+    expect(smallResult.childExecutionId).not.toBeNull();
+    await executionService.reconcileExecution(smallResult.childExecutionId!);
+    const childClaim = await executionService.claimRunnableStep(
+      smallResult.childExecutionId!,
+      { id: "extract", agent: "writer", budget: { tokens: 50 } },
+      { input: true },
+      1,
+    );
+    expect(childClaim?.disposition).toBe("claimed");
+    const parentAccount = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: { scopeType: "execution", scopeId: parent.id },
+      });
+    const childAccount = await dataSource
+      .getRepository(BudgetAccountEntity)
+      .findOne({
+        where: {
+          scopeType: "execution",
+          scopeId: smallResult.childExecutionId!,
+        },
+      });
+    expect(childAccount?.parentAccountId).toBe(parentAccount?.id);
+
+    // The envelope form normalizes to the same ceilings: an envelope
+    // budget over the parent's grant is approved too.
+    const envelope = await seedPipeline(
+      "budget-envelope",
+      [{ id: "extract", agent: "writer", budget: { tokens: 30 } }],
+      { tokens: 30 },
+    );
+    (envelope as any).budget = { ceilings: { tokens: 30 } };
+    await requestFor(parent.id, attempt.attempt.id, "envelope");
+    const envelopeResult = await delegation.approve(
+      attempt.attempt.id,
+      "envelope",
+      envelope,
+    );
+    expect(envelopeResult.decision).toBe("APPROVED");
+
+    // A parent WITHOUT a grant cannot have a budgeted child.
+    const noBudgetParent = await seedExecution(
+      await seedPipeline("nobudget-p", [{ id: "extract", agent: "reader" }]),
+    );
+    const noBudgetClaim = await claim(noBudgetParent, {
+      id: "extract",
+      agent: "reader",
+    });
+    const budgeted = await seedPipeline(
+      "nobudget-big",
+      [{ id: "extract", agent: "writer", budget: { tokens: 10 } }],
+      { tokens: 10 },
+    );
+    const nbRequest = await requestFor(
+      noBudgetParent.id,
+      noBudgetClaim.attempt.id,
+      "nb",
+    );
+    const nbResult = await delegation.approve(
+      noBudgetClaim.attempt.id,
+      "nb",
+      budgeted,
+    );
+    expect(nbResult.decision).toBe("REJECTED");
+    expect(nbResult.reason).toContain("no budget grant");
+  });
+
+  it("the cascade cancels approved children of a cancelled parent (durable, deterministic, bounded)", async () => {
+    const parentPipeline = await seedPipeline("cascade-p", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const parent = await seedExecution(parentPipeline);
+    const attempt = await claim(parent, { id: "extract", agent: "reader" });
+    const childPipeline = await seedPipeline("cascade-c", [
+      { id: "extract", agent: "writer" },
+    ]);
+    await requestFor(parent.id, attempt.attempt.id, "c1");
+    await requestFor(parent.id, attempt.attempt.id, "c2");
+    const a1 = await delegation.approve(
+      attempt.attempt.id,
+      "c1",
+      childPipeline,
+    );
+    const a2 = await delegation.approve(
+      attempt.attempt.id,
+      "c2",
+      childPipeline,
+    );
+
+    // Both children are running (claimed).
+    const child1 = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: a1.childExecutionId! } });
+    const child2 = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: a2.childExecutionId! } });
+    await claim(child1!, { id: "extract", agent: "writer" });
+    await claim(child2!, { id: "extract", agent: "writer" });
+
+    // Cancel the parent.
+    await executionService.cancelExecution(parent.id);
+    const cancelledParent = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: parent.id } });
+    expect(cancelledParent?.status).toBe("CANCELLED");
+
+    // The children are still runnable until the recovery cascade runs.
+    const stillRunning = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: child1!.id } });
+    expect(stillRunning?.status).toBe("RUNNING");
+
+    // The cascade (the recovery cycle's deterministic pass) cancels both.
+    const cancelled = await delegation.cancelOrphans(undefined, 20);
+    expect(cancelled).toBe(2);
+    const after = await dataSource.getRepository(ExecutionEntity).find({
+      where: [{ id: child1!.id }, { id: child2!.id }],
+    });
+    expect(after.map((row) => row.status).sort()).toEqual([
+      "CANCELLED",
+      "CANCELLED",
+    ]);
+
+    // Idempotent: a second pass cancels nothing (crash-resumable).
+    expect(await delegation.cancelOrphans(undefined, 20)).toBe(0);
+  });
+
+  it("a failed child never terminalizes its parent (explicit workflow work)", async () => {
+    const parentPipeline = await seedPipeline("childfail-p", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const parent = await seedExecution(parentPipeline);
+    const attempt = await claim(parent, { id: "extract", agent: "reader" });
+    const childPipeline = await seedPipeline("childfail-c", [
+      { id: "extract", agent: "writer" },
+    ]);
+    await requestFor(parent.id, attempt.attempt.id, "cf");
+    const approve = await delegation.approve(
+      attempt.attempt.id,
+      "cf",
+      childPipeline,
+    );
+    const child = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: approve.childExecutionId! } });
+    const childClaim = await claim(child!, { id: "extract", agent: "writer" });
+
+    // The child fails (its result applies)...
+    const childResult: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: childClaim.attempt.invocationId,
+      executionId: child!.id,
+      stepExecutionId: childClaim.logicalStep.id,
+      status: "failed",
+      error: { code: "E", message: "child boom", retryable: false },
+      completedAt: new Date().toISOString(),
+    };
+    await new ResultInboxService(
+      dataSource as any,
+      ledger,
+      undefined as any,
+    ).apply(childResult, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+    const childAfter = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: child!.id } });
+    expect(childAfter?.status).toBe("FAILED");
+
+    // ...and the parent stays untouched (it never waited).
+    const parentAfter = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: parent.id } });
+    expect(parentAfter?.status).toBe("RUNNING");
+  });
+});
+
+describeWithPostgres("PostgreSQL M6-S5 closure", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let delegation: DelegationService;
+
+  const seedPipeline = async (name: string, steps: any[]) => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        description: `${name} fixture`,
+        steps,
+      }),
+    );
+  };
+
+  const seedExecution = async (pipeline: PipelineEntity) => {
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    return execution;
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    delegation = new DelegationService(dataSource as any, executionService);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "dispatch_outbox",
+       "step_attempts", "step_executions", "execution_plan_revisions",
+       "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("capability negotiation: a step requiring observed delegation on an opaque-only runtime fails durably", async () => {
+    // Runtime advertises opaque only.
+    const config = parseAgentTransportConfiguration({
+      ...process.env,
+      AGENT_TRANSPORT_CONFIG: JSON.stringify({
+        reader: { kind: "kafka", delegationModes: ["opaque"] },
+      }),
+    });
+    const service = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+      undefined,
+      new AgentTransportConfigService(config),
+    );
+    const pipeline = await seedPipeline("cap-p", [
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const execution = await service.createExecution(pipeline, {});
+    await service.reconcileExecution(execution.id);
+
+    const claim = await service.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("runtime_capability");
+    const attempt = await dataSource.getRepository(StepAttemptEntity).findOne({
+      where: { executionId: execution.id },
+    });
+    expect(attempt?.status).toBe("FAILED");
+    expect(attempt?.error).toContain("does not support observed delegation");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: attempt?.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("capability negotiation: an unrestricted runtime accepts observed steps", async () => {
+    const pipeline = await seedPipeline("cap-ok", [
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const execution = await seedExecution(pipeline);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("claimed");
+  });
+
+  it("approval resume rechecks capability negotiation after a runtime narrowing", async () => {
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: "approve-observed",
+          actionType: "dispatch",
+          effect: "REQUIRE_APPROVAL",
+        },
+      ],
+    });
+    const pipeline = await seedPipeline("cap-resume-p", [
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const execution = await seedExecution(pipeline);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("approval_required");
+    const approval = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({ where: { executionId: execution.id } });
+    expect(approval).not.toBeNull();
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { executionId: execution.id } });
+    expect(attempt?.status).toBe("WAITING");
+
+    // Narrow the runtime to opaque-only while the attempt waits.
+    const narrowedConfig = parseAgentTransportConfiguration({
+      ...process.env,
+      AGENT_TRANSPORT_CONFIG: JSON.stringify({
+        reader: { kind: "kafka", delegationModes: ["opaque"] },
+      }),
+    });
+    const approvals = new ApprovalService(
+      dataSource as any,
+      undefined,
+      undefined,
+      new AgentTransportConfigService(narrowedConfig),
+    );
+
+    await approvals.approve(approval!.proposalId);
+
+    // The request is recorded APPROVED but NO dispatch authority was
+    // granted (the outbox row must not exist).
+    const approved = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .findOne({ where: { id: approval!.id } });
+    expect(approved?.status).toBe("APPROVED");
+    expect(approved?.decisionNote).toContain("runtime capability changed");
+    expect(
+      await dataSource.getRepository(DispatchOutboxEntity).count({
+        where: { stepAttemptId: attempt!.id },
+      }),
+    ).toBe(0);
+    const failed = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: attempt!.id } });
+    expect(failed?.status).toBe("FAILED");
+    expect(failed?.error).toContain("does not support observed delegation");
+    delete process.env.TENVYR_POLICY;
+  });
+
+  it("the graph projection distinguishes supervised and observed edges", async () => {
+    const parentPipeline = await seedPipeline("graph-p", [
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const parent = await seedExecution(parentPipeline);
+    const parentClaim = await executionService.claimRunnableStep(
+      parent.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (parentClaim?.disposition !== "claimed") throw new Error("claim");
+    const childPipeline = await seedPipeline("graph-c", [
+      { id: "extract", agent: "writer" },
+    ]);
+    await delegation.request({
+      parentExecutionId: parent.id,
+      parentAttemptId: parentClaim.attempt.id,
+      requestId: "graph-child",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const approve = await delegation.approve(
+      parentClaim.attempt.id,
+      "graph-child",
+      childPipeline,
+    );
+    // Observed evidence on the parent attempt.
+    const observation = {
+      schemaVersion: "1" as const,
+      provider: "codex",
+      childId: "hidden-1",
+      assertedAt: new Date().toISOString(),
+    };
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: parentClaim.attempt.invocationId,
+      executionId: parent.id,
+      stepExecutionId: parentClaim.logicalStep.id,
+      status: "succeeded",
+      output: { done: true },
+      completedAt: new Date().toISOString(),
+      delegation: [observation],
+    };
+    await new ResultInboxService(
+      dataSource as any,
+      new BudgetLedgerService(dataSource as any),
+      undefined as any,
+    ).apply(result, { adapter: "http", receivedAt: new Date().toISOString() });
+
+    const projection = await delegation.projection(parent.id);
+    expect(projection.depth).toBe(0);
+    expect(projection.supervised).toHaveLength(1);
+    expect(projection.supervised[0]).toMatchObject({
+      requestId: "graph-child",
+      childExecutionId: approve.childExecutionId,
+      childDepth: 1,
+      requestedAgent: "writer",
+    });
+    expect(projection.observed).toHaveLength(1);
+    expect(projection.observed[0]).toMatchObject({
+      observationId: "codex:hidden-1",
+      provider: "codex",
+      childId: "hidden-1",
+    });
+
+    // The child's projection shows its own depth.
+    const childProjection = await delegation.projection(
+      approve.childExecutionId!,
+    );
+    expect(childProjection.depth).toBe(1);
+    expect(childProjection.supervised).toHaveLength(0);
+    expect(childProjection.observed).toHaveLength(0);
+  });
+});
+
+describeWithPostgres("PostgreSQL M7-S1 capsule", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let capsules: ExecutionCapsuleService;
+
+  const seedPipeline = async (name: string, steps: any[]) => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        description: `${name} fixture`,
+        steps,
+      }),
+    );
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, executionService),
+      executionService,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "policy_decisions",
+       "policy_snapshots", "approval_requests", "budget_ledger_entries",
+       "budget_reservations", "budget_accounts", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("assembles a terminal capsule with counts matching the durable rows", async () => {
+    const pipeline = await seedPipeline("capsule-p", [
+      { id: "extract", agent: "reader" },
+      { id: "review", agent: "reviewer", dependsOn: ["extract"] },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {
+      context: "capsule-input",
+    });
+    await executionService.reconcileExecution(execution.id);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    // Terminalize: cancel the execution (a terminal source).
+    await executionService.cancelExecution(execution.id);
+
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.schemaVersion).toBe("1");
+    expect(capsule.pointInTime).toBe("terminal");
+    expect(capsule.sourceStatus).toBe("CANCELLED");
+    expect(capsule.header.pipelineHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(capsule.header.stepCount).toBe(2);
+    expect(capsule.header.revisionCount).toBe(1);
+    expect(capsule.header.attemptCount).toBe(1);
+    expect(capsule.header.eventCount).toBe(0);
+    expect(capsule.header.input).toEqual({ context: "capsule-input" });
+    expect(capsule.header.state).toEqual({
+      version: 0,
+      contentHash: sha256Json({}),
+      writeEvidenceCount: 0,
+    });
+    expect(capsule.header.artifacts).toEqual({
+      producedCount: 0,
+      exposureCount: 0,
+    });
+    expect(capsule.revisions).toHaveLength(1);
+    expect(capsule.revisions[0]).toMatchObject({
+      revisionNumber: 1,
+      source: "pipeline",
+      budget: null,
+    });
+    expect(capsule.revisions[0].steps.map((s) => (s as any).id)).toEqual([
+      "extract",
+      "review",
+    ]);
+    expect(capsule.attempts).toHaveLength(1);
+    expect(capsule.attempts[0]).toMatchObject({
+      status: "CANCELLED",
+      // The capsule exposes the DAG step id (stable logical identity).
+      stepId: "extract",
+      inputSnapshotHash: sha256Json({ input: true }),
+    });
+    expect(capsule.attempts[0].contextSnapshotHash).toBeNull();
+    // Terminal captures carry no completeness warnings.
+    expect(capsule.evidenceCompleteness).toEqual([]);
+  });
+
+  it("labels live captures and records bounds that bit", async () => {
+    const pipeline = await seedPipeline("capsule-live", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    // No reconcile: still PENDING (live).
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.pointInTime).toBe("live");
+    expect(capsule.sourceStatus).toBe("PENDING");
+    expect(capsule.evidenceCompleteness).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("LIVE point-in-time capture"),
+      ]),
+    );
+  });
+
+  it("truncates oversized inputs with an explicit warning", async () => {
+    const pipeline = await seedPipeline("capsule-big", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {
+      blob: "x".repeat(200_000),
+    });
+    await executionService.reconcileExecution(execution.id);
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.header.input).toEqual({
+      truncated: true,
+      bytes: expect.any(Number),
+      sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(capsule.evidenceCompleteness).toEqual(
+      expect.arrayContaining([expect.stringContaining("Input exceeds")]),
+    );
+  });
+
+  it("the content hash is stable across identical builds and excludes volatile fields", async () => {
+    const pipeline = await seedPipeline("capsule-hash", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {
+      context: "hash-input",
+    });
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+
+    const a = await capsules.build(execution.id);
+    const b = await capsules.build(execution.id);
+    expect(a.contentHash).toBe(b.contentHash);
+    expect(a.capturedAt).not.toBe(b.capturedAt);
+    // The capsule hash is 64 hex chars.
+    expect(a.contentHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("capsule assembly observes one snapshot (counts stay consistent)", async () => {
+    const pipeline = await seedPipeline("capsule-snap", [
+      { id: "extract", agent: "reader", onFailure: "retry" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    // Two attempts via a retryable failure.
+    const first = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", onFailure: "retry" },
+      { input: true },
+      2,
+    );
+    if (first?.disposition !== "claimed") throw new Error("claim 1");
+    const failedResult: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: first.attempt.invocationId,
+      executionId: execution.id,
+      stepExecutionId: first.logicalStep.id,
+      status: "failed",
+      error: { code: "E", message: "retry me", retryable: true },
+      completedAt: new Date().toISOString(),
+    };
+    await new ResultInboxService(
+      dataSource as any,
+      new BudgetLedgerService(dataSource as any),
+      undefined as any,
+    ).apply(failedResult, {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+    });
+    await executionService.reconcileExecution(execution.id);
+    const second = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", onFailure: "retry" },
+      { input: true },
+      2,
+    );
+    if (second?.disposition !== "claimed") throw new Error("claim 2");
+
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.header.attemptCount).toBe(2);
+    expect(capsule.attempts).toHaveLength(2);
+  });
+});
+
+describeWithPostgres("PostgreSQL M7-S2 export and replay", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let capsules: ExecutionCapsuleService;
+
+  const seedPipeline = async (name: string, steps: any[]) => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        description: `${name} fixture`,
+        steps,
+      }),
+    );
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, executionService),
+      executionService,
+    );
+  });
+
+  afterAll(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    delete process.env.TENVYR_POLICY;
+    await dataSource.query(
+      `TRUNCATE "execution_replays", "execution_exports",
+       "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "policy_decisions",
+       "policy_snapshots", "approval_requests", "budget_ledger_entries",
+       "budget_reservations", "budget_accounts", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("createExport persists a small immutable manifest idempotently", async () => {
+    const pipeline = await seedPipeline("export-p", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {
+      context: "export-input",
+    });
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+
+    const manifest = await capsules.createExport(execution.id, "operator");
+    expect(manifest.executionId).toBe(execution.id);
+    expect(manifest.capsuleHash).toMatch(/^[0-9a-f]{64}$/);
+    // The manifest is small: only the pin, never the capsule payload.
+    const rows = await dataSource.getRepository(ExecutionExportEntity).find();
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0])).toEqual(
+      expect.arrayContaining(["executionId", "capsuleHash", "exporter"]),
+    );
+    // Idempotent re-export returns the same manifest.
+    const again = await capsules.createExport(execution.id, "operator");
+    expect(again.id).toBe(manifest.id);
+    expect(await dataSource.getRepository(ExecutionExportEntity).count()).toBe(
+      1,
+    );
+  });
+
+  it("replay materializes a NEW execution from the captured plan and input, idempotently", async () => {
+    const pipeline = await seedPipeline("replay-p", [
+      { id: "extract", agent: "reader" },
+      { id: "review", agent: "reviewer", dependsOn: ["extract"] },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {
+      context: "replay-input",
+    });
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+
+    const result = await capsules.replay(execution.id, "operator");
+    const target = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: result.targetExecutionId } });
+    expect(target).not.toBeNull();
+    expect(target?.id).not.toBe(execution.id);
+    expect(target?.input).toEqual({ context: "replay-input" });
+    // The target's plan hash matches the source's active revision hash.
+    const sourceCapsule = await capsules.build(execution.id);
+    expect(target?.pipelineHash).toBe(sourceCapsule.header.activeRevisionHash);
+    const targetSteps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: target!.id } });
+    expect(targetSteps.map((step) => step.stepId).sort()).toEqual([
+      "extract",
+      "review",
+    ]);
+    // The target is schedulable normally.
+    await executionService.reconcileExecution(target!.id);
+    const claim = await executionService.claimRunnableStep(
+      target!.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("claimed");
+
+    // Idempotent: replaying the same capsule returns the SAME target.
+    const again = await capsules.replay(execution.id, "operator");
+    expect(again.targetExecutionId).toBe(result.targetExecutionId);
+    expect(await dataSource.getRepository(ExecutionReplayEntity).count()).toBe(
+      1,
+    );
+    expect(
+      await dataSource.getRepository(ExecutionEntity).count({
+        where: { pipelineId: target?.pipelineId },
+      }),
+    ).toBe(2); // source + replay target only
+  });
+
+  it("replays the authoritative input when the capsule preview is byte-bounded", async () => {
+    const pipeline = await seedPipeline("replay-large-input", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const input = { context: "x".repeat(70_000) };
+    const execution = await executionService.createExecution(pipeline, input);
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.header.input).toMatchObject({
+      truncated: true,
+      sha256: sha256Json(input),
+    });
+    const result = await capsules.replay(execution.id, "operator");
+    const target = await dataSource.getRepository(ExecutionEntity).findOne({
+      where: { id: result.targetExecutionId },
+    });
+    expect(target?.input).toEqual(input);
+  });
+
+  it("concurrent replays of the same capsule produce exactly one target", async () => {
+    const pipeline = await seedPipeline("replay-race", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+
+    const [a, b] = await Promise.all([
+      capsules.replay(execution.id, "operator"),
+      capsules.replay(execution.id, "operator"),
+    ]);
+    expect(a.targetExecutionId).toBe(b.targetExecutionId);
+    expect(await dataSource.getRepository(ExecutionReplayEntity).count()).toBe(
+      1,
+    );
+    // Exactly one target execution was materialized.
+    const target = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: a.targetExecutionId } });
+    expect(target).not.toBeNull();
+    expect(
+      await dataSource.getRepository(ExecutionEntity).count({
+        where: { input: target?.input as any },
+      }),
+    ).toBe(2); // source + one target
+  });
+
+  it("the capsule hash stays stable for a terminal execution even after a policy rotation", async () => {
+    const pipeline = await seedPipeline("replay-hash", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+    const before = await capsules.build(execution.id);
+
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [{ id: "deny-x", actionType: "dispatch", effect: "DENY" }],
+    });
+    const after = await capsules.build(execution.id);
+    expect(before.contentHash).toBe(after.contentHash);
+    delete process.env.TENVYR_POLICY;
+  });
+
+  it("a replay uses the CAPTURED plan even when the pipeline row evolves afterwards", async () => {
+    const pipeline = await seedPipeline("replay-evolve", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    await executionService.cancelExecution(execution.id);
+    const sourceHash = (await capsules.build(execution.id)).header
+      .activeRevisionHash;
+
+    // The pipeline evolves AFTER the source ran.
+    await dataSource
+      .getRepository(PipelineEntity)
+      .createQueryBuilder()
+      .update()
+      .set({
+        steps: [
+          { id: "extract", agent: "reader" },
+          { id: "brand-new", agent: "writer" },
+        ] as any,
+      })
+      .where("id = :id", { id: pipeline.id })
+      .execute();
+
+    const result = await capsules.replay(execution.id, "operator");
+    const targetSteps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: result.targetExecutionId } });
+    // The captured plan had ONE step; the evolved pipeline would have two.
+    expect(targetSteps.map((step) => step.stepId)).toEqual(["extract"]);
+    expect(
+      (
+        await dataSource
+          .getRepository(ExecutionPlanRevisionEntity)
+          .findOne({ where: { executionId: result.targetExecutionId } })
+      )?.planHash,
+    ).toBe(sourceHash);
+  });
+
+  it("a live source cannot be replayed", async () => {
+    const pipeline = await seedPipeline("replay-live", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    await expect(capsules.replay(execution.id)).rejects.toThrow(
+      /replays require a terminal source/,
+    );
+  });
+
+  it("a replay re-evaluates CURRENT authority: a rotated DENY policy blocks the replay's dispatch; nothing is copied", async () => {
+    const pipeline = await seedPipeline("replay-policy", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    const sourceClaim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    expect(sourceClaim?.disposition).toBe("claimed");
+    await executionService.cancelExecution(execution.id);
+
+    // Rotate to a DENY policy AFTER the source ran.
+    process.env.TENVYR_POLICY = JSON.stringify({
+      version: 1,
+      rules: [{ id: "deny-all", actionType: "dispatch", effect: "DENY" }],
+    });
+    const result = await capsules.replay(execution.id, "operator");
+    await executionService.reconcileExecution(result.targetExecutionId);
+    const replayClaim = await executionService.claimRunnableStep(
+      result.targetExecutionId,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    expect(replayClaim?.disposition).toBe("policy_denied");
+    // No historical authority is copied: the target has zero approval
+    // requests and the denied attempt carries the current policy reason.
+    expect(
+      await dataSource.getRepository(ApprovalRequestEntity).count({
+        where: { executionId: result.targetExecutionId },
+      }),
+    ).toBe(0);
+    const deniedAttempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { executionId: result.targetExecutionId } });
+    expect(deniedAttempt?.status).toBe("FAILED");
+    expect(deniedAttempt?.error).toContain("Policy DENY");
+  });
+});
+
+describeWithPostgres("PostgreSQL M7-S3 comparison and provenance", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let capsules: ExecutionCapsuleService;
+
+  const seedPipeline = async (name: string, steps: any[]) => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        description: `${name} fixture`,
+        steps,
+      }),
+    );
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, executionService),
+      executionService,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "execution_replays", "execution_exports", "artifact_exposures",
+       "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "policy_decisions",
+       "policy_snapshots", "approval_requests", "budget_ledger_entries",
+       "budget_reservations", "budget_accounts", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("identical runs compare as identical (no plan or outcome drift)", async () => {
+    const pipeline = await seedPipeline("cmp-identical", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const a = await executionService.createExecution(pipeline, { n: 1 });
+    await executionService.reconcileExecution(a.id);
+    await executionService.cancelExecution(a.id);
+    const b = await executionService.createExecution(pipeline, { n: 1 });
+    await executionService.reconcileExecution(b.id);
+    await executionService.cancelExecution(b.id);
+
+    const comparison = await capsules.compare(a.id, b.id);
+    expect(comparison.plan.identical).toBe(true);
+    expect(comparison.outcome.identical).toBe(true);
+    expect(comparison.plan.stepDrift[0]).toMatchObject({
+      stepId: "extract",
+      drift: "identical",
+    });
+    expect(comparison.outcome.perStep[0]).toMatchObject({
+      stepId: "extract",
+      drift: "no_evidence_both",
+    });
+    expect(comparison.warnings).toEqual([]);
+  });
+
+  it("a step spec change is actual plan drift; an outcome change is outcome drift", async () => {
+    const pipeline = await seedPipeline("cmp-drift", [
+      { id: "extract", agent: "reader", timeout: "5s" },
+    ]);
+    const a = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(a.id);
+    await executionService.cancelExecution(a.id);
+
+    // Run B with a different step spec (timeout changed).
+    const pipelineB = await seedPipeline("cmp-drift-b", [
+      { id: "extract", agent: "reader", timeout: "30s" },
+    ]);
+    const b = await executionService.createExecution(pipelineB, {});
+    await executionService.reconcileExecution(b.id);
+    await executionService.cancelExecution(b.id);
+
+    const comparison = await capsules.compare(a.id, b.id);
+    expect(comparison.plan.identical).toBe(false);
+    expect(comparison.plan.stepDrift[0]).toMatchObject({
+      stepId: "extract",
+      drift: "drifted",
+    });
+    expect(comparison.plan.stepDrift[0].aHash).not.toBe(
+      comparison.plan.stepDrift[0].bHash,
+    );
+    // Both cancelled with no attempts: no evidence on either side.
+    expect(comparison.outcome.identical).toBe(true);
+    expect(comparison.outcome.perStep[0]).toMatchObject({
+      drift: "no_evidence_both",
+    });
+  });
+
+  it("a step present in only one run is reported as present_in_*_only", async () => {
+    const pipelineA = await seedPipeline("cmp-only-a", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const pipelineB = await seedPipeline("cmp-only-b", [
+      { id: "extract", agent: "reader" },
+      { id: "extra", agent: "writer", dependsOn: ["extract"] },
+    ]);
+    const a = await executionService.createExecution(pipelineA, {});
+    await executionService.reconcileExecution(a.id);
+    await executionService.cancelExecution(a.id);
+    const b = await executionService.createExecution(pipelineB, {});
+    await executionService.reconcileExecution(b.id);
+    await executionService.cancelExecution(b.id);
+
+    const comparison = await capsules.compare(a.id, b.id);
+    const extra = comparison.plan.stepDrift.find(
+      (row) => row.stepId === "extra",
+    );
+    expect(extra?.drift).toBe("present_in_b_only");
+    expect(comparison.plan.identical).toBe(false);
+  });
+
+  it("truncated attempt evidence makes the outcome category unavailable (no conclusion)", async () => {
+    const pipeline = await seedPipeline("cmp-unavailable", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const a = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(a.id);
+    const logicalStep = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({
+        where: { executionId: a.id },
+      });
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: a.id } });
+    // Seed 101 attempts directly (CAPSULE_BOUNDS.maxAttempts = 100).
+    const attemptRepository = dataSource.getRepository(StepAttemptEntity);
+    for (let i = 0; i < 101; i += 1) {
+      await attemptRepository.save(
+        attemptRepository.create({
+          executionId: a.id,
+          logicalStepId: logicalStep!.id,
+          planRevisionId: revision!.id,
+          attemptNumber: i + 1,
+          invocationId: `${logicalStep!.id}:${i + 1}`,
+          frozenSpecHash: "f".repeat(64),
+          executorSnapshot: {
+            schemaVersion: "1",
+            executorId: "agent:reader",
+            agent: "reader",
+            kind: "kafka",
+            configHash: "c".repeat(64),
+            capabilities: { cancel: false },
+          },
+          status: "FAILED",
+          error: "seeded",
+          terminalAt: new Date(),
+        } as any),
+      );
+    }
+    await executionService.cancelExecution(a.id);
+    const b = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(b.id);
+    await executionService.cancelExecution(b.id);
+
+    const comparison = await capsules.compare(a.id, b.id);
+    expect(comparison.outcome.unavailable).toBe(true);
+    expect(comparison.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Outcome comparison unavailable"),
+      ]),
+    );
+  });
+
+  it("live sources make the outcome comparison unavailable (transient state never concluded)", async () => {
+    const pipeline = await seedPipeline("cmp-live", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const a = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(a.id);
+    await executionService.cancelExecution(a.id);
+    // B stays RUNNING (live).
+    const b = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(b.id);
+
+    const comparison = await capsules.compare(a.id, b.id);
+    expect(comparison.outcome.unavailable).toBe(true);
+    expect(comparison.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("LIVE capture")]),
+    );
+  });
+
+  it("provenance distinguishes authority, claim, and exposure edges", async () => {
+    const pipeline = await seedPipeline("prov-p", [
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    // A supervised child + observed evidence.
+    const childPipeline = await seedPipeline("prov-c", [
+      { id: "extract", agent: "writer" },
+    ]);
+    await new DelegationService(dataSource as any, executionService).request({
+      parentExecutionId: execution.id,
+      parentAttemptId: claim.attempt.id,
+      requestId: "prov-child",
+      requestedAgent: "writer",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await new DelegationService(dataSource as any, executionService).approve(
+      claim.attempt.id,
+      "prov-child",
+      childPipeline,
+    );
+    const result: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: claim.attempt.invocationId,
+      executionId: execution.id,
+      stepExecutionId: claim.logicalStep.id,
+      status: "succeeded",
+      output: { done: true },
+      completedAt: new Date().toISOString(),
+      delegation: [
+        {
+          schemaVersion: "1",
+          provider: "codex",
+          childId: "prov-hidden",
+          assertedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    await new ResultInboxService(
+      dataSource as any,
+      new BudgetLedgerService(dataSource as any),
+      undefined as any,
+    ).apply(result, { adapter: "http", receivedAt: new Date().toISOString() });
+    await executionService.cancelExecution(execution.id);
+
+    const provenance = await capsules.provenance(execution.id);
+    const edgeKinds = provenance.edges.map((edge) => edge.kind);
+    expect(edgeKinds).toContain("authority");
+    expect(edgeKinds).toContain("claim");
+    // Authority edges for the revision + attempt + supervised child.
+    const authorityEdges = provenance.edges.filter(
+      (edge) => edge.kind === "authority",
+    );
+    expect(authorityEdges.length).toBeGreaterThanOrEqual(3);
+    // Every edge resolves to an existing node (no dangling references).
+    const nodeIds = new Set(provenance.nodes.map((node) => node.id));
+    for (const edge of provenance.edges) {
+      expect(nodeIds.has(edge.from)).toBe(true);
+      expect(nodeIds.has(edge.to)).toBe(true);
+    }
+    // The attempt edge resolves to the revision node via the row id.
+    const attemptEdge = provenance.edges.find(
+      (edge) =>
+        edge.from.startsWith("attempt:") && edge.to.startsWith("revision:"),
+    );
+    expect(attemptEdge).toBeDefined();
+    // The observed delegation edge is a CLAIM, never authority.
+    const claimEdges = provenance.edges.filter((edge) => edge.kind === "claim");
+    expect(claimEdges).toHaveLength(1);
+    expect(claimEdges[0].to).toBe("claim:codex:prov-hidden");
+    const delegationNodes = provenance.nodes.filter(
+      (node) => node.kind === "delegation_child",
+    );
+    expect(delegationNodes).toHaveLength(1);
+  });
+  it("capsule, telemetry, and provenance stay bounded on a large execution", async () => {
+    const pipeline = await seedPipeline("m7s5-big", [
+      { id: "extract", agent: "reader", delegation: "observed" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader", delegation: "observed" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    // 150 attempts (bounds: capsule 100, telemetry 100).
+    const logicalStep = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({
+        where: { executionId: execution.id },
+      });
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: execution.id } });
+    const attemptRepository = dataSource.getRepository(StepAttemptEntity);
+    for (let i = 1; i <= 149; i += 1) {
+      await attemptRepository.save(
+        attemptRepository.create({
+          executionId: execution.id,
+          logicalStepId: logicalStep!.id,
+          planRevisionId: revision!.id,
+          attemptNumber: i + 1,
+          invocationId: `${logicalStep!.id}:${i + 1}`,
+          frozenSpecHash: "f".repeat(64),
+          executorSnapshot: {
+            schemaVersion: "1",
+            executorId: "agent:reader",
+            agent: "reader",
+            kind: "kafka",
+            configHash: "c".repeat(64),
+            capabilities: { cancel: false },
+          },
+          status: "FAILED",
+          error: "seeded",
+          terminalAt: new Date(),
+        } as any),
+      );
+    }
+    await executionService.cancelExecution(execution.id);
+
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.attempts.length).toBeLessThanOrEqual(100);
+    expect(capsule.evidenceCompleteness).toEqual(
+      expect.arrayContaining([expect.stringContaining("Attempts truncated")]),
+    );
+
+    const telemetry = await capsules.projectTelemetry(execution.id);
+    const spans = telemetry.resourceSpans[0].scopeSpans[0].spans;
+    expect(spans.length).toBeLessThanOrEqual(101); // root + 100 attempts
+
+    const provenance = await capsules.provenance(execution.id);
+    expect(provenance.nodes.length).toBeLessThanOrEqual(200);
+    expect(provenance.edges.length).toBeLessThanOrEqual(500);
+  });
+});
+
+describeWithPostgres("PostgreSQL M7-S4 telemetry projection", () => {
+  jest.setTimeout(120_000);
+
+  let dataSource: DataSource;
+  let executionService: ExecutionService;
+  let capsules: ExecutionCapsuleService;
+  let adapter: HttpAgentAdapter;
+
+  const seedPipeline = async (name: string, steps: any[]) => {
+    return dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        description: `${name} fixture`,
+        steps,
+      }),
+    );
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, executionService),
+      executionService,
+    );
+    adapter = new HttpAgentAdapter(
+      new AgentTransportConfigService(
+        parseAgentTransportConfiguration({
+          ...process.env,
+          AGENT_TRANSPORT_CONFIG: JSON.stringify({
+            "http-agent": {
+              kind: "http",
+              submitUrl: "http://127.0.0.1:1/v1/runs",
+              outboundAuthentication: { type: "none" },
+              callbackAuthentication: {
+                keyId: "k",
+                secretEnv: "M7S4_SECRET",
+              },
+              requestTimeoutMs: 1000,
+              maxResponseBytes: 4096,
+            },
+          }),
+          HTTP_AGENT_CALLBACK_BASE_URL: "http://127.0.0.1:1",
+          HTTP_AGENT_ALLOW_INSECURE: "true",
+          M7S4_SECRET: "secret",
+        }),
+      ),
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "execution_replays", "execution_exports", "artifact_exposures",
+       "delegation_requests", "delegation_observation_conflicts",
+       "delegation_observations", "plan_proposals", "policy_decisions",
+       "policy_snapshots", "approval_requests", "budget_ledger_entries",
+       "budget_reservations", "budget_accounts", "state_write_evidence",
+       "artifacts", "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("projects OTLP-shaped spans (root execution span + attempt spans) without any writes", async () => {
+    const pipeline = await seedPipeline("otel-p", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    const claim = await executionService.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" },
+      { input: true },
+      1,
+    );
+    if (claim?.disposition !== "claimed") throw new Error("claim");
+    await executionService.cancelExecution(execution.id);
+
+    const telemetry = await capsules.projectTelemetry(execution.id);
+    const spans = telemetry.resourceSpans[0].scopeSpans[0].spans;
+    expect(spans.length).toBeGreaterThanOrEqual(2);
+    const root = spans[0];
+    expect(root.parentSpanId).toBeNull();
+    expect(root.name).toBe("pipeline.execute");
+    expect(root.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(root.spanId).toMatch(/^[0-9a-f]{16}$/);
+    const attemptSpan = spans.find((span) =>
+      span.attributes.some(
+        (attribute) =>
+          attribute.key === "tenvyr.stepId" &&
+          attribute.value.stringValue === "extract",
+      ),
+    );
+    expect(attemptSpan?.name).toBe("step.execute");
+    expect(attemptSpan?.parentSpanId).toBe(root.spanId);
+    expect(attemptSpan?.attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "tenvyr.agent",
+          value: { stringValue: "reader" },
+        }),
+      ]),
+    );
+    // Telemetry is a pure projection: no rows were written.
+    expect(await dataSource.getRepository(ExecutionExportEntity).count()).toBe(
+      0,
+    );
+    expect(await dataSource.getRepository(ExecutionReplayEntity).count()).toBe(
+      0,
+    );
+  });
+
+  it("the HTTP adapter sends a deterministic W3C traceparent header (outbound only)", async () => {
+    const invocation = {
+      schemaVersion: "1" as const,
+      invocationId: "inv-123",
+      executionId: "exec-1",
+      stepExecutionId: "step-1",
+      stepId: "extract",
+      target: { agent: "http-agent" },
+      input: {},
+      attempt: 1,
+      createdAt: new Date().toISOString(),
+      trace: {
+        traceId: "550e8400-e29b-41d4-a716-446655440000",
+        correlationId: "exec-1",
+      },
+    };
+    const traceparent = w3cTraceparent(invocation);
+    expect(traceparent).toBe(
+      `00-550e8400e29b41d4a716446655440000-${traceparent!.split("-")[2]}-01`,
+    );
+    // Deterministic: same invocation → same header.
+    expect(w3cTraceparent(invocation)).toBe(traceparent);
+    expect(traceparent!.split("-")[1]).toBe("550e8400e29b41d4a716446655440000");
+    expect(traceparent!.split("-")[2]).toMatch(/^[0-9a-f]{16}$/);
+    // No trace identity → no header.
+    expect(w3cTraceparent({ invocationId: "x" })).toBeNull();
+    expect(w3cTraceparent({ trace: { traceId: "x" } })).toBeNull();
+    // Non-32-hex trace ids are rejected (no malformed propagation).
+    expect(
+      w3cTraceparent({ invocationId: "x", trace: { traceId: "short" } }),
+    ).toBeNull();
+  });
+
+  it("the adapter injects the traceparent into the outbound run request", async () => {
+    const fetchMock = jest.fn().mockRejectedValue(new Error("no server"));
+    (globalThis as any).fetch = fetchMock;
+    await adapter.start({ result: jest.fn(), event: jest.fn() });
+    const invocation = {
+      schemaVersion: "1" as const,
+      invocationId: "inv-tp",
+      executionId: "exec-tp",
+      stepExecutionId: "step-tp",
+      stepId: "extract",
+      target: { agent: "http-agent" },
+      input: {},
+      attempt: 1,
+      createdAt: new Date().toISOString(),
+      trace: {
+        traceId: "550e8400e29b41d4a716446655440000",
+        correlationId: "exec-tp",
+      },
+    };
+    const error = await adapter.invoke(invocation as any).catch((e) => e);
+    if (!fetchMock.mock.calls[0]) {
+      throw new Error(`invoke failed before fetch: ${String(error)}`);
+    }
+    const [, options] = fetchMock.mock.calls[0];
+    const traceparent = (options as any).headers.traceparent;
+    expect(traceparent).toMatch(
+      /^00-550e8400e29b41d4a716446655440000-[0-9a-f]{16}-01$/,
+    );
+    await (adapter as any).stop();
   });
 });

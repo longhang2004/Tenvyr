@@ -33,6 +33,24 @@ export type AgentResultStatus =
   | "cancelled"
   | "timed_out";
 
+/**
+ * M6-S1: bounded runtime-asserted delegation evidence (observed mode).
+ * Provider-specific subagent ids stay opaque; Tenvyr records the
+ * observation correlated to ONE parent attempt and never schedules,
+ * spends, cancels, or terminalizes from it.
+ */
+export type AgentDelegationObservationV1 = {
+  schemaVersion: "1";
+  /** Bounded provider identifier, e.g. "codex", "claude", "custom". */
+  provider: string;
+  /** Opaque runtime child identifier. */
+  childId: string;
+  /** ISO-8601 instant the runtime observed the child. */
+  assertedAt: string;
+  /** Bounded named attributes (never secrets). */
+  attributes?: Array<{ name: string; value: string }>;
+};
+
 export type AgentResultV1 = {
   schemaVersion: "1";
   invocationId: string;
@@ -52,6 +70,8 @@ export type AgentResultV1 = {
     totalTokens?: number;
     costUsd?: number;
   };
+  /** M6-S1: observed-mode delegation evidence (bounded, inert). */
+  delegation?: AgentDelegationObservationV1[];
   artifacts?: Array<{
     id: string;
     name: string;

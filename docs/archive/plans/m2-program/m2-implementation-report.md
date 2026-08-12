@@ -9,13 +9,13 @@ audience:
 last_verified: 2026-08-11
 sources:
   - docs/archive/plans/m2-program/README.md
-  - docs/plans/active/tenvyr-roadmap/EXECUTION_STATUS.md
+  - docs/archive/plans/tenvyr-roadmap/EXECUTION_STATUS.md
 ---
 
 # Tenvyr M2 implementation report
 
 Historical implementer report for the M2 program (M2B–M2F), following the
-[implementation report template](../../../plans/active/tenvyr-roadmap/IMPLEMENTATION_REPORT_TEMPLATE.md).
+[implementation report template](../tenvyr-roadmap/IMPLEMENTATION_REPORT_TEMPLATE.md).
 Receipts: `docs/_scratch/m2-program/m2b-receipt.md` … `m2f-receipt.md`.
 
 ## Implemented

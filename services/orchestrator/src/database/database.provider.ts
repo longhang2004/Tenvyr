@@ -12,12 +12,33 @@ import { AgentEventConflictEntity } from "../entities/agent-event-conflict.entit
 import { ArtifactEntity } from "../entities/artifact.entity";
 import { ArtifactExposureEntity } from "../entities/artifact-exposure.entity";
 import { StateWriteEvidenceEntity } from "../entities/state-write-evidence.entity";
+import { PlanProposalEntity } from "../entities/plan-proposal.entity";
+import { DelegationObservationEntity } from "../entities/delegation-observation.entity";
+import { DelegationObservationConflictEntity } from "../entities/delegation-observation-conflict.entity";
+import { DelegationRequestEntity } from "../entities/delegation-request.entity";
+import { DelegationRequestConflictEntity } from "../entities/delegation-request-conflict.entity";
+import { ExecutionExportEntity } from "../entities/execution-export.entity";
+import { ExecutionReplayEntity } from "../entities/execution-replay.entity";
+import { BudgetAccountEntity } from "../entities/budget-account.entity";
+import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
+import { BudgetLedgerEntryEntity } from "../entities/budget-ledger-entry.entity";
+import { PolicySnapshotEntity } from "../entities/policy-snapshot.entity";
+import { PolicyDecisionEntity } from "../entities/policy-decision.entity";
+import { ApprovalRequestEntity } from "../entities/approval-request.entity";
 import { MilestoneZeroFoundation1722270000000 } from "./migrations/1722270000000-MilestoneZeroFoundation";
 import { MilestoneOneAgentEvents1722270001000 } from "./migrations/1722270001000-MilestoneOneAgentEvents";
 import { MilestoneTwoArtifactIdentity1722270002000 } from "./migrations/1722270002000-MilestoneTwoArtifactIdentity";
 import { MilestoneTwoExecutionState1722270003000 } from "./migrations/1722270003000-MilestoneTwoExecutionState";
 import { MilestoneTwoArtifactExposure1722270004000 } from "./migrations/1722270004000-MilestoneTwoArtifactExposure";
 import { MilestoneTwoStateWriteEvidence1722270005000 } from "./migrations/1722270005000-MilestoneTwoStateWriteEvidence";
+import { MilestoneFivePlanProposals1722270009000 } from "./migrations/1722270009000-MilestoneFivePlanProposals";
+import { MilestoneSixDelegationObservations1722270010000 } from "./migrations/1722270010000-MilestoneSixDelegationObservations";
+import { MilestoneSixDelegationRequests1722270011000 } from "./migrations/1722270011000-MilestoneSixDelegationRequests";
+import { MilestoneSevenCapsuleExports1722270012000 } from "./migrations/1722270012000-MilestoneSevenCapsuleExports";
+import { MilestoneFourBudgetLedger1722270006000 } from "./migrations/1722270006000-MilestoneFourBudgetLedger";
+import { MilestoneFourPolicy1722270007000 } from "./migrations/1722270007000-MilestoneFourPolicy";
+import { MilestoneFourApprovals1722270008000 } from "./migrations/1722270008000-MilestoneFourApprovals";
+import { RoadmapLineageIntegrity1722270013000 } from "./migrations/1722270013000-RoadmapLineageIntegrity";
 
 export function databaseOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -48,6 +69,19 @@ export function databaseOptions(
       ArtifactEntity,
       ArtifactExposureEntity,
       StateWriteEvidenceEntity,
+      BudgetAccountEntity,
+      BudgetReservationEntity,
+      BudgetLedgerEntryEntity,
+      PolicySnapshotEntity,
+      PolicyDecisionEntity,
+      ApprovalRequestEntity,
+      PlanProposalEntity,
+      DelegationObservationEntity,
+      DelegationObservationConflictEntity,
+      DelegationRequestEntity,
+      DelegationRequestConflictEntity,
+      ExecutionExportEntity,
+      ExecutionReplayEntity,
     ],
     migrations: [
       MilestoneZeroFoundation1722270000000,
@@ -56,6 +90,14 @@ export function databaseOptions(
       MilestoneTwoExecutionState1722270003000,
       MilestoneTwoArtifactExposure1722270004000,
       MilestoneTwoStateWriteEvidence1722270005000,
+      MilestoneFourBudgetLedger1722270006000,
+      MilestoneFourPolicy1722270007000,
+      MilestoneFourApprovals1722270008000,
+      MilestoneFivePlanProposals1722270009000,
+      MilestoneSixDelegationObservations1722270010000,
+      MilestoneSixDelegationRequests1722270011000,
+      MilestoneSevenCapsuleExports1722270012000,
+      RoadmapLineageIntegrity1722270013000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

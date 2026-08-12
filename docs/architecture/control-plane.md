@@ -848,3 +848,290 @@ optimization only.
 Worker queues, Worker-local callback/idempotency state, Gateway notifications,
 and external side effects remain outside this durability boundary. The system
 does not claim exactly-once execution or external side effects.
+
+## Budget ledger (M4)
+
+The budget ledger is append-only execution authority, not telemetry.
+`budget_accounts` hold immutable grant ceilings per dimension (canonical
+integer units: `currency_micros`, `tokens`, `wall_time_ms`) with optional
+soft ceilings and an optional parent account. `budget_reservations` are
+idempotent pre-authorized maxima — one idempotency key can never reserve
+twice, and a conflicting request is rejected while the first reservation
+stays authoritative. `budget_ledger_entries` are the append-only evidence:
+a reservation debits its account AND every ancestor (one entry per account,
+all under the account-chain `FOR UPDATE` locks); commit records
+actual/estimated usage without moving availability; release credits the
+unused amount back; adjust applies a signed correction.
+
+Availability is a pure projection of ledger truth:
+`ceiling + adjusts + releases − reserves`. `unknown` usage is never zero:
+the reserved maximum stays consumed unless explicit policy releases it.
+Reserve/commit/release/adjust each run in one transaction with the account
+chain locked in id order, so concurrent branches can never collectively
+exceed a hard ceiling and a failure rolls account, reservation, entries,
+and state back together. See `services/orchestrator/src/domain/budget.ts`
+and `services/orchestrator/src/services/budget-ledger.service.ts`.
+
+### Enforcement wiring (M4-S2)
+
+Budgets are opt-in per pipeline: a pipeline may declare an execution-level
+grant (`budget: { tokens, currencyMicros, wallTimeMs }`, frozen into the
+plan revision) and steps may declare per-attempt reservation maxima
+(`step.budget`) which are enforced at the existing transaction owners:
+
+- **Claim** (`ExecutionService.claimRunnableStep`): the execution account is
+  created from the frozen plan grant and every declared step dimension is
+  reserved in the SAME transaction as the attempt + outbox — no work
+  authority without a reservation. `INSUFFICIENT_BUDGET` becomes a durable
+  FAILED attempt that follows the step's failure policy.
+- **Result** (`ResultInboxService.apply`): reported usage
+  (`usage.totalTokens` → `tokens` actual; `usage.costUsd` → `currency_micros`
+  estimated, rounded to micros) is committed and the unused remainder
+  released in the SAME transaction as the terminal application. A terminal
+  result without usage leaves the reservation consumed (unknown is never
+  zero).
+- **Retries** reserve independently (the attempt number is part of the
+  reservation key); a non-retryable dispatch failure releases the attempt's
+  reservation in the failure transaction.
+- **Cancellation** releases the full reservation of every cancelled attempt
+  in the cancel transaction.
+
+Malformed usage never rejects a canonical result: it is treated as no
+report, so the reservation stays consumed. Ledger operations accept an
+optional `EntityManager` so they join the owner transaction atomically.
+
+### Policy decision boundary (M4-S3)
+
+Policy configuration (`TENVYR_POLICY`) is trusted, versioned, minimal,
+deterministic rule data — no executable strings. The first use freezes a
+snapshot per version (one canonical rules hash per version; rotating the
+same version is a `POLICY_VERSION_CONFLICT` safe failure — bump the
+version). Every intercepted action produces a bounded `ActionProposal`
+(actionType `dispatch | plan_patch | delegate | executor_action`, scope,
+target, canonical hash) and an immutable `PolicyDecision` (`ALLOW | DENY |
+REQUIRE_APPROVAL`, reasons, policy version/hash), stored append-only in
+`policy_decisions` in the SAME transaction as the intercepted action.
+
+Only boundaries Tenvyr can stop before side effects are intercepted. The
+dispatch boundary (claim transaction) evaluates BEFORE the budget reserve:
+`DENY` becomes a durable FAILED attempt following the step's failure
+policy; `REQUIRE_APPROVAL` becomes a durable `ApprovalRequest` (PENDING)
+with the attempt and step in `WAITING` — no autonomous progress, never a
+retryable failure; `ALLOW` alone grants no authority — the budget
+reservation is still required. Unlisted actions default to `ALLOW` (policy
+is opt-in declarative data). PlanPatch and delegation boundaries arrive in
+M5/M6.
+
+### Approvals and WAITING (M4-S4)
+
+One `ApprovalRequest` per intercepted action (proposalId unique). Transitions
+are exactly-once under row locks: `PENDING → APPROVED | DENIED | EXPIRED`.
+Approving RESUMES the same attempt (same invocationId): budget reserve →
+attempt WAITING→CREATED → step WAITING→RUNNING → the single outbox row;
+replay returns the same outcome and never mints a second dispatch identity.
+Denying fails the attempt durably per the step's failure policy. Expiry is a
+deterministic time-based transition; the recovery cycle's `expireDue` sweep
+terminalizes due requests (WAITING is never a retryable failure).
+Approval/cancel/result/expiry races serialize on the request + attempt +
+step row locks and the loser no-ops.
+
+### Inheritance, cancellation, and child outcome (M6-S4)
+
+A child can never exceed its parent:
+
+- **Depth + fanout (server-derived)** — the child's depth is the parent's
+  depth + 1 (derived from the `childExecutionId` linkage, never from the
+  runtime), bounded by `DELEGATION_BOUNDS.maxDepth` (3); per-attempt
+  request fanout is bounded (`maxRequestsPerAttempt` 10). Both are
+  enforced at request time and rechecked at approval.
+- **Budget subset** — the child pipeline's grant must be a per-dimension
+  subset of the parent execution's budget account; its execution account
+  is linked to that parent, so every child-attempt reservation traverses
+  the ancestor ledger and concurrent siblings cannot overspend. A parent
+  without a grant cannot have a budgeted child (approval rejects).
+- **Policy + deadline** — approval records a `delegate` policy decision
+  before materialization. The parent attempt's frozen deadline becomes the
+  child execution's `authorityDeadlineAt`; the shared claim transaction caps
+  every child attempt to it and fails the child execution once it has elapsed.
+- **Agent/executor classes + credentials** — the child is a normal
+  execution: its dispatch claims cross the same policy boundary, and
+  credentials stay reference-only through the transport config.
+- **Cancellation cascade (durable, deterministic)** — the recovery cycle
+  cancels every APPROVED child of a CANCELLED parent in deterministic
+  order (createdAt, id), bounded per cycle and crash-resumable; a
+  cancelled parent never leaves a runnable orphan.
+- **Child outcome** — child work is explicit workflow work: a failed or
+  completed child NEVER terminalizes its parent (the parent never
+  waited); late child results follow the normal late-result machinery.
+
+The current runtimes (local-executor-host, worker SDK) have NO durable
+pause/resume capability, so the load-bearing contract resolves to the
+plan's second direction: supervised child work is EXPLICIT WORKFLOW WORK
+outside a paused in-runtime attempt. The parent attempt is never
+suspended: a delegation request does not change the parent's lifecycle
+(the parent completes normally; supervision applies unchanged — a pending
+request is NOT a heartbeat exemption, and a stale parent attempt is
+terminalized deterministically). The delegation request channel is
+service-level (approvals-style); runtimes with durable pause/resume may
+later enter a Tenvyr-owned delegation wait state, but neither AgentEvent
+nor the terminal AgentResult is ever a delegation request channel
+(observed evidence is evidence only — it never promotes to a request).
+Due delegation requests are expired by the recovery cycle (same sweep
+ownership as approvals).
+
+Authoritative supervised delegation is a durable, parent-attempt-scoped
+request: `delegation_requests` (unique (parentAttemptId, requestId),
+PENDING → APPROVED|REJECTED|EXPIRED, deterministic expiry). Requesting is
+idempotent only for the same canonical payload; a reused identity with a
+different payload records append-only conflict evidence and creates no
+authority. Approving materializes the
+child Execution — execution row, plan revision 1, logical steps — via the
+manager-aware materializer INSIDE the decision transaction (all-or-none)
+and links `childExecutionId`; the child is a normal schedulable
+execution. Decisions are terminal and CAS-guarded: concurrent approves
+materialize exactly one child; an expired/rejected request is never
+approved. The closure migration adds durable execution/attempt foreign
+keys and parent/child query indexes without historical backfill.
+
+Native runtime delegation is declared per step (`delegation`):
+
+- **opaque** (default) — the runtime may delegate invisibly; Tenvyr
+  records NOTHING and never invents child lineage.
+- **observed** — the runtime may attach bounded delegation evidence
+  (`result.delegation`, ≤ 32 observations, each provider/childId/
+  assertedAt + ≤ 16 bounded attributes) to its canonical result. The
+  orchestrator persists each observation as inert, hash-pinned evidence
+  correlated to the parent attempt (`delegation_observations`, identity
+  `provider:childId` per attempt; duplicates idempotent; a differing
+  redelivery is a result-level conflict). Observations NEVER schedule,
+  spend, cancel, or terminalize work.
+- **supervised** — declared semantics arrive with M6-S2+ (currently
+  rejected at validation; no silent degradation).
+
+An execution may adapt its UNSTARTED work through bounded structured
+proposals: `PlanPatch` (schema v1) carries a `baseRevision` and a sequence
+of `addStep` / `replaceUnfrozenStep` operations (≤ 20 ops, ≤ 64 KiB
+UTF-8, sequential deterministic application, replacement targets must
+exist, must NOT be frozen, and the replacement's `step.id` must equal
+`stepId`). The whole candidate plan is validated through the exact same
+safe pipeline validation as a new pipeline (`validateSteps`: bounds,
+identifiers, graph/cycles, fanout/depth, durations, retries, budgets,
+conditions).
+
+`plan_proposals` persists every proposal immutably (numbered per
+execution, hash-pinned, `PENDING → ACCEPTED|REJECTED|STALE` terminal
+decisions). `activate` runs the whole activation in ONE transaction under
+the same execution row lock as claims: CAS the active revision against
+`baseRevision` (moved base → STALE), protect every frozen step (any
+logical step with attempts → REJECTED), validate the candidate, insert
+the new revision (`revisionNumber + 1`, parent + base recorded), materialize
+added logical rows, and switch the active pointer — a crash rolls
+everything back and the proposal stays PENDING (retryable); a committed
+decision is final and idempotent. The plan grant (budget envelope) is
+carried over unchanged. The Planner trigger (M5-S3): a step marked `planner: true` is a
+supervised Planner step — its result output must be a bounded PlanPatch,
+which the result application persists as a PENDING proposal INSIDE the
+canonical result transaction (baseRevision pinned to the active revision;
+the planner never receives execution authority). An invalid patch is a
+deterministic `PLANNER_PROPOSAL_INVALID` rejection following the step's
+retry/onFailure policy; late planner results under a terminal execution
+propose nothing.
+
+### Telemetry projection (M7-S4)
+
+`projectTelemetry` derives a bounded OTLP-JSON-shaped projection from the
+capsule (one root span per execution, one span per terminal attempt, one per
+supervised delegation child; deterministic trace/span ids from stable
+identities, globally capped at 101 spans). Span names are static
+(`pipeline.execute`, `step.execute`, `delegation.execute`); dynamic ids are
+bounded attributes. The convention mapping is pinned in one place; a future exporter
+consumes exactly that shape. Telemetry is NEVER authoritative: the
+projection is a pure read, never written back, and cannot influence
+lifecycle. W3C trace context is propagated OUTBOUND ONLY: the HTTP
+adapter adds a deterministic `traceparent` (`00-<traceId>-<spanId>-01`)
+derived from the invocation's own trace identity — inbound trace headers
+are never trusted, so foreign trace/baggage can never widen authority or
+capture.
+
+`compare(a, b)` structurally compares two capsules over STABLE logical
+identities: step drift (id + step-config hash: identical/drifted/
+present*in_a_only/present_in_b_only) and outcome drift (per-step terminal
+attempt status: same/drifted/no_evidence*\*; null-vs-null is "same").
+Truncated sections mark their category `unavailable` — no conclusion is
+drawn; runtime-asserted delegation evidence is a separate
+`runtimeClaims` section and NEVER part of drift conclusions.
+`provenance(executionId)` derives a bounded graph distinguishing
+authority edges (revisions/attempts/budget/policy/supervised delegation
+— durable facts) from claim edges (observed delegation — runtime
+assertions) and exposure edges (M2 artifact exposures, read through the
+claim seam's bounded API; never overclaimed as semantic use).
+
+`createExport` persists a SMALL immutable export manifest pinning an
+execution to its capsule content hash (`execution_exports`, unique
+(executionId, capsuleHash)) — the manifest never duplicates execution
+truth. `replay` builds the source capsule (TERMINAL sources only), pins
+the ACTIVE revision by its plan hash, and materializes a NEW execution
+from the CAPTURED plan + the authoritative immutable source input (never
+the current pipeline) in
+one transaction with the idempotent replay row (`execution_replays`,
+unique (sourceExecutionId, sourceCapsuleHash) — one replay per capsule).
+All authority is RE-EVALUATED by the normal claim machinery: the replay
+target crosses the CURRENT policy/budget/credentials; historical
+approvals are never copied.
+
+`ExecutionCapsuleService.build` assembles the versioned, bounded Execution
+Capsule V1 read model inside a REPEATABLE READ transaction (one
+point-in-time snapshot): execution header (pipeline hash/version, bounded
+input, configuration), immutable plan revisions (number/hash/source/
+reason/validation/budget/steps), bounded attempts with input/context
+snapshot hashes, outbox/inbox/conflict/event counts, ExecutionState
+version/hash and state-write count, artifact producer/exposure counts,
+budget account + reservations, bounded real policy-decision identities,
+approval counts, and exact M6 delegation totals plus bounded edges.
+Terminal executions produce terminal capsules; live
+captures are labelled `pointInTime: "live"`. Every bound that bit
+(revisions > 20, attempts > 100, input > 64 KiB) is recorded as an
+`evidenceCompleteness` warning; `contentHash` is stable over the durable
+facts (volatile capture fields excluded) so identical states compare
+equal. Service-level only — export and public download land in M7-S2
+behind the exposure gate.
+
+Activation is intercepted by the policy boundary BEFORE any activation
+authority: `plan_patch` proposals (id `plan:<proposalId>`, no agent target)
+are evaluated inside the activation transaction. DENY → the proposal is
+durably REJECTED with the decision evidence committed atomically;
+REQUIRE_APPROVAL → a durable `plan_patch` approval request is created and
+the proposal stays PENDING. Approving re-activates INSIDE the approval
+transaction and RECHECKS everything: base revision CAS (a stale approved
+proposal becomes STALE), frozen steps, candidate validity, and policy (a
+now-denied proposal is REJECTED even with a grant). The plan grant and
+growth bounds are unchanged from M5-S2/S1: the patch contract has no
+budget operations and the candidate validation bounds step/depth/fanout
+growth structurally.
+
+An execution may adapt its UNSTARTED work through bounded structured
+proposals: `PlanPatch` (schema v1) carries a `baseRevision` and a sequence
+of `addStep` / `replaceUnfrozenStep` operations (≤ 20 ops, ≤ 64 KiB,
+sequential deterministic application, replacement targets must exist and
+must NOT be frozen). The whole candidate plan is validated through the
+exact same safe pipeline validation as a new pipeline (`validateSteps`:
+bounds, identifiers, graph/cycles, fanout/depth, durations, retries,
+budgets, conditions). Activation, proposal durability, and base-revision
+CAS arrive in M5-S2; the Planner trigger in M5-S3; policy/budget/approval
+enforcement on proposals in M5-S4.
+
+### Hierarchy completeness (M4-S5)
+
+Child grants are fully bounded by ancestor REMAINING grants at every
+boundary. The execution account's parentage comes from the frozen plan
+(`budget.parent` scope reference): the parent must be an
+operator-created account (missing → `ACCOUNT_NOT_FOUND` safe failure), the
+execution grant must be a subset of the parent grant
+(`CHILD_CEILING_EXCEEDS_PARENT`), and every reserve/approve-resume debits
+the whole chain so no ancestor can ever be overspent. `adjust` now
+propagates to the whole chain: a child top-up debits its ancestors (and is
+rejected when any ancestor lacks the room), a child reduction credits them
+back — the root account's adjust remains the operator's pure grant. No
+budget path can mint availability across the hierarchy; the dynamic
+boundary (a reserve fails when it would exceed any ancestor's remaining
+grant) is the invariant.

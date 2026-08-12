@@ -3,8 +3,13 @@ import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
+import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import { DispatchOutboxService } from "./dispatch-outbox.service";
+import {
+  buildExecutorDescriptor,
+  type ExecutorDescriptorV1,
+} from "../executors/executor-descriptor";
 
 const chain = (one?: unknown, affected = 1) => {
   const value: any = {};
@@ -46,6 +51,7 @@ const nonRetryableHarness = (
     maxAttempts?: number;
     logicalStatus?: string;
     outboxAffected?: number;
+    snapshot?: unknown;
   } = {},
 ) => {
   const attemptSelect = chain({
@@ -103,12 +109,18 @@ const nonRetryableHarness = (
         };
       if (entity === DispatchOutboxEntity)
         return { createQueryBuilder: jest.fn(() => outboxTransition) };
+      if (entity === BudgetReservationEntity)
+        return { find: jest.fn().mockResolvedValue([]) };
       throw new Error("unexpected repository");
     }),
   };
   const dataSource = {
     transaction: jest.fn((work: any) => work(manager)),
-    getRepository: jest.fn(),
+    getRepository: jest.fn(() => ({
+      findOne: jest.fn().mockResolvedValue({
+        executorSnapshot: overrides.snapshot ?? { agent: "reviewer" },
+      }),
+    })),
   };
   const adapter = {
     invoke: jest.fn().mockRejectedValue(
@@ -158,7 +170,12 @@ describe("DispatchOutboxService", () => {
   it("uses the claimed lease token when a delivery error returns work to pending", async () => {
     const reset = chain();
     const dataSource = {
-      getRepository: jest.fn(() => ({ createQueryBuilder: jest.fn(() => reset) })),
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue({
+          executorSnapshot: { agent: "reviewer" },
+        }),
+        createQueryBuilder: jest.fn(() => reset),
+      })),
     };
     const adapter = { invoke: jest.fn().mockRejectedValue(new Error("broker unavailable")) };
     const service = new DispatchOutboxService(dataSource as any, adapter as any);
@@ -277,6 +294,8 @@ describe("DispatchOutboxService", () => {
           };
         if (entity === DispatchOutboxEntity)
           return { createQueryBuilder: jest.fn(() => outboxTransition) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         if (entity === LogicalStepEntity || entity === ExecutionEntity)
           throw new Error("must not be reached");
         throw new Error("unexpected repository");
@@ -284,6 +303,11 @@ describe("DispatchOutboxService", () => {
     };
     const dataSource = {
       transaction: jest.fn((work: any) => work(manager)),
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue({
+          executorSnapshot: { agent: "reviewer" },
+        }),
+      })),
     };
     const adapter = {
       invoke: jest.fn().mockRejectedValue(
@@ -384,6 +408,8 @@ describe("DispatchOutboxService", () => {
           return { createQueryBuilder: jest.fn(() => builder), save };
         if (entity === StepAttemptEntity)
           return { createQueryBuilder: jest.fn(() => chain()) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -421,5 +447,360 @@ describe("DispatchOutboxService", () => {
       outcome: "idle",
     });
     expect((service as any).dispatchClaimed).not.toHaveBeenCalled();
+  });
+
+  describe("frozen executor descriptor dispatch (M3)", () => {
+    const snapshotHarness = (snapshot: unknown) => {
+      const attemptSelect = chain({ id: "attempt-1", status: "CREATED" });
+      const receiptUpdate = chain(undefined, 1);
+      const attemptRepository = {
+        createQueryBuilder: jest.fn(() => attemptSelect),
+        save: jest.fn(async (value: any) => value),
+      };
+      const outboxRepository = {
+        createQueryBuilder: jest.fn(() => receiptUpdate),
+      };
+      const manager = {
+        getRepository: jest.fn((entity) =>
+          entity === StepAttemptEntity ? attemptRepository : outboxRepository,
+        ),
+      };
+      const dataSource = {
+        transaction: jest.fn((work: any) => work(manager)),
+        getRepository: jest.fn(() => ({
+          findOne: jest.fn().mockResolvedValue({ executorSnapshot: snapshot }),
+        })),
+      };
+      const adapter = {
+        invoke: jest.fn().mockResolvedValue({
+          adapter: "test",
+          invocationId: "logical-1:1",
+          dispatchedAt: new Date().toISOString(),
+        }),
+      };
+      const service = new DispatchOutboxService(
+        dataSource as any,
+        adapter as any,
+      );
+      (service as any).claimNext = jest.fn().mockResolvedValue(claimed);
+      return { service, adapter };
+    };
+
+    it("passes the versioned descriptor frozen on the attempt to the executor", async () => {
+      const frozen = buildExecutorDescriptor("reviewer", {
+        kind: "http",
+        submitUrl: "https://pinned.example/v1/runs",
+        outboundAuthentication: { type: "none" },
+        callbackAuthentication: { keyId: "k", secret: "s" },
+        requestTimeoutMs: 1000,
+        maxResponseBytes: 1024,
+        delegationModes: ["opaque", "observed"],
+      });
+      const { service, adapter } = snapshotHarness(frozen);
+
+      const disposition = await service.dispatchNext();
+
+      expect(disposition).toEqual({ outcome: "dispatched" });
+      expect(adapter.invoke).toHaveBeenCalledTimes(1);
+      expect(adapter.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({ invocationId: "logical-1:1" }),
+        frozen,
+      );
+    });
+
+    it("routes a legacy { agent } snapshot through live configuration", async () => {
+      const { service, adapter } = snapshotHarness({ agent: "reviewer" });
+
+      await service.dispatchNext();
+
+      // The default test configuration has no HTTP agents, so the legacy
+      // snapshot resolves to the Kafka executor, exactly the pre-M3 behavior.
+      expect(adapter.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({ invocationId: "logical-1:1" }),
+        expect.objectContaining({ schemaVersion: "1", kind: "kafka", agent: "reviewer" }),
+      );
+    });
+
+    it("turns an unreadable frozen snapshot into a terminal failure, not a fallback", async () => {
+      const { service, outboxTransition } = nonRetryableHarness({
+        snapshot: {},
+        onFailure: "stop",
+      });
+
+      const disposition = await service.dispatchNext();
+
+      expect(disposition).toEqual({
+        outcome: "terminal_failure",
+        executionId: "execution-1",
+      });
+      expect(outboxTransition.set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "FAILED", leaseToken: null }),
+      );
+    });
+  });
+
+  describe("best-effort executor cancellation (M3-S2)", () => {
+    const cancelHarness = (
+      options: {
+        attempts?: Array<{ id: string; executorSnapshot: unknown }>;
+        rows?: Array<{
+          id: string;
+          stepAttemptId: string;
+          invocation: Record<string, unknown>;
+          receipt: Record<string, unknown> | null;
+          error: string | null;
+        }>;
+        adapter?: any;
+      } = {},
+    ) => {
+      const attempts = options.attempts ?? [
+        {
+          id: "attempt-1",
+          executorSnapshot: buildExecutorDescriptor("reviewer", {
+            kind: "kafka",
+            delegationModes: ["opaque", "observed"],
+          }),
+        },
+      ];
+      const rows = options.rows ?? [
+        {
+          id: "outbox-1",
+          stepAttemptId: "attempt-1",
+          invocation: {
+            invocationId: "logical-1:1",
+            executionId: "execution-1",
+            target: { agent: "reviewer" },
+          },
+          receipt: { adapter: "http", dispatchId: "run-1" },
+          error: null,
+        },
+      ];
+      const selectChain: any = {};
+      for (const method of ["where", "andWhere", "update", "set"]) {
+        selectChain[method] = jest.fn(() => selectChain);
+      }
+      selectChain.getMany = jest
+        .fn()
+        .mockResolvedValueOnce(rows)
+        .mockResolvedValue([]);
+      selectChain.execute = jest.fn().mockResolvedValue({ affected: 1 });
+      const attemptRepository = { find: jest.fn().mockResolvedValue(attempts) };
+      const outboxRepository = {
+        createQueryBuilder: jest.fn(() => selectChain),
+      };
+      const dataSource = {
+        getRepository: jest.fn((entity) =>
+          entity === StepAttemptEntity ? attemptRepository : outboxRepository,
+        ),
+      };
+      const adapter =
+        options.adapter ??
+        ({
+          kind: "http",
+          invoke: jest.fn(),
+        } as any);
+      const service = new DispatchOutboxService(dataSource as any, adapter);
+      return { service, adapter, selectChain };
+    };
+
+    it("selects only COMPLETED outbox rows with a receipt and no recorded outcome", async () => {
+      const { service, selectChain } = cancelHarness({ rows: [] });
+
+      await service.notifyCancel("execution-1", "cancelled");
+
+      expect(selectChain.andWhere).toHaveBeenCalledWith(
+        'outbox."status" = :status',
+        { status: "COMPLETED" },
+      );
+      expect(selectChain.andWhere).toHaveBeenCalledWith(
+        'outbox."receipt" IS NOT NULL',
+      );
+      expect(selectChain.andWhere).toHaveBeenCalledWith(
+        'outbox."error" IS NULL',
+      );
+    });
+
+    it("considers only attempts that were actually cancelled", async () => {
+      const attemptRepository = {
+        find: jest.fn().mockResolvedValue([]),
+      };
+      const selectChain: any = {};
+      for (const method of ["where", "andWhere", "update", "set"]) {
+        selectChain[method] = jest.fn(() => selectChain);
+      }
+      selectChain.getMany = jest.fn().mockResolvedValue([]);
+      selectChain.execute = jest.fn().mockResolvedValue({ affected: 1 });
+      const dataSource = {
+        getRepository: jest.fn((entity) =>
+          entity === StepAttemptEntity
+            ? attemptRepository
+            : { createQueryBuilder: jest.fn(() => selectChain) },
+        ),
+      };
+      const service = new DispatchOutboxService(
+        dataSource as any,
+        { kind: "http", invoke: jest.fn() } as any,
+      );
+
+      await service.notifyCancel("execution-1", "cancelled");
+
+      // Succeeded attempts (SUCCESS) must never be notified or marked.
+      expect(attemptRepository.find).toHaveBeenCalledWith({
+        where: { executionId: "execution-1", status: "CANCELLED" },
+        select: ["id", "executorSnapshot"],
+      });
+    });
+
+    it("records unsupported when the frozen descriptor cannot cancel and never calls the adapter", async () => {
+      const { service, selectChain } = cancelHarness({
+        adapter: { kind: "http", invoke: jest.fn() },
+      });
+
+      const summary = await service.notifyCancel("execution-1", "cancelled");
+
+      expect(summary).toEqual({ notified: 0, unsupported: 1, unreachable: 0 });
+      expect(selectChain.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining("unsupported"),
+        }),
+      );
+    });
+
+    it("notifies the executor when the frozen descriptor declares cancel support", async () => {
+      const cancel = jest
+        .fn()
+        .mockResolvedValue({
+          adapter: "http",
+          invocationId: "logical-1:1",
+          delivered: true,
+        });
+      const supporting: ExecutorDescriptorV1 = {
+        ...buildExecutorDescriptor("reviewer", {
+          kind: "kafka",
+          delegationModes: ["opaque", "observed"],
+        }),
+        capabilities: { cancel: true },
+      };
+      const { service, selectChain } = cancelHarness({
+        attempts: [
+          { id: "attempt-1", executorSnapshot: supporting },
+        ],
+        adapter: { kind: "http", invoke: jest.fn(), cancel },
+      });
+
+      const summary = await service.notifyCancel("execution-1", "cancelled");
+
+      expect(summary).toEqual({ notified: 1, unsupported: 0, unreachable: 0 });
+      expect(cancel).toHaveBeenCalledWith({
+        invocationId: "logical-1:1",
+        executionId: "execution-1",
+        dispatchId: "run-1",
+        reason: "cancelled",
+      });
+      // A delivered cancel is recorded as evidence (and idempotency marker).
+      expect(selectChain.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining("delivered"),
+        }),
+      );
+      expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("records unreachable when the executor rejects, throws, or does not acknowledge", async () => {
+      const cancel = jest
+        .fn()
+        .mockResolvedValueOnce({ adapter: "http", invocationId: "a", delivered: false })
+        .mockRejectedValueOnce(
+          new AgentAdapterError("HTTP_CONNECTION_FAILED", "http", "down", {
+            retryable: true,
+          }),
+        );
+      const supporting: ExecutorDescriptorV1 = {
+        ...buildExecutorDescriptor("reviewer", {
+          kind: "kafka",
+          delegationModes: ["opaque", "observed"],
+        }),
+        capabilities: { cancel: true },
+      };
+      const { service, selectChain } = cancelHarness({
+        attempts: [
+          { id: "attempt-1", executorSnapshot: supporting },
+          { id: "attempt-2", executorSnapshot: supporting },
+        ],
+        rows: [
+          {
+            id: "outbox-1",
+            stepAttemptId: "attempt-1",
+            invocation: { invocationId: "a", target: { agent: "reviewer" } },
+            receipt: { dispatchId: "run-1" },
+            error: null,
+          },
+          {
+            id: "outbox-2",
+            stepAttemptId: "attempt-2",
+            invocation: { invocationId: "b", target: { agent: "reviewer" } },
+            receipt: { dispatchId: "run-2" },
+            error: null,
+          },
+        ],
+        adapter: { kind: "http", invoke: jest.fn(), cancel },
+      });
+
+      const summary = await service.notifyCancel("execution-1", "cancelled");
+
+      expect(summary).toEqual({ notified: 0, unsupported: 0, unreachable: 2 });
+      expect(selectChain.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining("unreachable"),
+        }),
+      );
+    });
+
+    it("records unsupported for unreadable frozen evidence without throwing", async () => {
+      const { service, selectChain } = cancelHarness({
+        attempts: [{ id: "attempt-1", executorSnapshot: {} }],
+      });
+
+      const summary = await service.notifyCancel("execution-1", "cancelled");
+
+      expect(summary).toEqual({ notified: 0, unsupported: 1, unreachable: 0 });
+      expect(selectChain.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining("unsupported"),
+        }),
+      );
+    });
+
+    it("is idempotent across repeated cancellations", async () => {
+      const cancel = jest
+        .fn()
+        .mockResolvedValue({
+          adapter: "http",
+          invocationId: "logical-1:1",
+          delivered: true,
+        });
+      const supporting: ExecutorDescriptorV1 = {
+        ...buildExecutorDescriptor("reviewer", {
+          kind: "kafka",
+          delegationModes: ["opaque", "observed"],
+        }),
+        capabilities: { cancel: true },
+      };
+      const { service } = cancelHarness({
+        attempts: [
+          { id: "attempt-1", executorSnapshot: supporting },
+        ],
+        adapter: { kind: "http", invoke: jest.fn(), cancel },
+      });
+
+      const first = await service.notifyCancel("execution-1", "cancelled");
+      const second = await service.notifyCancel("execution-1", "cancelled");
+
+      expect(first).toEqual({ notified: 1, unsupported: 0, unreachable: 0 });
+      // The second pass sees no eligible rows (the filter excludes rows with
+      // a recorded outcome), so the executor is never re-notified.
+      expect(second).toEqual({ notified: 0, unsupported: 0, unreachable: 0 });
+      expect(cancel).toHaveBeenCalledTimes(1);
+    });
   });
 });

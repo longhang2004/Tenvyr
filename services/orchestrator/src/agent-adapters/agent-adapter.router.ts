@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { AgentAdapterError } from './agent-adapter.errors';
 import type { AgentAdapter, AgentAdapterHandlers, AgentDispatchReceipt } from './agent-adapter.types';
 import { AgentTransportConfigService } from './agent-transport-config.service';
+import type { ExecutorDescriptorV1 } from '../executors/executor-descriptor';
 import { HttpAgentAdapter } from './http-agent.adapter';
 import { KafkaAgentAdapter } from './kafka-agent.adapter';
 
@@ -64,7 +65,10 @@ export class AgentAdapterRouter implements AgentAdapter {
     this.started = false;
   }
 
-  async invoke(invocation: Parameters<AgentAdapter['invoke']>[0]): Promise<AgentDispatchReceipt> {
+  async invoke(
+    invocation: Parameters<AgentAdapter['invoke']>[0],
+    pinned?: ExecutorDescriptorV1,
+  ): Promise<AgentDispatchReceipt> {
     if (!this.started) {
       throw new AgentAdapterError('ADAPTER_NOT_STARTED', this.kind, 'Agent adapter router is not started', {
         invocationId: invocation.invocationId,
@@ -72,8 +76,26 @@ export class AgentAdapterRouter implements AgentAdapter {
       });
     }
 
-    return this.transportConfig.forAgent(invocation.target.agent).kind === 'http'
-      ? this.httpAdapter.invoke(invocation)
-      : this.kafkaAdapter.invoke(invocation);
+    // M3: dispatch consumes the executor descriptor frozen on the attempt.
+    // When pinned, the descriptor chooses the executor (a rotated live
+    // configuration can never silently reroute a pending outbox); live
+    // configuration only supplies secrets for that exact profile. Without a
+    // pinned descriptor the legacy live-configuration routing applies.
+    const kind = pinned?.kind ?? this.transportConfig.forAgent(invocation.target.agent).kind;
+    if (kind === 'http') {
+      if (pinned && !pinned.httpProfile) {
+        throw new AgentAdapterError(
+          'EXECUTOR_PROFILE_MISMATCH',
+          this.kind,
+          'Pinned HTTP executor descriptor is missing its routing profile',
+          {
+            invocationId: invocation.invocationId,
+            retryable: false,
+          },
+        );
+      }
+      return this.httpAdapter.invoke(invocation, pinned);
+    }
+    return this.kafkaAdapter.invoke(invocation, pinned);
   }
 }

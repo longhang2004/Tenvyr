@@ -205,6 +205,7 @@ const wireProtocolPaths = new Set([
   "services/orchestrator/src/agent-adapters/http-python-worker.integration.spec.ts",
   "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts",
   "packages/worker/test/callback.spec.ts",
+  "services/local-executor-host/integration/local-executor-host.integration.spec.ts",
   "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
   "sdks/python-worker/README.md",
   "sdks/python-worker/CONFORMANCE.md",

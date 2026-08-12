@@ -10,6 +10,8 @@ import {
 } from "./agent-transport-config.service";
 import { createHttpCallbackSignature } from "./http-callback-auth";
 import { HttpAgentAdapter } from "./http-agent.adapter";
+import { w3cTraceparent } from "./http-agent.adapter";
+import { buildExecutorDescriptor } from "../executors/executor-descriptor";
 
 const invocation: AgentInvocationV1 = {
   schemaVersion: "1",
@@ -340,6 +342,73 @@ describe("HttpAgentAdapter", () => {
       expect(logged).not.toContain("bearer-secret");
       expect(logged).not.toContain("callback-secret");
       expect(logged).not.toContain("TOP_SECRET_RESPONSE");
+    });
+  });
+
+  describe("pinned executor descriptor (M3)", () => {
+    let eventHandler: jest.Mock;
+
+    beforeEach(async () => {
+      eventHandler = jest.fn().mockResolvedValue(undefined);
+      await adapter.start({ result: handler, event: eventHandler });
+    });
+
+    const pinnedDescriptor = () =>
+      buildExecutorDescriptor("remote-security-reviewer", {
+        kind: "http",
+        submitUrl: "https://pinned-agent.internal/v1/runs",
+        outboundAuthentication: { type: "bearer", token: "pinned-token" },
+        callbackAuthentication: { keyId: "pinned-key", secret: "pinned-secret" },
+        requestTimeoutMs: 2000,
+        maxResponseBytes: 4096,
+        delegationModes: ["opaque", "observed"],
+      });
+
+    it("submits to the frozen routing profile while live configuration still supplies secrets", async () => {
+      await adapter.invoke(invocation, pinnedDescriptor());
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      // Routing facts come from the frozen descriptor, not the live URL.
+      expect(url).toBe("https://pinned-agent.internal/v1/runs");
+      // Secret values still resolve from live configuration for that profile.
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer bearer-secret",
+      });
+    });
+
+    it("fails deterministically when the live profile no longer matches the pinned executor", async () => {
+      const rotatedConfig = new AgentTransportConfigService(
+        parseAgentTransportConfiguration(
+          environment({
+            // The agent rotated to Kafka after the attempt was frozen.
+            AGENT_TRANSPORT_CONFIG: JSON.stringify({
+              "remote-security-reviewer": { kind: "kafka" },
+            }),
+          }),
+        ),
+      );
+      const rotatedAdapter = new HttpAgentAdapter(rotatedConfig);
+      await rotatedAdapter.start({ result: handler, event: jest.fn() });
+
+      await expect(
+        rotatedAdapter.invoke(invocation, pinnedDescriptor()),
+      ).rejects.toMatchObject({
+        code: "EXECUTOR_PROFILE_MISMATCH",
+        retryable: false,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a pinned descriptor without a routing profile instead of falling back", async () => {
+      const broken = pinnedDescriptor();
+      (broken as any).httpProfile = undefined;
+
+      await expect(adapter.invoke(invocation, broken)).rejects.toMatchObject({
+        code: "EXECUTOR_PROFILE_MISMATCH",
+        retryable: false,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
@@ -746,5 +815,31 @@ describe("HttpAgentAdapter", () => {
       await expect(adapter.handleCallback(request)).resolves.toBe("processed");
       expect(eventHandler).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe("w3cTraceparent (M7-S4)", () => {
+  const invocation = {
+    invocationId: "inv-1",
+    trace: { traceId: "550e8400-e29b-41d4-a716-446655440000" },
+  };
+
+  it("is deterministic and well-formed", () => {
+    const first = w3cTraceparent(invocation);
+    expect(first).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(w3cTraceparent(invocation)).toBe(first);
+    expect(first!.split("-")[1]).toBe("550e8400e29b41d4a716446655440000");
+  });
+
+  it("returns null without identity, with malformed trace ids, or all-zero ids", () => {
+    expect(w3cTraceparent({ invocationId: "x" })).toBeNull();
+    expect(w3cTraceparent({ trace: { traceId: "x" } })).toBeNull();
+    expect(w3cTraceparent({ invocationId: "x", trace: { traceId: "short" } })).toBeNull();
+    expect(
+      w3cTraceparent({
+        invocationId: "x",
+        trace: { traceId: "00000000000000000000000000000000" },
+      }),
+    ).toBeNull();
   });
 });

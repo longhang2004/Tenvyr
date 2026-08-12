@@ -30,6 +30,14 @@ import {
   StepAttemptEntity,
   type StepAttemptStatus,
 } from "../entities/step-attempt.entity";
+import { PlanProposalEntity } from "../entities/plan-proposal.entity";
+import { DelegationObservationEntity } from "../entities/delegation-observation.entity";
+import { DelegationObservationConflictEntity } from "../entities/delegation-observation-conflict.entity";
+import { BudgetLedgerService } from "./budget-ledger.service";
+import { PlanProposalService } from "./plan-proposal.service";
+import { PipelineValidationService } from "./pipeline-validation.service";
+import { ConditionEvaluatorService } from "./condition-evaluator.service";
+import { usageFromResult, type UsageObservation } from "../domain/budget";
 
 const TERMINAL_ATTEMPTS: StepAttemptStatus[] = [
   "SUCCESS",
@@ -69,7 +77,23 @@ type StateWriteApplication =
 
 @Injectable()
 export class ResultInboxService {
-  constructor(@Inject("DATA_SOURCE") private readonly dataSource: DataSource) {}
+  constructor(
+    @Inject("DATA_SOURCE") private readonly dataSource: DataSource,
+    budgetLedger?: BudgetLedgerService,
+    proposals?: PlanProposalService,
+  ) {
+    this.budgetLedger =
+      budgetLedger ?? new BudgetLedgerService(this.dataSource);
+    this.proposals =
+      proposals ??
+      new PlanProposalService(
+        this.dataSource,
+        new PipelineValidationService(new ConditionEvaluatorService()),
+      );
+  }
+
+  private readonly budgetLedger: BudgetLedgerService;
+  private readonly proposals: PlanProposalService;
 
   /**
    * The inbox row and authoritative terminal transition commit together. A
@@ -282,6 +306,34 @@ export class ResultInboxService {
         }
       }
 
+      // M5-S3: a supervised Planner step's successful output is a bounded
+      // PlanPatch — nothing more. It is persisted as a PENDING proposal
+      // inside THIS transaction (the planner never receives execution
+      // authority); an invalid patch is a deterministic Tenvyr rejection
+      // that follows the step's retry/onFailure policy. The baseRevision is
+      // pinned to the active revision by proposeWithManager.
+      if (
+        execution.status === "RUNNING" &&
+        result.status === "succeeded" &&
+        stepConfig?.planner &&
+        postconditionFailure === null &&
+        !TERMINAL_ATTEMPTS.includes(attempt.status)
+      ) {
+        try {
+          await this.proposals.proposeWithManager(
+            manager,
+            execution.id,
+            result.output,
+            "planner",
+          );
+        } catch (error) {
+          effectiveTerminalStatus = "FAILED";
+          postconditionFailure = `PLANNER_PROPOSAL_INVALID: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      }
+
       if (!TERMINAL_ATTEMPTS.includes(attempt.status)) {
         const transition = await manager
           .getRepository(StepAttemptEntity)
@@ -303,6 +355,27 @@ export class ResultInboxService {
         if (transition.affected !== 1) {
           throw new Error("Attempt terminal transition lost its guard");
         }
+
+        // M4-S2: reconcile the attempt's budget reservations ONLY when THIS
+        // result owns the terminal transition (affected === 1). A late
+        // result for an attempt already terminalized elsewhere (e.g. a
+        // non-retryable dispatch failure that released the reservation)
+        // must never re-enter the ledger — its inbox row still becomes
+        // APPLIED as duplicate evidence below.
+        let usage: UsageObservation[] = [];
+        try {
+          usage = usageFromResult(result.usage);
+        } catch (error) {
+          console.warn("Result usage ignored as malformed", {
+            invocationId: attempt.invocationId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await this.budgetLedger.reconcileTerminal(
+          manager,
+          attempt.invocationId,
+          usage,
+        );
       }
 
       // Retire any pending/leased delivery in the same transaction as the
@@ -418,6 +491,77 @@ export class ResultInboxService {
           })
           .orIgnore()
           .execute();
+      }
+
+      // M6-S1: OBSERVED-mode delegation evidence — inert, bounded,
+      // hash-pinned rows correlated to THIS attempt, persisted in the same
+      // transaction as the canonical result. Observations never schedule,
+      // spend, cancel, or terminalize work. Identity is
+      // (stepAttemptId, provider:childId): duplicates are idempotent
+      // (orIgnore), a same-identity different-payload delivery is retained
+      // in the conflict table, and the canonical row stays authoritative.
+      const observations = result.delegation ?? [];
+      if (observations.length > 0 && stepConfig?.delegation === "observed") {
+        // Evidence is inert and failure-isolated: a persistence problem
+        // must never roll back the canonical terminal transition (the
+        // same precedent as usage reconciliation).
+        try {
+          const observationRepository = manager.getRepository(
+            DelegationObservationEntity,
+          );
+          for (const observation of observations) {
+            const observationHash = sha256Json(observation);
+            const observationId = `${observation.provider}:${observation.childId}`;
+            await observationRepository
+              .createQueryBuilder()
+              .insert()
+              .into(DelegationObservationEntity)
+              .values({
+                stepAttemptId: attempt.id,
+                invocationId: attempt.invocationId,
+                executionId: attempt.executionId,
+                observationId,
+                provider: observation.provider,
+                childId: observation.childId,
+                payloadHash: observationHash,
+                payload: observation,
+                occurredAt: new Date(observation.assertedAt),
+              })
+              .orIgnore()
+              .execute();
+            const after = await observationRepository
+              .createQueryBuilder("observation")
+              .where('observation."stepAttemptId" = :stepAttemptId', {
+                stepAttemptId: attempt.id,
+              })
+              .andWhere('observation."observationId" = :observationId', {
+                observationId,
+              })
+              .getOne();
+            if (after && after.payloadHash !== observationHash) {
+              await manager
+                .getRepository(DelegationObservationConflictEntity)
+                .createQueryBuilder()
+                .insert()
+                .into(DelegationObservationConflictEntity)
+                .values({
+                  stepAttemptId: attempt.id,
+                  executionId: attempt.executionId,
+                  observationId,
+                  payloadHash: observationHash,
+                  payload: observation,
+                  conflictKind: "identity_payload",
+                })
+                .orIgnore()
+                .execute();
+            }
+          }
+        } catch (error) {
+          console.warn("Delegation observations ignored as malformed", {
+            invocationId: attempt.invocationId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       inbox.status = "APPLIED";

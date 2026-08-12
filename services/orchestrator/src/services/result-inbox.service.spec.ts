@@ -8,6 +8,7 @@ import { ResultConflictEntity } from "../entities/result-conflict.entity";
 import { ResultInboxEntity } from "../entities/result-inbox.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
+import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
 import { ResultInboxService } from "./result-inbox.service";
 
 const result: AgentResultV1 = {
@@ -79,6 +80,8 @@ describe("ResultInboxService", () => {
           };
         if (entity === LogicalStepEntity)
           return { createQueryBuilder: jest.fn(() => logicalSelect) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -117,6 +120,8 @@ describe("ResultInboxService", () => {
           };
         if (entity === ResultConflictEntity)
           return { createQueryBuilder: jest.fn(() => conflictInsert) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -161,6 +166,8 @@ describe("ResultInboxService", () => {
           };
         if (entity === ResultConflictEntity)
           return { createQueryBuilder: jest.fn(() => conflictInsert) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -233,6 +240,8 @@ describe("ResultInboxService", () => {
             createQueryBuilder: jest.fn(() => executionSelect),
             save: jest.fn(),
           };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -316,6 +325,8 @@ describe("ResultInboxService", () => {
             createQueryBuilder: jest.fn(() => executionSelect),
             save: executionSave,
           };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -382,6 +393,8 @@ describe("ResultInboxService", () => {
             createQueryBuilder: jest.fn(() => executionSelect),
             save: executionSave,
           };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -461,6 +474,8 @@ describe("ResultInboxService", () => {
             createQueryBuilder: jest.fn(() => executionSelect),
             save: executionSave,
           };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -543,6 +558,8 @@ describe("ResultInboxService", () => {
             createQueryBuilder: jest.fn(() => executionSelect),
             save: executionSave,
           };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -620,6 +637,8 @@ describe("ResultInboxService", () => {
           };
         if (entity === ArtifactEntity)
           return { createQueryBuilder: jest.fn(() => artifactInsert) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -720,6 +739,8 @@ describe("ResultInboxService", () => {
           };
         if (entity === LogicalStepEntity)
           return { createQueryBuilder: jest.fn(() => logicalSelect) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -774,6 +795,8 @@ describe("ResultInboxService", () => {
           return { createQueryBuilder: jest.fn(() => conflictInsert) };
         if (entity === LogicalStepEntity)
           return { createQueryBuilder: jest.fn(() => logicalSelect) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -789,6 +812,8 @@ describe("ResultInboxService", () => {
       getRepository: jest.fn((entity: any) => {
         if (entity === StepAttemptEntity)
           return { createQueryBuilder: jest.fn(() => chain(undefined)) };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };
@@ -834,6 +859,8 @@ describe("ResultInboxService", () => {
             createQueryBuilder: jest.fn(() => cancelledExecutionSelect),
             save: jest.fn(),
           };
+        if (entity === BudgetReservationEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
         throw new Error("unexpected repository");
       }),
     };

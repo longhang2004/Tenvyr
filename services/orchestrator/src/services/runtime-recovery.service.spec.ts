@@ -57,6 +57,14 @@ describe("RuntimeRecoveryService", () => {
       (overrides.inbox ?? inbox) as any,
       (overrides.engine ?? engine) as any,
       (overrides.supervision ?? supervision) as any,
+      {
+        expireDue: jest.fn().mockResolvedValue(0),
+      } as any,
+      undefined, // executionService: unused by these tests
+      {
+        expireDue: jest.fn().mockResolvedValue(0),
+        cancelOrphans: jest.fn().mockResolvedValue(0),
+      } as any,
     );
     return {
       service,

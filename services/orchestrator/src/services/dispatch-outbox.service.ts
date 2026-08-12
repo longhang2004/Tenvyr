@@ -9,6 +9,9 @@ import { parseAgentInvocation, type AgentInvocationV1 } from "@tenvyr/contracts"
 import { AGENT_ADAPTER } from "../agent-adapters/agent-adapter";
 import { AgentAdapterError } from "../agent-adapters/agent-adapter.errors";
 import type { AgentAdapter } from "../agent-adapters/agent-adapter.types";
+import { AgentTransportConfigService } from "../agent-adapters/agent-transport-config.service";
+import { BudgetLedgerService } from "./budget-ledger.service";
+import type { ExecutorDescriptorV1 } from "../executors/executor-descriptor";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
@@ -53,6 +56,15 @@ export type RecoverySummary = {
   retryableFailures: number;
 };
 
+export type ExecutorCancelSummary = {
+  /** Executor cancel requests acknowledged by the executor boundary. */
+  notified: number;
+  /** Attempts whose frozen descriptor or adapter cannot cancel. */
+  unsupported: number;
+  /** Attempts whose cancel request could not be delivered. */
+  unreachable: number;
+};
+
 // ponytail: hard ceiling per recovery drain. Each iteration claims a distinct
 // outbox record and retryable failures move nextDispatchAt into the future,
 // so 100 iterations cover far more than one batch of healthy records; the
@@ -64,7 +76,14 @@ export class DispatchOutboxService {
   constructor(
     @Inject("DATA_SOURCE") private readonly dataSource: DataSource,
     @Inject(AGENT_ADAPTER) private readonly adapter: AgentAdapter,
-  ) {}
+    private readonly transportConfig: AgentTransportConfigService = new AgentTransportConfigService(),
+    budgetLedger?: BudgetLedgerService,
+  ) {
+    this.budgetLedger =
+      budgetLedger ?? new BudgetLedgerService(this.dataSource);
+  }
+
+  private readonly budgetLedger: BudgetLedgerService;
 
   /**
    * Claims the globally-oldest eligible outbox record and delivers it.
@@ -103,9 +122,13 @@ export class DispatchOutboxService {
     claimed: DispatchOutboxEntity,
   ): Promise<DispatchDisposition> {
     try {
-      const receipt = await this.adapter.invoke(
-        parseAgentInvocation(claimed.invocation) as AgentInvocationV1,
-      );
+      const invocation = parseAgentInvocation(claimed.invocation) as AgentInvocationV1;
+      // M3: every dispatch consumes the executor descriptor frozen on the
+      // attempt — never the live configuration. Redelivery of this outbox row
+      // reuses the same invocation AND the same pinned descriptor; a rotated
+      // live configuration cannot silently reroute it.
+      const pinned = await this.frozenDescriptor(claimed.stepAttemptId, invocation);
+      const receipt = await this.adapter.invoke(invocation, pinned);
       await this.markDispatched(claimed, receipt);
       return { outcome: "dispatched" };
     } catch (error) {
@@ -201,6 +224,17 @@ export class DispatchOutboxService {
           terminal: TERMINAL_ATTEMPT_STATUSES,
         })
         .execute();
+
+      // M4-S2: the invocation never received work authority at the
+      // executor, so its reservation is fully unused — release it in the
+      // same transaction as the terminal failure.
+      if (transition.affected === 1) {
+        await this.budgetLedger.releaseForAction(
+          manager,
+          attempt.invocationId,
+          "non-retryable dispatch failure",
+        );
+      }
       if (transition.affected !== 1) return;
 
       // Lock order mirrors result application (attempt -> logical step ->
@@ -370,6 +404,162 @@ export class DispatchOutboxService {
         .where('outbox."stepAttemptId" = :stepAttemptId', { stepAttemptId });
       return this.leaseOutboxRow(manager, builder);
     });
+  }
+
+  /**
+   * M3-S2: best-effort executor cancellation for every DISPATCHED attempt of
+   * an already-cancelled execution. Tenvyr cancellation is committed BEFORE
+   * this runs (attempt/execution CANCELLED, outbox retired) — this only
+   * notifies the executor and records the outcome as durable evidence on the
+   * outbox row (`error` = `cancel notification: ...`), which also makes
+   * repeated calls idempotent. Capability-gated by the attempt's frozen
+   * descriptor AND the adapter's optional `cancel` method: a missing
+   * capability is recorded as unsupported, an unreachable executor as
+   * unreachable. Per-row executor failures never throw and never block the
+   * committed cancellation; only a database failure of the evidence read can
+   * propagate (the engine guard warns and preserves the commit).
+   */
+  async notifyCancel(
+    executionId: string,
+    reason: string,
+  ): Promise<ExecutorCancelSummary> {
+    // Only attempts that were actually cancelled (in-flight at cancel time)
+    // are notified; attempts that SUCCEEDED before the cancellation keep
+    // their SUCCESS evidence and never receive a spurious cancel marker.
+    const attempts = await this.dataSource
+      .getRepository(StepAttemptEntity)
+      .find({
+        where: { executionId, status: "CANCELLED" },
+        select: ["id", "executorSnapshot"],
+      });
+    const snapshots = new Map(
+      attempts.map((attempt) => [attempt.id, attempt.executorSnapshot]),
+    );
+    const rows = await this.dataSource
+      .getRepository(DispatchOutboxEntity)
+      .createQueryBuilder("outbox")
+      .where('outbox."stepAttemptId" IN (:...attemptIds)', {
+        attemptIds: attempts.map((attempt) => attempt.id),
+      })
+      .andWhere('outbox."status" = :status', { status: "COMPLETED" })
+      .andWhere('outbox."receipt" IS NOT NULL')
+      // Rows that already carry a cancel notification are skipped so repeated
+      // cancelExecution calls never re-notify.
+      .andWhere('outbox."error" IS NULL')
+      .getMany();
+
+    const summary: ExecutorCancelSummary = {
+      notified: 0,
+      unsupported: 0,
+      unreachable: 0,
+    };
+    for (const row of rows) {
+      const snapshot = snapshots.get(row.stepAttemptId);
+      const invocation = row.invocation as Record<string, unknown>;
+      const receipt = (row.receipt ?? {}) as Record<string, unknown>;
+      const invocationId = String(invocation.invocationId ?? "");
+      const dispatchId =
+        typeof receipt.dispatchId === "string" ? receipt.dispatchId : undefined;
+      const target = (invocation.target ?? {}) as Record<string, unknown>;
+      const agent = typeof target.agent === "string" ? target.agent : "";
+      let descriptor: ExecutorDescriptorV1 | undefined;
+      try {
+        descriptor = snapshot
+          ? this.transportConfig.frozenDescriptor(snapshot)
+          : undefined;
+      } catch {
+        // Unreadable frozen evidence: record the limitation and continue —
+        // the notification is best-effort and must never throw.
+        await this.recordCancelOutcome(
+          row.id,
+          "cancel notification: unsupported (frozen executor snapshot unreadable)",
+        );
+        summary.unsupported += 1;
+        continue;
+      }
+
+      if (!descriptor?.capabilities.cancel || !this.adapter.cancel) {
+        await this.recordCancelOutcome(
+          row.id,
+          `cancel notification: unsupported (agent "${agent}" executor cannot cancel)`,
+        );
+        summary.unsupported += 1;
+        continue;
+      }
+      try {
+        const outcome = await this.adapter.cancel({
+          invocationId,
+          executionId,
+          dispatchId,
+          reason,
+        });
+        if (outcome.delivered) {
+          // Every cancel attempt leaves durable evidence on the outbox row;
+          // the recorded outcome is also the idempotency marker that stops
+          // repeated cancelExecution calls from re-notifying.
+          await this.recordCancelOutcome(
+            row.id,
+            "cancel notification: delivered",
+          );
+          summary.notified += 1;
+        } else {
+          await this.recordCancelOutcome(
+            row.id,
+            `cancel notification: unreachable (executor did not acknowledge: ${this.message(outcome.message)})`,
+          );
+          summary.unreachable += 1;
+        }
+      } catch (error) {
+        await this.recordCancelOutcome(
+          row.id,
+          `cancel notification: unreachable (${this.message(error)})`,
+        );
+        summary.unreachable += 1;
+      }
+    }
+    return summary;
+  }
+
+  private async recordCancelOutcome(
+    outboxId: string,
+    outcome: string,
+  ): Promise<void> {
+    await this.dataSource
+      .getRepository(DispatchOutboxEntity)
+      .createQueryBuilder()
+      .update(DispatchOutboxEntity)
+      .set({ error: outcome })
+      .where("id = :id", { id: outboxId })
+      .execute();
+  }
+
+  /**
+   * Loads the executor descriptor frozen on the attempt. The snapshot is
+   * immutable after claim, so the read is race-free; the compatibility reader
+   * maps legacy `{ agent }` snapshots to live configuration exactly as before
+   * M3. A missing attempt or unreadable snapshot is a deterministic
+   * non-retryable failure (the terminal filter would have excluded the row,
+   * so this only fires on evidence corruption).
+   */
+  private async frozenDescriptor(
+    stepAttemptId: string,
+    invocation: AgentInvocationV1,
+  ): Promise<ExecutorDescriptorV1> {
+    const attempt = await this.dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: stepAttemptId } });
+    if (!attempt) {
+      throw new AgentAdapterError(
+        "EXECUTOR_SNAPSHOT_INVALID",
+        "router",
+        "Dispatch outbox references a missing step attempt",
+        {
+          invocationId: invocation.invocationId,
+          retryable: false,
+        },
+      );
+    }
+    return this.transportConfig.frozenDescriptor(attempt.executorSnapshot);
   }
 
   private async markDispatched(

@@ -272,22 +272,36 @@
     },
     {
       "id": "opentelemetry",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
+      "status": "partial",
+      "sources": [
+        "services/orchestrator/src/services/execution-capsule.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/control-plane.md",
+        "docs/roadmap/observability-provenance.md"
+      ],
       "limitations": [
-        "No production OpenTelemetry SDK or collector integration"
+        "A bounded metadata-only OTLP-shaped projection exists; no production OpenTelemetry SDK, exporter queue, or collector integration",
+        "Projection timings are unavailable and represented as zero"
       ]
     },
     {
       "id": "w3c-context-propagation",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
+        "services/orchestrator/src/services/execution-capsule.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
       "limitations": [
-        "Trace context is not propagated as W3C traceparent/tracestate"
+        "Outbound-only traceparent (no inbound trust); tracestate not propagated; OTLP exporter surface not wired"
       ]
     },
     {
@@ -315,7 +329,7 @@
       ],
       "limitations": [
         "Immutable reference identity, producer lineage, bounded attempt projection, and exposure lineage exist; exposure is not proof of URI access or semantic consumption",
-        "No content/blob storage, uploads/downloads, signed URLs, encryption, retention, deletion APIs, or replay",
+        "No content/blob storage, uploads/downloads, signed URLs, encryption, retention, deletion APIs, or external-byte replay fidelity",
         "No public/Gateway/frontend artifact read APIs (current APIs are unauthenticated and artifact metadata may be sensitive)",
         "No historical backfill: authoritative artifact identity begins after the M2 migration",
         "Artifact database records are immutable references; external bytes are not verified or claimed immutable",
@@ -362,17 +376,29 @@
         "Artifact bytes are never owned, fetched, verified, or claimed immutable",
         "No public state/artifact/lineage API (current APIs are unauthenticated)",
         "No memory, RAG, semantic search, or provider prompt construction",
-        "No replay implementation",
+        "Controlled replay creates a new execution from source input and plan; historical mutable state is not copied",
         "Patch semantics are top-level key set/delete only; nested merges are future work"
       ]
     },
     {
       "id": "policy-engine",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
-      "docs": ["docs/roadmap/observability-provenance.md"],
-      "limitations": ["No runtime policy engine"]
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/policy.ts",
+        "services/orchestrator/src/services/policy.service.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/plan-proposal.service.ts",
+        "services/orchestrator/src/services/delegation.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/domain/policy.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Trusted configuration uses bounded deterministic exact-match rules, not a general policy language",
+        "Operator/admin control surfaces remain service-level while the external exposure gate is open"
+      ]
     },
     {
       "id": "cli-adapter",
@@ -410,6 +436,265 @@
       "docs": ["docs/product/identity.md"],
       "limitations": [
         "Blocked by registry, legal, repository, and explicit publication approval gates"
+      ]
+    },
+    {
+      "id": "local-executor-host",
+      "status": "implemented",
+      "sources": [
+        "services/local-executor-host/src/config.ts",
+        "services/local-executor-host/src/supervisor.ts",
+        "services/local-executor-host/src/state.ts",
+        "services/local-executor-host/src/main.ts",
+        "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
+      ],
+      "tests": [
+        "services/local-executor-host/test/config.spec.ts",
+        "services/local-executor-host/test/supervisor.spec.ts",
+        "services/local-executor-host/test/state.spec.ts",
+        "services/local-executor-host/integration/local-executor-host.integration.spec.ts",
+        "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/executors/local-executor-host.md",
+        "docs/architecture/transports/adapter-model.md"
+      ],
+      "limitations": [
+        "Trusted-code-only: no sandbox; operator deployment configuration is the trust boundary",
+        "One canonical result per run; the child cannot emit progress/artifact events",
+        "Remote cancel is not supported (HTTP executor capability stays false); deadline/shutdown kills are the cancel mechanism",
+        "Orphaned children from a crashed host are terminated on restart, never adopted or re-spawned",
+        "Local/operator-only while the external exposure gate is open"
+      ]
+    },
+    {
+      "id": "approvals-waiting",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/approval.ts",
+        "services/orchestrator/src/entities/approval-request.entity.ts",
+        "services/orchestrator/src/services/approval.service.ts",
+        "services/orchestrator/src/database/migrations/1722270008000-MilestoneFourApprovals.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/runtime-recovery.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "No operator/admin approval API surface yet (external exposure gate open); transitions are service-level",
+        "Approval expiry default is 7 days (bounded by config)"
+      ]
+    },
+    {
+      "id": "execution-capsule",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/services/execution-capsule.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Export, replay, comparison, provenance, and telemetry projection are service-level while the external exposure gate is open",
+        "The OTLP-shaped projection is not a wired exporter and has no real timings",
+        "Replay does not claim deterministic model output or verified external artifact bytes"
+      ]
+    },
+    {
+      "id": "supervised-delegation-requests",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/entities/delegation-request.entity.ts",
+        "services/orchestrator/src/entities/delegation-request-conflict.entity.ts",
+        "services/orchestrator/src/services/delegation.service.ts",
+        "services/orchestrator/src/database/migrations/1722270011000-MilestoneSixDelegationRequests.ts",
+        "services/orchestrator/src/database/migrations/1722270013000-RoadmapLineageIntegrity.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Service-level request/decision only; runtimes without a durable pause/resume capability use explicit workflow child work outside a paused attempt",
+        "No public delegation graph/control API while the external exposure gate is open"
+      ]
+    },
+    {
+      "id": "delegation-observed-evidence",
+      "status": "implemented",
+      "sources": [
+        "contracts/schemas/agent-result.v1.schema.json",
+        "services/orchestrator/src/entities/delegation-observation.entity.ts",
+        "services/orchestrator/src/entities/delegation-observation-conflict.entity.ts",
+        "services/orchestrator/src/services/result-inbox.service.ts",
+        "services/orchestrator/src/database/migrations/1722270010000-MilestoneSixDelegationObservations.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Observed evidence remains a runtime assertion and never proves Tenvyr authority or semantic consumption",
+        "Opaque runtime children intentionally create no lineage"
+      ]
+    },
+    {
+      "id": "plan-proposal-policy",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/services/plan-proposal.service.ts",
+        "services/orchestrator/src/services/approval.service.ts",
+        "services/orchestrator/src/domain/policy.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Policy rules match actionType/agents/executors; growth is bounded structurally by candidate validation, not by policy rules"
+      ]
+    },
+    {
+      "id": "planner-trigger",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/services/result-inbox.service.ts",
+        "services/orchestrator/src/services/plan-proposal.service.ts",
+        "services/orchestrator/src/services/pipeline-validation.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Explicit planner-step trigger only; Tenvyr does not implement a general autonomous planning framework"
+      ]
+    },
+    {
+      "id": "plan-proposals",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/entities/plan-proposal.entity.ts",
+        "services/orchestrator/src/services/plan-proposal.service.ts",
+        "services/orchestrator/src/database/migrations/1722270009000-MilestoneFivePlanProposals.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Proposal activation and approval are service-level while the external exposure gate is open"
+      ]
+    },
+    {
+      "id": "plan-patch",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/plan-patch.ts",
+        "services/orchestrator/src/services/pipeline-validation.service.ts"
+      ],
+      "tests": ["services/orchestrator/src/domain/plan-patch.spec.ts"],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Patch operations intentionally remain restricted to addStep and replaceUnfrozenStep"
+      ]
+    },
+    {
+      "id": "budget-hierarchy",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/budget.ts",
+        "services/orchestrator/src/services/budget-ledger.service.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/approval.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Adjust is not idempotency-keyed (explicit operator correction)",
+        "Tenant/plan accounts are operator-created; no grant-rotation API beyond adjust"
+      ]
+    },
+    {
+      "id": "policy-decision-boundary",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/policy.ts",
+        "services/orchestrator/src/entities/policy-snapshot.entity.ts",
+        "services/orchestrator/src/entities/policy-decision.entity.ts",
+        "services/orchestrator/src/services/policy.service.ts",
+        "services/orchestrator/src/database/migrations/1722270007000-MilestoneFourPolicy.ts",
+        "services/orchestrator/src/services/execution.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/domain/policy.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Interception is wired at dispatch, PlanPatch activation, and supervised delegation approval",
+        "REQUIRE_APPROVAL produces the durable ApprovalRequest + WAITING flow for dispatch and PlanPatch; supervised delegation uses its explicit operator approval seam",
+        "Rule data is minimal (actionType + exact agent/executor constraints); no numeric/resource constraints yet",
+        "Unlisted action types default to ALLOW (policy is opt-in declarative data)"
+      ]
+    },
+    {
+      "id": "budget-ledger",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/budget.ts",
+        "services/orchestrator/src/entities/budget-account.entity.ts",
+        "services/orchestrator/src/entities/budget-reservation.entity.ts",
+        "services/orchestrator/src/entities/budget-ledger-entry.entity.ts",
+        "services/orchestrator/src/services/budget-ledger.service.ts",
+        "services/orchestrator/src/database/migrations/1722270006000-MilestoneFourBudgetLedger.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/domain/budget.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/control-plane.md"],
+      "limitations": [
+        "Enforcement is opt-in per pipeline budget declaration; un-budgeted pipelines run unchanged",
+        "Supervised child accounts are linked to parent execution accounts and every child attempt reserve traverses the ancestor chain",
+        "Adjust is not idempotency-keyed (explicit operator correction; chain-propagated since M4-S5)",
+        "Projection is exact below 10,000 entries per account; larger accounts need paging",
+        "Terminal results without usage leave the reservation consumed by default (unknown semantics); only cancellation/failed-dispatch release explicitly"
+      ]
+    },
+    {
+      "id": "executor-descriptor",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/executors/executor-descriptor.ts",
+        "services/orchestrator/src/agent-adapters/agent-adapter.types.ts",
+        "services/orchestrator/src/agent-adapters/agent-adapter.router.ts",
+        "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
+        "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
+        "services/orchestrator/src/services/dispatch-outbox.service.ts",
+        "services/orchestrator/src/services/engine.service.ts",
+        "services/orchestrator/src/services/execution.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/executors/executor-descriptor.spec.ts",
+        "services/orchestrator/src/agent-adapters/agent-adapter.router.spec.ts",
+        "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
+        "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
+        "services/orchestrator/src/services/engine.service.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": ["docs/architecture/transports/adapter-model.md"],
+      "limitations": [
+        "Executor kinds cover Kafka/HTTP transports plus the trusted-code-only local host; Codex/Claude stay inside runtime applications and A2A remains deferred",
+        "Capabilities are conservative and negotiated per configured executor; remote cancellation remains best-effort where supported",
+        "Cancel notification is best-effort post-commit evidence; it never guarantees the runtime stopped opaque work",
+        "No public executor administration API while the external exposure gate is open",
+        "Legacy { agent } snapshots keep live-configuration routing by design (never rewritten)"
       ]
     }
   ]

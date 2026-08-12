@@ -11,6 +11,7 @@ export type StepAttemptStatus =
   | "CREATED"
   | "DISPATCHED"
   | "RUNNING"
+  | "WAITING"
   | "SUCCESS"
   | "FAILED"
   | "TIMED_OUT"

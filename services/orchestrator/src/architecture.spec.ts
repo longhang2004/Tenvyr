@@ -47,6 +47,31 @@ describe("application transport boundary", () => {
     expect(source).not.toMatch(/OnModuleInit|OnModuleDestroy/);
   });
 
+  it("capsule/export/replay/projection surfaces are service-level only (no controllers)", () => {
+    // M7: the exposure gate stays closed — no HTTP surface may expose the
+    // capsule, export manifest, replay, comparison, provenance, or
+    // telemetry read models.
+    const controllers = [
+      "app.controller.ts",
+      "agent-adapters/http-agent-callback.controller.ts",
+    ];
+    let exposed = 0;
+    for (const file of controllers) {
+      const source = fs.readFileSync(
+        path.resolve(__dirname, file),
+        "utf8",
+      );
+      if (
+        /ExecutionCapsuleService|createExport|ExecutionReplay|provenance|projectTelemetry|\.compare\(/.test(
+          source,
+        )
+      ) {
+        exposed += 1;
+      }
+    }
+    expect(exposed).toBe(0);
+  });
+
   it("captures raw body narrowly through Nest bootstrap", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
 
@@ -222,6 +247,34 @@ describe("application transport boundary", () => {
       }
       const source = fs.readFileSync(path.join(servicesDir, file), "utf8");
       expect(source).not.toMatch(/ArtifactExposureEntity|artifact_exposures/);
+    }
+  });
+
+  it("no Orchestrator source imports a provider SDK or formats provider prompts", () => {
+    // M3: providers live inside runtimes. Orchestrator (and the worker SDK
+    // core) must never import OpenAI/Anthropic/Ollama SDKs or construct
+    // provider prompt/tool payloads.
+    const roots = ["services", "agent-adapters", "domain", "executors"];
+    const providerPackages =
+      /@openai\/|@anthropic-ai\/|\bopenai\b|\banthropic\b|\bollama\b/;
+    for (const root of roots) {
+      const dir = path.resolve(__dirname, root);
+      if (!fs.existsSync(dir)) continue;
+      for (const file of fs
+        .readdirSync(dir, { recursive: true })
+        .filter(
+          (entry) =>
+            typeof entry === "string" &&
+            entry.endsWith(".ts") &&
+            !entry.endsWith(".spec.ts"),
+        )) {
+        const source = fs.readFileSync(path.join(dir, file as string), "utf8");
+        if (providerPackages.test(source)) {
+          throw new Error(
+            `${root}/${file as string} must not import a provider SDK`,
+          );
+        }
+      }
     }
   });
 });

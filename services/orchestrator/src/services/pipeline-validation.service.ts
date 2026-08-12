@@ -7,6 +7,7 @@ import type {
   PipelineStepConfig,
 } from "../domain/pipeline-definition";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
+import { parsePipelineBudget, parseStepBudget } from "../domain/budget";
 
 const MAX_STEPS = 100;
 const MAX_DEPTH = 20;
@@ -21,16 +22,14 @@ export class PipelineValidationService {
     if (!this.isRecord(input)) throw new Error("Pipeline must be an object");
     const name = this.nonEmptyString(input.name, "name", 255);
     const version = this.nonEmptyString(input.version, "version", 50);
-    if (!Array.isArray(input.steps) || input.steps.length === 0) {
-      throw new Error("Pipeline must contain at least one step");
-    }
-    if (input.steps.length > MAX_STEPS)
-      throw new Error(`Pipeline exceeds ${MAX_STEPS} steps`);
 
-    const steps = input.steps.map((step, index) =>
-      this.validateStep(step, index),
-    );
-    this.validateGraph(steps);
+    const steps = this.validateSteps(input.steps);
+    let budget;
+    try {
+      budget = parsePipelineBudget(input.budget);
+    } catch (error) {
+      throw new Error(`budget: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return {
       name,
       version,
@@ -38,8 +37,28 @@ export class PipelineValidationService {
         input.description === undefined || input.description === null
           ? undefined
           : this.nonEmptyString(input.description, "description", 10_000, true),
+      ...(budget === undefined ? {} : { budget }),
       steps,
     };
+  }
+
+  /**
+   * M5-S1: validates a candidate step LIST through the exact same safe
+   * rules as a full pipeline (bounds, step config, graph, fanout/depth,
+   * durations, retries, budgets, conditions). Used by PlanPatch candidate
+   * validation; never trusts step ordering.
+   */
+  validateSteps(steps: unknown): PipelineStepConfig[] {
+    if (!Array.isArray(steps) || steps.length === 0) {
+      throw new Error("Plan must contain at least one step");
+    }
+    if (steps.length > MAX_STEPS)
+      throw new Error(`Plan exceeds ${MAX_STEPS} steps`);
+    const validated = steps.map((step, index) =>
+      this.validateStep(step, index),
+    );
+    this.validateGraph(validated);
+    return validated;
   }
 
   private validateStep(value: unknown, index: number): PipelineStepConfig {
@@ -77,6 +96,18 @@ export class PipelineValidationService {
     if (value.metadata !== undefined && !this.isRecord(value.metadata)) {
       throw new Error(`steps[${index}].metadata must be an object`);
     }
+    if (value.planner !== undefined && value.planner !== true) {
+      throw new Error(`steps[${index}].planner must be true when present`);
+    }
+    if (
+      value.delegation !== undefined &&
+      (typeof value.delegation !== "string" ||
+        !["opaque", "observed"].includes(value.delegation))
+    ) {
+      throw new Error(
+        `steps[${index}].delegation must be one of opaque, observed`,
+      );
+    }
 
     const contextProjection =
       value.contextProjection === undefined
@@ -87,6 +118,15 @@ export class PipelineValidationService {
       value.stateWrites === undefined
         ? undefined
         : validateStateWrites(value.stateWrites);
+
+    let budget;
+    try {
+      budget = parseStepBudget(value.budget);
+    } catch (error) {
+      throw new Error(
+        `steps[${index}].budget: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     return {
       id,
@@ -110,6 +150,11 @@ export class PipelineValidationService {
         : { metadata: value.metadata as Record<string, unknown> }),
       ...(contextProjection === undefined ? {} : { contextProjection }),
       ...(stateWrites === undefined ? {} : { stateWrites }),
+      ...(budget === undefined ? {} : { budget }),
+      ...(value.planner === true ? { planner: true } : {}),
+      ...(value.delegation === undefined
+        ? {}
+        : { delegation: value.delegation as "opaque" | "observed" }),
     };
   }
 

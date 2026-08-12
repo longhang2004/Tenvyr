@@ -56,8 +56,19 @@ seam `AgentAdapterHandlers`, which has exactly two members:
 Repeated calls after a successful start are no-ops.
 `stop()` closes adapter resources. Repeated calls after a successful stop are
 no-ops.
-`invoke(invocation)` validates and dispatches an `AgentInvocationV1`; it does
-not wait for agent completion.
+`invoke(invocation, pinned?)` validates and dispatches an `AgentInvocationV1`;
+it does not wait for agent completion. `pinned` is the M3 executor descriptor
+frozen on the attempt (see [Executor descriptors](#executor-descriptors-m3)
+below): when present, routing facts come from the frozen descriptor and the
+live configuration only resolves secret values for that exact profile; when
+absent, the legacy live-configuration routing (exact agent name → HTTP, else
+Kafka) applies.
+`cancel?(request)` is an OPTIONAL best-effort, idempotent cancellation
+capability (M3-S2): method absence means the executor cannot be cancelled.
+Tenvyr cancellation is committed first (attempts/execution CANCELLED, outbox
+retired); the optional `cancel` only notifies a supporting executor afterwards
+and records the outcome as durable evidence. It can never reverse or block the
+committed cancellation, and implementations must bound their own runtime.
 `AgentDispatchReceipt` reports adapter kind, invocation ID, dispatch time,
 and an optional message key or transport-neutral dispatch ID. It does not
 cause a state transition.
@@ -110,6 +121,74 @@ HTTP agents use the callback-first protocol documented in
 [HTTP Agent Adapter v1](./http-agent-adapter-v1.md). Agents without an exact
 HTTP mapping continue to use Kafka.
 
+## Executor descriptors (M3)
+
+M3 separates the concepts: the pipeline selects a logical `agent` target; the
+Orchestrator freezes a bounded, versioned, secret-free `ExecutorDescriptorV1`
+into the attempt's `executorSnapshot` at claim time; dispatch consumes exactly
+that frozen selection. Executor (how Tenvyr invokes/supervises a runtime),
+transport (Kafka/HTTP `AgentAdapter`), and provider (model/API inside the
+runtime — never Orchestrator concern) stay distinct.
+
+A descriptor contains `schemaVersion`, `executorId` (today `agent:<name>`),
+`agent`, `kind` (`kafka` or `http`), a canonical `configHash` of the
+non-secret profile, conservative `capabilities` (currently only `cancel:
+false`), and, for HTTP, the frozen routing profile (`submitUrl`,
+`requestTimeoutMs`, `maxResponseBytes`). It never contains credential values;
+the live trusted configuration resolves secrets for the exact pinned profile
+at dispatch time. See `services/orchestrator/src/executors/executor-descriptor.ts`.
+
+Dispatch semantics:
+
+- every dispatch/redelivery of an outbox row reads the descriptor frozen on
+  the attempt — the live configuration can never choose a different executor
+  or reroute a pending outbox;
+- a rotated/missing profile (agent removed or moved to another executor kind)
+  is a deterministic non-retryable configuration failure
+  (`EXECUTOR_PROFILE_MISMATCH`), never an automatic fallback;
+- redelivery of one outbox row reuses the same invocation and the same
+  descriptor; workflow retry creates a NEW attempt with a NEW invocation and
+  its own fresh descriptor;
+- legacy M0–M2 `{ agent }` snapshots are read by an explicit compatibility
+  reader that routes them from live configuration exactly as before M3; the
+  legacy row is never rewritten. An unknown schema version or unreadable
+  snapshot is `EXECUTOR_SNAPSHOT_INVALID` — a deterministic safe failure.
+
+## Cancellation (M3-S2)
+
+Cancellation authority stays with Tenvyr: `cancelExecution` commits attempts
+and the execution to CANCELLED and retires the outbox in one transaction; any
+late result remains rejected evidence. After the commit, the engine asks
+`DispatchOutboxService.notifyCancel` to best-effort notify each DISPATCHED
+attempt's executor, gated by BOTH the attempt's frozen descriptor
+(`capabilities.cancel`) and the adapter's optional `cancel` method:
+
+- supported + delivered → outbox row records `cancel notification: delivered`;
+- unsupported (capability or method missing) → `cancel notification:
+  unsupported (...)` — the limitation is durable evidence, never a silent
+  claim of enforcement;
+- unreachable (reject/throw/no acknowledgement) → `cancel notification:
+  unreachable (...)`, and the committed cancellation is never reversed or
+  blocked;
+- the recorded outcome is the idempotency marker: repeated `cancelExecution`
+  calls never re-notify.
+
+Today both Kafka and HTTP executors declare `cancel: false` (neither protocol
+supports remote cancellation), so production cancellation records the
+unsupported limitation; the supported path is exercised by reviewed-executor
+fixtures in the tests.
+
+## Local process executor (M3-S3)
+
+A pipeline agent may point at the trusted-code-only
+[local executor host](../executors/local-executor-host.md): the host speaks
+the canonical HTTP Worker protocol, so descriptor pinning, rotation-safe
+failure, and cancel-capability evidence apply unchanged. The host resolves
+the agent name to a FIXED operator-configured command (absolute path, argv
+array, no shell), runs it in an allowlisted environment with bounded IO and
+process-group deadline/cancel, and delivers one canonical signed result.
+Orchestrator core never spawns processes.
+
 ## Data flow
 
 ```mermaid
@@ -150,6 +229,9 @@ sequenceDiagram
   and failure policies are unchanged.
 - Existing code-reviewer and observability agents require no adapter-specific
   business changes.
+- Pre-M3 attempts (`executorSnapshot` = `{ agent }`) keep dispatching through
+  live configuration via the M3 compatibility reader; their rows are never
+  rewritten. New attempts always freeze a versioned descriptor.
 
 ## Extension path
 
