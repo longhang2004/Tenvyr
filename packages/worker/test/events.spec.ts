@@ -679,6 +679,19 @@ describe("Tenvyr Worker agent events", () => {
     await waitFor(() =>
       eventBodies().some((event) => event.eventId === "invocation-1:1"),
     );
+    // The retry of the 500'd first delivery is scheduled with backoff
+    // (initialDelayMs 500 ± jitter) — wait for the observable instead of
+    // racing the retry timer; the explicit timeout covers CI load.
+    await waitFor(() => {
+      const deliveries = callbackRequests.filter((request) => {
+        const body = request.body.toString("utf8");
+        if (!body.includes('"eventId"')) return false;
+        return (
+          (JSON.parse(body) as AgentEventV1).eventId === "invocation-1:0"
+        );
+      });
+      return deliveries.length >= 2;
+    }, 5000);
 
     const requests = callbackRequests.filter((request) =>
       request.body.toString("utf8").includes('"eventId"'),
