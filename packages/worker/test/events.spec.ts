@@ -876,6 +876,9 @@ describe("Tenvyr Worker agent events", () => {
       202,
     );
     await waitFor(() => resultBodies().length === 1);
+    // The failed terminal event is delivered asynchronously (fire-and-forget
+    // callback); wait for it like the sibling tests do.
+    await waitFor(() => eventBodies().some((event) => event.type === "failed"));
 
     expect(resultBodies()[0]).toMatchObject({
       status: "failed",

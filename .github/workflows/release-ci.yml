@@ -204,7 +204,7 @@ jobs:
 
       - name: Provision the disposable test database
         run: |
-          docker run --rm --network host postgres:15-alpine \
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:15-alpine \
             psql -U postgres -h 127.0.0.1 -p 5432 -c "CREATE DATABASE tenvyr_roadmap_test"
 
       - name: Real PostgreSQL integration suite (run 1)
@@ -222,7 +222,7 @@ jobs:
           TENVYR_LIVE_RUNTIME_GATES: "0"
         run: |
           set -o pipefail
-          docker run --rm --network host postgres:15-alpine \
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:15-alpine \
             psql -U postgres -h 127.0.0.1 -p 5432 -c "DROP DATABASE tenvyr_roadmap_test; CREATE DATABASE tenvyr_roadmap_test"
           pnpm --filter orchestrator test -- --runInBand 2>&1 | tee /tmp/pg-run2.log
           node scripts/assert-jest-run.mjs /tmp/pg-run2.log
