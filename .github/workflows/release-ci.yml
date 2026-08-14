@@ -224,7 +224,7 @@ jobs:
         run: |
           set -o pipefail
           docker run --rm --network host -e PGPASSWORD=postgres postgres:15-alpine \
-            psql -U postgres -h 127.0.0.1 -p 5432 -c "DROP DATABASE tenvyr_roadmap_test; CREATE DATABASE tenvyr_roadmap_test"
+            psql -U postgres -h 127.0.0.1 -p 5432 -c "DROP DATABASE tenvyr_roadmap_test" -c "CREATE DATABASE tenvyr_roadmap_test"
           pnpm --filter orchestrator test -- --runInBand 2>&1 | tee /tmp/pg-run2.log
           node scripts/assert-jest-run.mjs /tmp/pg-run2.log
 

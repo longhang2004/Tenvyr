@@ -1088,6 +1088,14 @@ function isPersistentIdentifier(path, line, match) {
       dockerIdentifiers.has(match) && trimmed === `container_name: ${match}`
     );
   }
+  if (path === ".github/workflows/release-ci.yml") {
+    // The preserved legacy deployment container name (same rationale as the
+    // docker-compose.yml container_name allowance): the hosted-CI postgres
+    // service container must keep the legacy name so the real M11
+    // backup/restore round-trip test can docker exec it.
+    const trimmed = line.trim();
+    return dockerIdentifiers.has(match) && trimmed === `--name ${match}`;
+  }
   if (
     path === "docker-compose.showcase.yml" &&
     match === `${legacyLower}-net`
