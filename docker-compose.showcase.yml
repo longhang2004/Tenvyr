@@ -5,7 +5,7 @@ services:
         condition: service_healthy
     environment:
       AGENT_TRANSPORT_CONFIG: >-
-        {"echo-analyzer":{"kind":"http","submitUrl":"http://python-worker:8080/v1/runs","outboundAuthentication":{"type":"bearer","tokenEnv":"SHOWCASE_WORKER_TOKEN"},"callbackAuthentication":{"keyId":"showcase-v1","secretEnv":"SHOWCASE_CALLBACK_SECRET"},"requestTimeoutMs":5000,"maxResponseBytes":65536}}
+        {"echo-analyzer":{"kind":"http","submitUrl":"http://python-worker:8080/v1/runs","outboundAuthentication":{"type":"bearer","tokenEnv":"SHOWCASE_WORKER_TOKEN"},"callbackAuthentication":{"keyId":"showcase-v1","secretEnv":"SHOWCASE_CALLBACK_SECRET"},"requestTimeoutMs":5000,"maxResponseBytes":65536},"code-reviewer":{"kind":"kafka"},"observability":{"kind":"kafka"}}
       HTTP_AGENT_CALLBACK_BASE_URL: http://orchestrator:3001
       HTTP_AGENT_ALLOW_INSECURE: "true"
       SHOWCASE_WORKER_TOKEN: ${SHOWCASE_WORKER_TOKEN:-tenvyr-local-worker}
