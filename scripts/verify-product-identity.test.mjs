@@ -67,6 +67,10 @@ test("each approved legacy-reference category is explicit", () => {
         text: `container_name: ${oldLower}-postgres`,
       },
       {
+        path: ".github/workflows/release-ci.yml",
+        text: `          --name ${oldLower}-postgres`,
+      },
+      {
         path: "docs/archive/decisions/2026-07-27-product-identity-evaluation.md",
         text: `${oldName} collides with existing uses of the same or a closely related name.`,
       },
@@ -91,7 +95,7 @@ test("each approved legacy-reference category is explicit", () => {
   );
 
   assert.deepEqual(
-    audit.findings.map(({ category }) => category).sort(),
+    [...new Set(audit.findings.map(({ category }) => category))].sort(),
     [...allowedCategories].sort(),
   );
 });
@@ -141,6 +145,10 @@ test("allowlists reject near misses, wrong paths, comments, and marker text", ()
         ].join("\n"),
       },
       {
+        path: ".github/workflows/release-ci.yml",
+        text: `          --name ${oldLower}-rogue`,
+      },
+      {
         path: "services/agent-code-reviewer/src/kafka.service.spec.ts",
         text: `rejected old ${oldName} branding`,
       },
@@ -156,7 +164,7 @@ test("allowlists reject near misses, wrong paths, comments, and marker text", ()
     [],
   );
 
-  assert.equal(audit.findings.length, 8);
+  assert.equal(audit.findings.length, 9);
   assert(audit.findings.every(({ category }) => category === null));
 });
 
