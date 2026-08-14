@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseHostConfig, type HostConfig } from "../src/config";
+import { validateInvocationBinding } from "../src/main";
 
 const node = process.execPath;
 const configuredRoot = "/tmp/tenvyr-host-root";
@@ -221,5 +222,172 @@ describe("parseHostConfig", () => {
     const second = parseHostConfig(baseEnv());
     expect(first.agents).toEqual(second.agents);
     expect(first.callbackKeys).toEqual(second.callbackKeys);
+  });
+
+  it("M8-S6: parses the connection binding pair (connectionId + configHash) and structuredResult", () => {
+    const config = parseHostConfig(
+      baseEnv({
+        EXECUTOR_HOST_AGENTS: JSON.stringify({
+          bound: {
+            command: node,
+            args: ["-e", "console.log('ok')"],
+            cwd: "/tmp/tenvyr-host-root",
+            wallTimeMs: 30_000,
+            maxStdoutBytes: 65_536,
+            maxStderrBytes: 65_536,
+            port: 4102,
+            bearerTokenEnv: "HOST_TOKEN_1",
+            connectionId: "conn:codex-local",
+            configHash: "abc123",
+            structuredResult: true,
+          },
+        }),
+      }),
+    );
+    expect(config.agents[0]).toMatchObject({
+      connectionId: "conn:codex-local",
+      configHash: "abc123",
+      structuredResult: true,
+    });
+  });
+
+  it("M8-S6: rejects a binding declared on only one side (fail-closed configuration)", () => {
+    expect(() =>
+      parseHostConfig(
+        baseEnv({
+          EXECUTOR_HOST_AGENTS: JSON.stringify({
+            half: {
+              command: node,
+              args: ["-e", "console.log('ok')"],
+              cwd: "/tmp/tenvyr-host-root",
+              wallTimeMs: 30_000,
+              maxStdoutBytes: 65_536,
+              maxStderrBytes: 65_536,
+              port: 4103,
+              bearerTokenEnv: "HOST_TOKEN_1",
+              connectionId: "conn:codex-local",
+            },
+          }),
+        }),
+      ),
+    ).toThrow(/connectionId and configHash together/);
+    expect(() =>
+      parseHostConfig(
+        baseEnv({
+          EXECUTOR_HOST_AGENTS: JSON.stringify({
+            half: {
+              command: node,
+              args: ["-e", "console.log('ok')"],
+              cwd: "/tmp/tenvyr-host-root",
+              wallTimeMs: 30_000,
+              maxStdoutBytes: 65_536,
+              maxStderrBytes: 65_536,
+              port: 4104,
+              bearerTokenEnv: "HOST_TOKEN_1",
+              configHash: "abc123",
+            },
+          }),
+        }),
+      ),
+    ).toThrow(/connectionId and configHash together/);
+  });
+
+  it("M8-S6: rejects a non-boolean structuredResult", () => {
+    expect(() =>
+      parseHostConfig(
+        baseEnv({
+          EXECUTOR_HOST_AGENTS: JSON.stringify({
+            bad: {
+              command: node,
+              args: ["-e", "console.log('ok')"],
+              cwd: "/tmp/tenvyr-host-root",
+              wallTimeMs: 30_000,
+              maxStdoutBytes: 65_536,
+              maxStderrBytes: 65_536,
+              port: 4105,
+              bearerTokenEnv: "HOST_TOKEN_1",
+              structuredResult: "yes",
+            },
+          }),
+        }),
+      ),
+    ).toThrow(/structuredResult must be a boolean/);
+  });
+});
+
+describe("validateInvocationBinding", () => {
+  const bound: HostConfig["agents"][number] = {
+    agent: "bound-agent",
+    command: "/bin/true",
+    args: [],
+    cwd: "/tmp/tenvyr-host-root",
+    env: {},
+    secrets: {},
+    wallTimeMs: 30_000,
+    maxStdoutBytes: 65_536,
+    maxStderrBytes: 65_536,
+    port: 4106,
+    bearerTokenEnv: "HOST_TOKEN_1",
+    connectionId: "conn:codex-local",
+    configHash: "abc123",
+    structuredResult: true,
+  };
+  const legacy: HostConfig["agents"][number] = {
+    agent: "legacy-agent",
+    command: "/bin/true",
+    args: [],
+    cwd: "/tmp/tenvyr-host-root",
+    env: {},
+    secrets: {},
+    wallTimeMs: 30_000,
+    maxStdoutBytes: 65_536,
+    maxStderrBytes: 65_536,
+    port: 4107,
+    bearerTokenEnv: "HOST_TOKEN_1",
+  };
+  const reference = {
+    connectionId: "conn:codex-local",
+    revisionNumber: 1,
+    configHash: "abc123",
+  };
+
+  it("accepts an invocation carrying the exact bound reference", () => {
+    expect(
+      validateInvocationBinding(bound, { invocationId: "i-1", connection: reference }),
+    ).toBeNull();
+  });
+
+  it("fails closed when the invocation carries NO reference for a bound agent", () => {
+    expect(
+      validateInvocationBinding(bound, { invocationId: "i-2" }),
+    ).toMatch(/no connection reference/);
+  });
+
+  it("fails closed on connectionId mismatch and on configHash mismatch (revision not authoritative)", () => {
+    expect(
+      validateInvocationBinding(bound, {
+        invocationId: "i-3",
+        connection: { ...reference, connectionId: "conn:other" },
+      }),
+    ).toMatch(/bound to "conn:codex-local"/);
+    expect(
+      validateInvocationBinding(bound, {
+        invocationId: "i-4",
+        connection: { ...reference, configHash: "stale-hash" },
+      }),
+    ).toMatch(/configured for hash "abc123"/);
+  });
+
+  it("fails closed when an unbound agent receives a connection-bearing invocation", () => {
+    expect(
+      validateInvocationBinding(legacy, {
+        invocationId: "i-5",
+        connection: reference,
+      }),
+    ).toMatch(/declares no connection binding/);
+  });
+
+  it("accepts connection-free invocations for unbound agents (legacy path)", () => {
+    expect(validateInvocationBinding(legacy, { invocationId: "i-6" })).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import type { EachMessagePayload } from "kafkajs";
 import { ExecutionService } from "../services/execution.service";
 import { EventPayloadTooLargeError } from "../services/agent-event.service";
 import { KafkaService } from "../services/kafka.service";
+import { AgentTransportConfigService } from "./agent-transport-config.service";
 import { AgentAdapterError } from "./agent-adapter.errors";
 import type {
   AgentAdapter,
@@ -24,18 +25,39 @@ export class KafkaAgentAdapter implements AgentAdapter {
   readonly kind = "kafka";
 
   private started = false;
+  /** M11 closure: HTTP-only deployments run with the Kafka transport idle. */
+  private idle = false;
   private handlers?: AgentAdapterHandlers;
   private eventTopicSet = new Set<string>();
 
   constructor(
     private readonly kafka: KafkaService,
     private readonly executionService: ExecutionService,
+    private readonly transportConfig: AgentTransportConfigService = new AgentTransportConfigService(),
   ) {}
 
   async start(handlers: AgentAdapterHandlers): Promise<void> {
     if (this.started) return;
 
     this.handlers = handlers;
+    // M11 closure: a self-hosted deployment WITHOUT a Kafka broker (HTTP
+    // workers only) must boot. The adapter only connects when an agent is
+    // explicitly configured on the Kafka transport or result/event topics
+    // are explicitly requested; otherwise it stays idle and dispatch of a
+    // Kafka-routed agent fails deterministically at invoke time instead of
+    // crashing the whole control plane at startup.
+    const explicitTopics = [
+      process.env.ORCHESTRATOR_EVENT_TOPICS ?? "",
+      process.env.ORCHESTRATOR_RESULT_TOPICS ?? "",
+    ].some((value) => value.trim().length > 0);
+    if (!this.transportConfig.hasKafkaAgents() && !explicitTopics) {
+      console.log("Kafka agent adapter idle: no Kafka agents configured", {
+        adapter: this.kind,
+      });
+      this.idle = true;
+      this.started = true;
+      return;
+    }
     const resultTopics = this.resultTopics();
     const eventTopics = this.eventTopics();
     this.eventTopicSet = new Set(eventTopics);
@@ -101,6 +123,17 @@ export class KafkaAgentAdapter implements AgentAdapter {
     // pinned descriptor (M3) changes nothing for this executor.
     _pinned?: Parameters<AgentAdapter["invoke"]>[1],
   ): Promise<AgentDispatchReceipt> {
+    if (this.idle) {
+      throw new AgentAdapterError(
+        "KAFKA_TRANSPORT_IDLE",
+        this.kind,
+        "No Kafka agents are configured; the Kafka transport is not connected (HTTP-only deployment)",
+        {
+          invocationId: invocation.invocationId,
+          retryable: false,
+        },
+      );
+    }
     if (!this.started) {
       throw new AgentAdapterError(
         "ADAPTER_NOT_STARTED",

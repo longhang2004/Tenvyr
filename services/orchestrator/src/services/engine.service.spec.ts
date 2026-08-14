@@ -63,6 +63,12 @@ describe("EngineService behavior", () => {
           status,
           output,
         })),
+      // M9-S2: non-coordinated executions are never held.
+      isCoordinationCompletionHeld: jest.fn().mockResolvedValue(false),
+      // M9-S4: no coordination run in the generic engine tests.
+      reconcileCoordination: jest.fn().mockResolvedValue(false),
+      isCoordinationVerifierStep: jest.fn().mockResolvedValue(false),
+      buildVerifierInput: jest.fn().mockResolvedValue({}),
       createStepExecution: jest.fn().mockResolvedValue(stepExecution),
       claimRunnableStep: jest.fn().mockResolvedValue({
         disposition: "claimed",
@@ -427,6 +433,20 @@ describe("EngineService behavior", () => {
       { review: { score: 100 } },
     );
     expect(outbox.dispatchAttempt).not.toHaveBeenCalled();
+  });
+
+  it("holds completion while a coordination loop is live (M9-S2)", async () => {
+    executionService.getStepExecutions.mockResolvedValue([
+      { ...stepExecution, status: "COMPLETED", output: { score: 100 } },
+    ]);
+    (executionService.isCoordinationCompletionHeld as jest.Mock).mockResolvedValue(
+      true,
+    );
+
+    await service.reconcileExecution("execution-1");
+
+    // The Execution is NOT marked COMPLETED; the loop owns completion.
+    expect(executionService.updateExecutionStatus).not.toHaveBeenCalled();
   });
 
   it("fails the execution when input template resolution fails before any claim", async () => {

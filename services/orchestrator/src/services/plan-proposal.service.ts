@@ -321,35 +321,33 @@ export class PlanProposalService {
               new Date(),
               APPROVAL_BOUNDS.defaultExpiryMs,
             );
-            try {
-              await manager.getRepository(ApprovalRequestEntity).save(
-                manager.getRepository(ApprovalRequestEntity).create({
-                  proposalId: `plan:${proposal.id}`,
-                  proposalHash: planProposal.hash,
-                  actionType: "plan_patch",
-                  executionId: proposal.executionId,
-                  logicalStepId: "",
-                  attemptNumber: 1,
-                  targetAgent: null,
-                  targetExecutor: null,
-                  status: "PENDING",
-                  expiresAt,
-                  decidedAt: null,
-                  decisionNote: null,
-                }),
-              );
-            } catch (error) {
-              if (
-                (error as { code?: string }).code === "23505" &&
-                (error as { constraint?: string }).constraint ===
-                  "UQ_approval_request_proposal"
-              ) {
-                // A concurrent activation already created the request:
-                // the existing request is authoritative.
-              } else {
-                throw error;
-              }
-            }
+            // INSERT ... ON CONFLICT DO NOTHING: a concurrent activation may
+            // have already created the request. orIgnore keeps the enclosing
+            // transaction healthy — catching a 23505 here would abort the
+            // whole Postgres transaction (any error poisons it), and the
+            // next statement (pendingPlanProposalId persist) would fail with
+            // "current transaction is aborted".
+            await manager
+              .getRepository(ApprovalRequestEntity)
+              .createQueryBuilder()
+              .insert()
+              .into(ApprovalRequestEntity)
+              .values({
+                proposalId: `plan:${proposal.id}`,
+                proposalHash: planProposal.hash,
+                actionType: "plan_patch",
+                executionId: proposal.executionId,
+                logicalStepId: "",
+                attemptNumber: 1,
+                targetAgent: null,
+                targetExecutor: null,
+                status: "PENDING",
+                expiresAt,
+                decidedAt: null,
+                decisionNote: null,
+              })
+              .orIgnore()
+              .execute();
             return {
               decision: "PENDING",
               reason: "Awaiting approval before activation",

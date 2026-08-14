@@ -100,3 +100,27 @@ the only configuration; the wire format is OpenAI-identical. Model names are
 `deepseek-v4-flash` and `deepseek-v4-pro` (legacy names retired 2026-07-24);
 `thinking` / `reasoning_effort` are documented extensions beyond OpenAI. This
 stays a Worker/runtime configuration concern — no Orchestrator change.
+
+## M8 runtime connection profiles (rechecked 2026-08-12)
+
+The M8 connection templates in
+`services/orchestrator/src/executors/runtime-profiles.ts` re-fetched the
+official pages on 2026-08-12 and pin: Codex CLI `0.147.0` (release
+`rust-v0.147.0`), Claude Code `2.1.228` (npm latest), OpenCode `1.18.16`
+(release). New findings vs the 2026-08-11 research above:
+
+- `codex --version` is NOT documented (absent from setup/auth/
+  developer-commands/non-interactive pages) — the Codex profile probes
+  `codex login status` ("exit with 0 when logged in") instead, and the
+  pinned version is operator-declared.
+- `--full-auto` is a deprecated compatibility flag ("prefer
+  `--sandbox workspace-write`"); the profile never uses it.
+- `claude auth status` is documented to exit 0 when logged in and 1 when
+  not (JSON output, never parsed by Tenvyr); `claude --version`/`-v` is
+  documented.
+- `opencode --version`/`-v` and `opencode run --format json` are
+  documented; provider auth stays runtime-owned.
+- Live non-billable gates ran 2026-08-12 against the installed CLIs
+  (installed Claude Code was 2.1.97, older than the pin): version and
+  auth-status probes completed with bounded, secret-free outcomes. The
+  runtime connection status is projection, not dispatch authority.

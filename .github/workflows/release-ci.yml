@@ -16,6 +16,11 @@ permissions:
 env:
   LLM_PROVIDER: mock
   LLM_FAILURE_MODE: mock
+  # P2: installed-runtime gates are OPT-IN. CI runs the deterministic
+  # fake-CLI tests by default; set TENVYR_LIVE_RUNTIME_GATES: "1" on a
+  # self-hosted runner with the CLIs installed to run the live probes
+  # (codex/claude/opencode local version/auth-state checks only).
+  TENVYR_LIVE_RUNTIME_GATES: "0"
 
 jobs:
   repository-quality:
@@ -40,7 +45,7 @@ jobs:
       - name: Reject tracked secrets and build artifacts
         shell: bash
         run: |
-          forbidden="$(git ls-files '*.env' '*.key' '*.pem' '*.tgz' '*.whl' '*.tar.gz' '*.zip')"
+          forbidden="$(git ls-files '*.env' '*.key' '*.pem' '*.tgz' '*.whl' '*.tar.gz' '*.zip' | grep -v '^.env.self-hosted.example$' || true)"
           if [ -n "$forbidden" ]; then
             echo "Tracked secret or build artifact paths are forbidden:"
             echo "$forbidden"
@@ -163,6 +168,112 @@ jobs:
 
       - name: Java Runner tests
         run: mvn -B -f services/agent-runner/pom.xml test
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Provision the disposable test database
+        run: |
+          docker run --rm --network host postgres:15-alpine \
+            psql -U postgres -h 127.0.0.1 -p 5432 -c "CREATE DATABASE tenvyr_roadmap_test"
+
+      - name: Real PostgreSQL integration suite (run 1)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/tenvyr_roadmap_test
+          TENVYR_LIVE_RUNTIME_GATES: "0"
+        run: |
+          set -o pipefail
+          pnpm --filter orchestrator test -- --runInBand 2>&1 | tee /tmp/pg-run1.log
+          node scripts/assert-jest-run.mjs /tmp/pg-run1.log
+
+      - name: Real PostgreSQL integration suite (run 2, reinitialized)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/tenvyr_roadmap_test
+          TENVYR_LIVE_RUNTIME_GATES: "0"
+        run: |
+          set -o pipefail
+          docker run --rm --network host postgres:15-alpine \
+            psql -U postgres -h 127.0.0.1 -p 5432 -c "DROP DATABASE tenvyr_roadmap_test; CREATE DATABASE tenvyr_roadmap_test"
+          pnpm --filter orchestrator test -- --runInBand 2>&1 | tee /tmp/pg-run2.log
+          node scripts/assert-jest-run.mjs /tmp/pg-run2.log
+
+  self-hosted-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Self-hosted deployment contract gate (required)
+        run: pnpm self-hosted:contract-test
+
+  self-hosted-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Disposable self-hosted recovery E2E (required)
+        run: pnpm self-hosted:recovery-test
+
+      - name: Show leftover containers on failure
+        if: failure()
+        run: docker ps -a
 
   docker-showcase:
     runs-on: ubuntu-latest

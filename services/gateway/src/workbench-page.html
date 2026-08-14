@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tenvyr Operator Workbench</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 72rem; margin: 1rem auto; padding: 0 1rem; }
+  h1, h2 { margin: 1rem 0 0.4rem; }
+  .notice { border: 1px solid currentColor; padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
+  section { margin: 1.25rem 0; }
+  form { display: grid; gap: 0.5rem; max-width: 40rem; }
+  label { display: grid; gap: 0.2rem; font-weight: 600; }
+  input, textarea, select, button { font: inherit; padding: 0.35rem 0.5rem; }
+  button { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid currentColor; padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
+  .card { border: 1px solid currentColor; border-radius: 0.375rem; padding: 0.6rem 0.75rem; margin: 0.5rem 0; }
+  .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+  [aria-live] { border: 0; clip: rect(0 0 0 0); height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; }
+  .error { color: #b00020; font-weight: 600; }
+  @media (max-width: 40rem) { .row { flex-direction: column; align-items: stretch; } }
+</style>
+</head>
+<body>
+<h1>Tenvyr Operator Workbench</h1>
+<p class="notice" role="note">
+  Trusted single operator, loopback / private network only. This is not
+  secure external/multi-user production (External Production Exposure Gate
+  is OPEN). Refresh or reconnect reconstructs this view from server state;
+  polls never decide authority.
+</p>
+<div aria-live="polite" id="live-region"></div>
+
+<section aria-labelledby="connections-heading">
+  <h2 id="connections-heading">Runtime connections</h2>
+  <details id="connection-onboarding">
+    <summary>Add or revise a runtime connection</summary>
+    <form id="connection-form">
+      <label>Connection id <input name="connectionId" maxlength="255" placeholder="conn:codex-local" required></label>
+      <label>Name <input name="name" maxlength="255" placeholder="Codex local" required></label>
+      <label>Runtime kind
+        <select name="runtimeKind">
+          <option value="generic-cli">Generic CLI</option>
+          <option value="codex">Codex CLI (version-pinned template)</option>
+          <option value="claude">Claude Code (version-pinned template)</option>
+          <option value="opencode">OpenCode (version-pinned template)</option>
+        </select>
+      </label>
+      <label>Executable (absolute path) <input name="command" maxlength="4096" placeholder="/usr/local/bin/codex" required></label>
+      <label id="args-field">Args (comma separated; fixed operator config — never shell-interpreted) <input name="args" maxlength="255" placeholder="exec, --json, --ephemeral"></label>
+      <label id="cwd-field">Working directory (absolute, optional) <input name="cwd" maxlength="4096" placeholder="/srv/work"></label>
+      <label id="secrets-field">Secret env references (comma separated NAMES only — values never enter Tenvyr) <input name="secrets" maxlength="255" placeholder="CODEX_API_KEY"></label>
+      <label id="probe-field">Probe args (comma separated) <input name="probeArgs" maxlength="255" value="--version"></label>
+      <p id="template-note" class="notice" role="note"></p>
+      <div class="row">
+        <button type="submit">Create connection</button>
+        <button type="button" id="connection-form-cancel" hidden>Cancel edit</button>
+      </div>
+    </form>
+  </details>
+  <div id="connections"></div>
+</section>
+
+<section aria-labelledby="launch-heading">
+  <h2 id="launch-heading">Launch a supervised team run</h2>
+  <form id="launch-form">
+    <label>Run name <input name="name" maxlength="255" value="team-run"></label>
+    <label>Goal <textarea name="goal" rows="3" maxlength="4096" required></textarea></label>
+    <div id="role-planner" class="card" data-role="planner">
+      <strong>Planner</strong>
+      <div class="row">
+        <label>Kind <select class="role-kind"><option value="agent">Agent</option><option value="connection">Connection</option></select></label>
+        <label>Agent name <input class="role-agent" maxlength="255" value="planner"></label>
+        <label class="role-connection-field" hidden>Connection <select class="role-connection"></select></label>
+        <label class="role-routing-field" hidden>Routing agent (executor host transport key) <input class="role-routing" maxlength="255" placeholder="local-host"></label>
+      </div>
+    </div>
+    <div id="role-verifier" class="card" data-role="verifier">
+      <strong>Verifier</strong>
+      <div class="row">
+        <label>Kind <select class="role-kind"><option value="agent">Agent</option><option value="connection">Connection</option></select></label>
+        <label>Agent name <input class="role-agent" maxlength="255" value="verifier"></label>
+        <label class="role-connection-field" hidden>Connection <select class="role-connection"></select></label>
+        <label class="role-routing-field" hidden>Routing agent (executor host transport key) <input class="role-routing" maxlength="255" placeholder="local-host"></label>
+      </div>
+    </div>
+    <label>Worker agents (comma separated) <input name="workers" maxlength="255" value="implementation" required></label>
+    <label>Worker connections (comma separated connection ids, optional) <input name="workerConnections" maxlength="255" placeholder="conn:worker-a, conn:worker-b"></label>
+    <p class="notice" role="note">
+      Executor allowlist is computed from the selections above: every
+      agent-kind role adds <code>agent:&lt;name&gt;</code>, every connection
+      adds its executor id, plus <code>local-host</code>.
+    </p>
+    <fieldset>
+      <legend>Hard limits (never hidden behind "automatic")</legend>
+      <label>Max iterations <input type="number" name="maxIterations" min="1" max="100" value="3" required></label>
+      <label>Max workers per iteration <input type="number" name="maxWorkersPerIteration" min="1" max="64" value="4" required></label>
+      <label>Max total workers <input type="number" name="maxTotalWorkers" min="1" max="1024" value="20" required></label>
+      <label>Loop deadline (ms) <input type="number" name="loopDeadlineMs" min="60000" max="86400000" value="3600000" required></label>
+      <label>Budget account id (optional) <input name="budgetAccountId" maxlength="255"></label>
+    </fieldset>
+    <button type="submit">Launch run</button>
+  </form>
+</section>
+
+<section aria-labelledby="executions-heading">
+  <h2 id="executions-heading">Executions</h2>
+  <div id="executions"></div>
+</section>
+
+<section aria-labelledby="detail-heading">
+  <h2 id="detail-heading">Execution detail</h2>
+  <div id="detail"></div>
+</section>
+
+<section aria-labelledby="capsule-heading">
+  <h2 id="capsule-heading">Capsule</h2>
+  <div id="capsule"></div>
+</section>
+
+<section aria-labelledby="compare-heading">
+  <h2 id="compare-heading">Compare two executions</h2>
+  <form id="compare-form">
+    <label>Execution A id <input name="executionA" maxlength="255" required></label>
+    <label>Execution B id <input name="executionB" maxlength="255" required></label>
+    <button type="submit">Compare</button>
+  </form>
+  <div id="compare-result"></div>
+</section>
+
+<section aria-labelledby="audit-heading">
+  <h2 id="audit-heading">Operator action audit trail</h2>
+  <div id="audit"></div>
+</section>
+
+<script>
+"use strict";
+const POLL_MS = 3000;
+
+const live = (text) => {
+  document.getElementById("live-region").textContent = text;
+};
+
+const el = (tag, props = {}, children = []) => {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "text") node.textContent = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) node.append(child);
+  return node;
+};
+
+const statusText = (status) => String(status ?? "UNKNOWN").replace(/_/g, " ");
+
+const renderConnections = async () => {
+  const response = await fetch("/api/workbench/connections");
+  const { cards } = await response.json();
+  const container = document.getElementById("connections");
+  container.replaceChildren();
+  if (!cards || cards.length === 0) {
+    container.append(el("p", { text: "No connections configured." }));
+    return;
+  }
+  for (const card of cards) {
+    const status = statusText(card.status);
+    container.append(
+      el("div", { class: "card" }, [
+        el("div", { class: "row" }, [
+          el("strong", { text: card.name }),
+          el("span", { text: `${card.connectionId} · ${card.runtimeKind}` }),
+          el("span", { text: `Status: ${status}` }),
+          card.revoked ? el("strong", { text: "REVOKED" }) : null,
+          el("button", { text: "Test", onclick: () => testConnectionAction(card.connectionId) }),
+          el("button", { text: "Revise", onclick: () => openReviseForm(card.connectionId, card.name, card.runtimeKind) }),
+          el("button", { text: "Revoke", onclick: () => revokeConnectionAction(card.connectionId) }),
+        ].filter(Boolean)),
+        el("p", {
+          text: `Last tested: ${card.testedAt ?? "never"}${
+            card.testedVersion ? ` · tested runtime ${card.testedVersion}` : ""
+          }${card.reasonCode ? ` · ${card.reasonCode}` : ""}`,
+        }),
+      ]),
+    );
+  }
+};
+
+const splitList = (value) =>
+  String(value ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const profileFromForm = (form) => {
+  const kind = form.get("runtimeKind").value;
+  const command = form.get("command").value.trim();
+  const base = { name: form.get("name").value.trim(), executorId: "local-host" };
+  if (kind === "generic-cli") {
+    const secrets = splitList(form.get("secrets").value);
+    const cwd = form.get("cwd").value.trim();
+    return {
+      ...base,
+      runtimeKind: "generic-cli",
+      version: "0.1.0",
+      credentialRefs: secrets.map((name) => ({ kind: "env", name })),
+      declaredCapabilities: {
+        invocation: { supported: true, source: "configured" },
+        structuredResult: { supported: true, source: "configured" },
+        localProcessTermination: { supported: true, source: "configured" },
+      },
+      cli: {
+        command,
+        args: splitList(form.get("args").value),
+        ...(cwd ? { cwd } : {}),
+        ...(secrets.length
+          ? { secrets: Object.fromEntries(secrets.map((name) => [name, name])) }
+          : {}),
+        probe: { args: splitList(form.get("probeArgs").value), expectsVersion: true },
+      },
+    };
+  }
+  const template = connectionTemplates.find((t) => t.runtimeKind === kind);
+  if (!template) throw new Error(`Unknown runtime template "${kind}"`);
+  return {
+    ...base,
+    runtimeKind: kind,
+    version: template.pinnedVersion,
+    credentialRefs: template.credentialEnvRefs.map((name) => ({ kind: "env", name })),
+    declaredCapabilities: template.declaredCapabilities,
+    cli: {
+      command,
+      args: template.runArgs,
+      probe: template.probe,
+      ...(template.authProbe ? { authProbe: template.authProbe } : {}),
+    },
+  };
+};
+
+const submitConnectionForm = async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const connectionId = form.get("connectionId").value.trim();
+  const button = event.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    const profile = profileFromForm(form);
+    const response = await fetch(
+      `/api/connections${editingConnection ? `/${encodeURIComponent(editingConnection)}` : ""}`,
+      {
+        method: editingConnection ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          editingConnection
+            ? { idempotencyKey: crypto.randomUUID(), profile }
+            : { idempotencyKey: crypto.randomUUID(), connectionId, profile },
+        ),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(JSON.stringify(data.message ?? data.error ?? data));
+    }
+    live(editingConnection ? `Connection ${editingConnection} revised.` : `Connection ${connectionId} created.`);
+    resetConnectionForm();
+  } catch (error) {
+    live(`Connection save failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    await refresh();
+  }
+};
+
+const testConnectionAction = async (connectionId) => {
+  const response = await fetch(`/api/connections/${encodeURIComponent(connectionId)}/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.success) {
+    live(`Test failed: ${JSON.stringify(data.message ?? data.error ?? data)}`);
+    return;
+  }
+  const receipt = data.data ?? {};
+  live(
+    `Test ${connectionId}: ${statusText(receipt.status ?? receipt.state ?? "unknown")}${
+      receipt.superseded ? " (superseded — a newer revision was tested)" : ""
+    }${receipt.testedVersion ? ` · ${receipt.testedVersion}` : ""}`,
+  );
+  await refresh();
+};
+
+const revokeConnectionAction = async (connectionId) => {
+  if (!window.confirm(`Revoke connection ${connectionId}? Revocation is terminal and denies future claims.`)) {
+    return;
+  }
+  const response = await fetch(`/api/connections/${encodeURIComponent(connectionId)}/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.success) {
+    live(`Revoke failed: ${JSON.stringify(data.message ?? data.error ?? data)}`);
+    return;
+  }
+  live(`Connection ${connectionId} revoked.`);
+  await refresh();
+};
+
+let editingConnection = null;
+
+const resetConnectionForm = () => {
+  editingConnection = null;
+  const form = document.getElementById("connection-form");
+  form.reset();
+  form.elements.connectionId.disabled = false;
+  form.querySelector("button[type=submit]").textContent = "Create connection";
+  document.getElementById("connection-form-cancel").hidden = true;
+  document.getElementById("connection-onboarding").open = false;
+  document.querySelector('input[name="probeArgs"]').value = "--version";
+  syncConnectionFormFields();
+};
+
+const openReviseForm = (connectionId, name, runtimeKind) => {
+  editingConnection = connectionId;
+  const form = document.getElementById("connection-form");
+  form.elements.connectionId.value = connectionId;
+  form.elements.connectionId.disabled = true;
+  form.elements.name.value = name;
+  const kindSelect = form.elements.runtimeKind;
+  if (kindSelect.querySelector(`option[value="${runtimeKind}"]`)) {
+    kindSelect.value = runtimeKind;
+  }
+  form.elements.command.value = "";
+  form.elements.cwd.value = "/srv/work";
+  form.elements.secrets.value = "";
+  form.elements.args.value = "";
+  form.querySelector("button[type=submit]").textContent = "Save revision";
+  document.getElementById("connection-form-cancel").hidden = false;
+  document.getElementById("connection-onboarding").open = true;
+  syncConnectionFormFields();
+  form.elements.command.focus();
+};
+
+const syncConnectionFormFields = () => {
+  const kind = document.querySelector('#connection-form select[name="runtimeKind"]').value;
+  const templated = kind !== "generic-cli";
+  const template = connectionTemplates.find((t) => t.runtimeKind === kind);
+  document.getElementById("args-field").hidden = templated;
+  document.getElementById("cwd-field").hidden = templated;
+  document.getElementById("secrets-field").hidden = templated;
+  document.getElementById("probe-field").hidden = templated;
+  document.getElementById("template-note").textContent = templated && template
+    ? `Template ${template.runtimeKind} pinned at ${template.pinnedVersion} (${template.sourceUrl}); run argv and probe come from the template. Credential references: ${template.credentialEnvRefs.join(", ") || "none (runtime-owned auth)"}.`
+    : "Generic CLI: fixed absolute command, fixed argv, probe defaults to --version. Secrets are environment-variable NAMES only.";
+};
+
+const roleSelection = (role) => {
+  const container = document.getElementById(`role-${role}`);
+  const kind = container.querySelector(".role-kind").value;
+  if (kind === "connection") {
+    const connectionId = container.querySelector(".role-connection").value;
+    const agent = container.querySelector(".role-routing").value.trim() || connectionId;
+    return { kind: "connection", name: connectionId, agent };
+  }
+  return { kind: "agent", name: container.querySelector(".role-agent").value.trim() };
+};
+
+const syncRoleFields = (container) => {
+  const connectionKind = container.querySelector(".role-kind").value === "connection";
+  container.querySelector(".role-agent").closest("label").hidden = connectionKind;
+  container.querySelector(".role-connection-field").hidden = !connectionKind;
+  container.querySelector(".role-routing-field").hidden = !connectionKind;
+};
+
+const populateRoleConnections = () => {
+  for (const container of document.querySelectorAll("[data-role]")) {
+    const select = container.querySelector(".role-connection");
+    select.replaceChildren();
+    for (const connection of connectionsById.values()) {
+      select.append(el("option", { value: connection.connectionId, text: `${connection.connectionId} (${connection.runtimeKind})` }));
+    }
+  }
+};
+
+const teamConfigFromForm = (form) => {
+  const planner = roleSelection("planner");
+  const verifier = roleSelection("verifier");
+  const allowedWorkers = [
+    ...splitList(form.get("workers").value).map((name) => ({ kind: "agent", name })),
+    ...splitList(form.get("workerConnections").value).map((name) => ({ kind: "connection", name })),
+  ];
+  const executors = new Set(["local-host"]);
+  for (const selection of [planner, verifier, ...allowedWorkers]) {
+    if (selection.kind === "agent") {
+      executors.add(`agent:${selection.name}`);
+    } else {
+      const executorId = connectionsById.get(selection.name)?.executorId;
+      if (executorId) executors.add(executorId);
+    }
+  }
+  return {
+    schemaVersion: 1,
+    planner,
+    verifier,
+    allowedWorkers,
+    maxIterations: Number(form.get("maxIterations").value),
+    maxWorkersPerIteration: Number(form.get("maxWorkersPerIteration").value),
+    maxTotalWorkers: Number(form.get("maxTotalWorkers").value),
+    loopDeadlineMs: Number(form.get("loopDeadlineMs").value),
+    delegationDepthMax: 2,
+    allowedExecutors: [...executors],
+    ...(form.get("budgetAccountId").value.trim()
+      ? { budgetAccountId: form.get("budgetAccountId").value.trim() }
+      : {}),
+  };
+};
+
+const renderExecutions = async () => {
+  const response = await fetch("/api/workbench/executions");
+  const data = await response.json();
+  const container = document.getElementById("executions");
+  container.replaceChildren();
+  const items = data.items ?? [];
+  if (items.length === 0) {
+    container.append(el("p", { text: "No executions yet." }));
+    return;
+  }
+  const table = el("table", {}, [
+    el("thead", {}, [
+      el("tr", {}, [
+        el("th", { text: "Execution" }),
+        el("th", { text: "Status" }),
+        el("th", { text: "Coordination phase" }),
+        el("th", { text: "Iteration" }),
+        el("th", { text: "Steps" }),
+      ]),
+    ]),
+    el("tbody", {}, items.map((item) =>
+      el("tr", {}, [
+        el("td", {}, [el("a", { href: "#detail", text: item.id.slice(0, 8), onclick: () => renderDetail(item.id) })]),
+        el("td", { text: statusText(item.status) }),
+        el("td", { text: statusText(item.coordinationPhase) }),
+        el("td", { text: String(item.iterationNumber ?? "") }),
+        el("td", { text: String(item.stepCount) }),
+      ]),
+    )),
+  ]);
+  container.append(table);
+  if (data.truncated) {
+    container.append(el("p", { text: "List truncated; pagination available." }));
+  }
+};
+
+const renderDetail = async (executionId) => {
+  const container = document.getElementById("detail");
+  container.replaceChildren(el("p", { text: "Loading…" }));
+  const response = await fetch(`/api/workbench/executions/${encodeURIComponent(executionId)}`);
+  const data = await response.json();
+  container.replaceChildren();
+  if (data.error) {
+    container.append(el("p", { class: "error", text: data.error.message }));
+    return;
+  }
+  const execution = data.execution;
+  container.append(
+    el("h3", { text: `Execution ${execution.id.slice(0, 8)}` }),
+    el("p", { text: `Status: ${statusText(execution.status)} · Goal: ${execution.goal.preview}${execution.goal.truncated ? " (truncated)" : ""}` }),
+  );
+  const run = data.coordination?.run;
+  if (run) {
+    container.append(
+      el("h4", { text: "Supervised team loop" }),
+      el("p", { text: `Phase: ${statusText(run.phase)} · Iteration ${run.currentIterationNumber} of ${run.maxIterations} · Workers ${run.cumulativeWorkers}/${run.maxTotalWorkers} · Remaining deadline ${Math.floor(run.remainingDeadlineMs / 1000)}s${run.waitReason ? ` · WAIT: ${run.waitReason}` : ""}` }),
+    );
+    const iteration = data.coordination.iterations.at(-1);
+    if (iteration) {
+      const rows = iteration.workerManifest.map((worker) =>
+        el("tr", {}, [
+          el("td", { text: worker.taskId }),
+          el("td", { text: worker.required ? "required" : "optional" }),
+          el("td", { text: statusText(worker.status) }),
+        ]),
+      );
+      container.append(
+        el("h5", { text: `Iteration ${iteration.iterationNumber} — workers` }),
+        el("table", {}, [
+          el("thead", {}, [el("tr", {}, [el("th", { text: "Worker" }), el("th", { text: "Role" }), el("th", { text: "Status" })])]),
+          el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: 3, text: "No workers admitted yet" })])]),
+        ]),
+        el("p", { text: `Verifier: ${iteration.verifierStepId ?? "pending"} · Decision: ${iteration.decisionAction ?? "pending"}` }),
+      );
+    }
+    if (run.phase === "WAITING_FOR_HUMAN") {
+      container.append(
+        el("div", { class: "row" }, [
+          el("button", { text: "Approve wait", onclick: () => waitAction(run.runId, true) }),
+          el("button", { text: "Deny wait", onclick: () => waitAction(run.runId, false) }),
+        ]),
+      );
+    }
+    if (["PLANNING", "BATCH_VALIDATION", "WORKING", "VERIFYING"].includes(run.phase)) {
+      container.append(el("button", { text: "Cancel execution", onclick: () => cancelAction(execution.id) }));
+    }
+    if (["COMPLETED", "FAILED", "CANCELLED"].includes(execution.status)) {
+      container.append(el("button", { text: "Replay as new execution", onclick: () => replayAction(execution.id) }));
+    }
+  }
+  const attempts = data.attempts ?? [];
+  if (attempts.length > 0) {
+    container.append(
+      el("h4", { text: "Recent attempts" }),
+      el("table", {}, [
+        el("thead", {}, [el("tr", {}, [el("th", { text: "Step" }), el("th", { text: "Attempt" }), el("th", { text: "Status" }), el("th", { text: "Error" })])]),
+        el("tbody", {}, attempts.map((attempt) =>
+          el("tr", {}, [
+            el("td", { text: attempt.stepId }),
+            el("td", { text: String(attempt.attemptNumber) }),
+            el("td", { text: statusText(attempt.status) }),
+            el("td", { text: attempt.error ?? "" }),
+          ]),
+        )),
+      ]),
+    );
+  }
+
+  const delegation = data.delegation;
+  if (delegation) {
+    container.append(
+      el("h4", { text: "Delegation" }),
+      el("p", { text: `Supervised: ${delegation.supervisedTotal} · Observed: ${delegation.observedTotal}${delegation.truncated ? " (truncated)" : ""}` }),
+    );
+  }
+
+  const artifacts = data.artifacts ?? [];
+  if (artifacts.length > 0) {
+    container.append(
+      el("h4", { text: "Artifact references (references only — never bytes)" }),
+      el("table", {}, [
+        el("thead", {}, [el("tr", {}, [el("th", { text: "Artifact id" }), el("th", { text: "Ordinal" }), el("th", { text: "Descriptor hash" })])]),
+        el("tbody", {}, artifacts.map((artifact) =>
+          el("tr", {}, [
+            el("td", { text: artifact.artifactId.slice(0, 8) }),
+            el("td", { text: String(artifact.descriptorOrdinal) }),
+            el("td", { text: artifact.descriptorHash.slice(0, 12) }),
+          ]),
+        )),
+      ]),
+    );
+    if (data.artifactsTruncated) {
+      container.append(el("p", { text: "Artifact references truncated." }));
+    }
+  }
+
+  container.append(
+    el("h4", { text: "Execution Capsule" }),
+    el("div", { class: "row" }, [
+      el("button", { text: "Open Capsule", onclick: () => renderCapsule(execution.id) }),
+    ]),
+  );
+};
+
+const waitAction = async (runId, approve) => {
+  const response = await fetch(`/api/workbench/commands/waits/${encodeURIComponent(runId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idempotencyKey: crypto.randomUUID(), approve }),
+  });
+  const data = await response.json();
+  live(data.outcome === "duplicate" ? "Wait decision already recorded." : "Wait decision recorded.");
+  refresh();
+};
+
+const cancelAction = async (executionId) => {
+  const response = await fetch(`/api/workbench/commands/executions/${encodeURIComponent(executionId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+  });
+  const data = await response.json();
+  live(data.outcome === "duplicate" ? "Cancel already recorded." : "Cancel recorded.");
+  refresh();
+};
+
+const replayAction = async (executionId) => {
+  const response = await fetch(`/api/workbench/commands/executions/${encodeURIComponent(executionId)}/replay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+  });
+  const data = await response.json();
+  live(data.outcome === "duplicate" ? "Replay already recorded." : "Replay created.");
+  refresh();
+};
+
+const refresh = async () => {
+  await loadConnectionCatalog();
+  await renderConnections();
+  await renderExecutions();
+  await renderAudit();
+};
+
+const renderCapsule = async (executionId) => {
+  const container = document.getElementById("capsule");
+  container.replaceChildren(el("p", { text: "Loading…" }));
+  const response = await fetch(`/api/workbench/executions/${encodeURIComponent(executionId)}/capsule`);
+  const data = await response.json();
+  container.replaceChildren();
+  if (data.error) {
+    container.append(el("p", { class: "error", text: data.error.message }));
+    return;
+  }
+  const capsule = data.capsule;
+  container.append(
+    el("h3", { text: `Capsule ${capsule.contentHash.slice(0, 12)}` }),
+    el("p", { text: `Point in time: ${capsule.pointInTime} · Source status: ${statusText(capsule.sourceStatus)}` }),
+    el("p", { text: `Steps ${capsule.header.stepCount} · Revisions ${capsule.header.revisionCount} · Attempts ${capsule.header.attemptCount}` }),
+  );
+  if (capsule.coordination) {
+    container.append(
+      el("p", { text: `Loop phase: ${statusText(capsule.coordination.run.phase)} · Iterations: ${capsule.coordination.iterations.length}` }),
+    );
+  }
+  for (const warning of capsule.evidenceCompleteness ?? []) {
+    container.append(el("p", { text: `Note: ${warning}` }));
+  }
+};
+
+const renderAudit = async () => {
+  const container = document.getElementById("audit");
+  const response = await fetch("/api/workbench/commands/audit");
+  const data = await response.json();
+  container.replaceChildren();
+  const items = data.items ?? [];
+  if (items.length === 0) {
+    container.append(el("p", { text: "No operator actions recorded." }));
+    return;
+  }
+  container.append(
+    el("table", {}, [
+      el("thead", {}, [el("tr", {}, [el("th", { text: "Action" }), el("th", { text: "Target" }), el("th", { text: "Recorded at" }), el("th", { text: "Outcome" })])]),
+      el("tbody", {}, items.map((item) =>
+        el("tr", {}, [
+          el("td", { text: item.action }),
+          el("td", { text: item.targetId ?? "" }),
+          el("td", { text: item.createdAt }),
+          el("td", { text: JSON.stringify(item.outcome).slice(0, 120) }),
+        ]),
+      )),
+    ]),
+  );
+  if (data.truncated) {
+    container.append(el("p", { text: "Audit trail truncated." }));
+  }
+};
+
+let connectionTemplates = [];
+let connectionsById = new Map();
+
+const loadConnectionCatalog = async () => {
+  try {
+    const templatesResponse = await fetch("/api/connections/templates");
+    const templatesData = await templatesResponse.json();
+    connectionTemplates = templatesData.data ?? [];
+  } catch {
+    connectionTemplates = [];
+  }
+  try {
+    const listResponse = await fetch("/api/connections");
+    const listData = await listResponse.json();
+    connectionsById = new Map(
+      (listData.data ?? []).map((connection) => [connection.connectionId, connection]),
+    );
+  } catch {
+    connectionsById = new Map();
+  }
+  populateRoleConnections();
+  syncConnectionFormFields();
+};
+
+document.getElementById("connection-form").addEventListener("submit", submitConnectionForm);
+document.getElementById("connection-form-cancel").addEventListener("click", resetConnectionForm);
+document.querySelector('#connection-form select[name="runtimeKind"]').addEventListener("change", syncConnectionFormFields);
+for (const container of document.querySelectorAll("[data-role]")) {
+  container.querySelector(".role-kind").addEventListener("change", () => syncRoleFields(container));
+}
+syncRoleFields(document.getElementById("role-planner"));
+syncRoleFields(document.getElementById("role-verifier"));
+
+document.getElementById("launch-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const response = await fetch("/api/workbench/commands/start-team-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      idempotencyKey: crypto.randomUUID(),
+      name: form.get("name").value,
+      goal: form.get("goal").value,
+      config: teamConfigFromForm(form),
+    }),
+  });
+  const data = await response.json();
+  if (data.outcome === "executed" && data.result?.executionId) {
+    live("Team run launched.");
+    await renderDetail(data.result.executionId);
+  } else {
+    live(`Launch failed: ${JSON.stringify(data.error ?? data)}`);
+  }
+  await refresh();
+});
+
+document.getElementById("compare-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const container = document.getElementById("compare-result");
+  container.replaceChildren(el("p", { text: "Comparing…" }));
+  const response = await fetch("/api/workbench/commands/compare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      idempotencyKey: crypto.randomUUID(),
+      executionA: form.get("executionA").value.trim(),
+      executionB: form.get("executionB").value.trim(),
+    }),
+  });
+  const data = await response.json();
+  container.replaceChildren();
+  if (data.outcome === "executed" && data.result?.comparison) {
+    container.append(el("pre", { text: JSON.stringify(data.result.comparison, null, 2).slice(0, 4000) }));
+  } else {
+    container.append(el("p", { class: "error", text: JSON.stringify(data.error ?? data) }));
+  }
+});
+
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>

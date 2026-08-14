@@ -50,3 +50,33 @@ pnpm showcase:down
 For a real-provider explanation or optional manual run, use the copyable
 commands in [using model providers](using-model-providers.md). Do not enter or
 show a real API key during a recorded demo.
+
+## M10 offline Workbench demo (deterministic, no provider calls)
+
+The M10 wedge demo runs entirely offline with clearly labeled mock runtime
+profiles and takes about 3 minutes:
+
+1. **Start the stack** — `pnpm showcase:up` (or run the orchestrator +
+   gateway locally with PostgreSQL).
+2. **Open the Workbench** — <http://localhost:4000/workbench>. The page
+   states the trusted-operator/loopback-only limitation.
+3. **Launch a team run** — fill the launch form (goal, planner/verifier/
+   workers, VISIBLE hard limits) and press `Launch run`. This goes through
+   the real idempotent command surface
+   (`POST /api/workbench/commands/start-team-run`).
+4. **Watch the loop** — the execution detail shows phase, iteration N of
+   max, workers with required/optional and statuses, the Verifier decision,
+   and the remaining deadline. The deterministic demo
+   (`m10-demo.spec.ts`) includes one Worker FAILURE (evidence, not a
+   stranded DAG) and one WAIT that the operator approves.
+5. **Terminal outcome** — ACCEPTED releases the completion hold; the
+   Execution completes.
+6. **Inspect** — artifact references (labeled references, never bytes),
+   delegation counts, the Execution Capsule summary, compare two runs, and
+   the operator action audit trail.
+7. **Optional installed-runtime demo** — separate, version/auth
+   preflighted, cost-visible, bounded, and never required for CI.
+
+The demo contract: at least two iterations, one Worker failure, one
+approval boundary, and a Capsule — all from PostgreSQL truth; refresh or
+reconnect reconstructs the same view.

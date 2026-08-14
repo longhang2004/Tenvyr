@@ -1,11 +1,14 @@
 import {
+  attachLocalExecutorProfile,
   buildExecutorDescriptor,
   EXECUTOR_DESCRIPTOR_SCHEMA_VERSION,
   parseExecutorDescriptor,
+  parseLocalProfile,
   readExecutorDescriptor,
   type ExecutorDescriptorV1,
 } from "./executor-descriptor";
 import type { AgentTransportConfiguration } from "../agent-adapters/agent-transport-config.service";
+import type { ConnectionRevisionV1 } from "./runtime-connection";
 
 const httpConfiguration: AgentTransportConfiguration = {
   kind: "http",
@@ -276,5 +279,102 @@ describe("readExecutorDescriptor (compatibility reader)", () => {
         );
       }
     }
+  });
+});
+
+describe("local executor profile (M8-S6 frozen CLI data)", () => {
+  const cliRevision = (): ConnectionRevisionV1 =>
+    ({
+      schemaVersion: "1",
+      connectionId: "conn:codex",
+      revisionNumber: 3,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      configHash: "a".repeat(64),
+      capabilities: {},
+      profile: {
+        name: "Codex",
+        runtimeKind: "codex",
+        executorId: "local-host",
+        version: "0.147.0",
+        credentialRefs: [{ kind: "env", name: "CODEX_API_KEY" }],
+        declaredCapabilities: {},
+        cli: {
+          command: "/usr/local/bin/codex",
+          args: ["exec", "--json", "--ephemeral", "-"],
+          cwd: "/srv/work",
+          envAllowlist: { HOME: "TENVYR_HOME" },
+          secrets: { CODEX_API_KEY: "CODEX_API_KEY" },
+          probe: { args: ["login", "status"], authAnyNonZero: true },
+        },
+      },
+    }) as ConnectionRevisionV1;
+
+  it("freezes the secret-free local execution data of a CLI connection", () => {
+    const descriptor = buildExecutorDescriptor(
+      "team-planner",
+      httpConfiguration,
+    );
+    const frozen = attachLocalExecutorProfile(descriptor, cliRevision());
+
+    expect(frozen.localProfile).toEqual({
+      command: "/usr/local/bin/codex",
+      args: ["exec", "--json", "--ephemeral", "-"],
+      cwd: "/srv/work",
+      envAllowlist: { HOME: "TENVYR_HOME" },
+      secrets: { CODEX_API_KEY: "CODEX_API_KEY" },
+    });
+    // References only — never values; a secret VALUE never reaches the
+    // snapshot.
+    expect(JSON.stringify(frozen)).not.toContain("sk-");
+    expect(JSON.stringify(frozen)).toContain("CODEX_API_KEY");
+    // The base descriptor is not mutated (frozen copy semantics).
+    expect(descriptor.localProfile).toBeUndefined();
+  });
+
+  it("leaves worker/agent-only descriptors unchanged", () => {
+    const descriptor = buildExecutorDescriptor(
+      "team-implementation",
+      httpConfiguration,
+    );
+    const noCli = {
+      ...cliRevision(),
+      profile: { ...cliRevision().profile, cli: undefined },
+    } as ConnectionRevisionV1;
+    expect(attachLocalExecutorProfile(descriptor, noCli).localProfile).toBeUndefined();
+  });
+
+  it("round-trips the frozen local profile through the strict parser", () => {
+    const descriptor = buildExecutorDescriptor(
+      "team-planner",
+      httpConfiguration,
+    );
+    const frozen = attachLocalExecutorProfile(descriptor, cliRevision());
+    const parsed = parseExecutorDescriptor(JSON.parse(JSON.stringify(frozen)));
+    expect(parsed.localProfile).toEqual(frozen.localProfile);
+  });
+
+  it("rejects secret values smuggled into the frozen local profile", () => {
+    const smuggled = {
+      command: "/usr/local/bin/codex",
+      args: ["-p"],
+      secrets: { CODEX_API_KEY: "sk-live-secret-value" },
+    };
+    expectRejected(
+      () => parseLocalProfile(smuggled),
+      "EXECUTOR_DESCRIPTOR_INVALID",
+    );
+    expectRejected(
+      () =>
+        parseExecutorDescriptor({
+          schemaVersion: "1",
+          executorId: "agent:x",
+          agent: "x",
+          kind: "http",
+          configHash: "a".repeat(64),
+          capabilities: { cancel: false },
+          localProfile: smuggled,
+        }),
+      "EXECUTOR_DESCRIPTOR_INVALID",
+    );
   });
 });

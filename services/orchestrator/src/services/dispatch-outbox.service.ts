@@ -12,6 +12,7 @@ import type { AgentAdapter } from "../agent-adapters/agent-adapter.types";
 import { AgentTransportConfigService } from "../agent-adapters/agent-transport-config.service";
 import { BudgetLedgerService } from "./budget-ledger.service";
 import type { ExecutorDescriptorV1 } from "../executors/executor-descriptor";
+import { RuntimeConnectionEntity } from "../entities/runtime-connection.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
@@ -128,6 +129,11 @@ export class DispatchOutboxService {
       // reuses the same invocation AND the same pinned descriptor; a rotated
       // live configuration cannot silently reroute it.
       const pinned = await this.frozenDescriptor(claimed.stepAttemptId, invocation);
+      // M8-S2: pending delivery of a revoked connection fails with a
+      // deterministic safe code — no fallback. Already-dispatched accepted
+      // work is untouched; revocation denial targets future claims and
+      // pending deliveries.
+      await this.assertConnectionNotRevoked(pinned);
       const receipt = await this.adapter.invoke(invocation, pinned);
       await this.markDispatched(claimed, receipt);
       return { outcome: "dispatched" };
@@ -560,6 +566,39 @@ export class DispatchOutboxService {
       );
     }
     return this.transportConfig.frozenDescriptor(attempt.executorSnapshot);
+  }
+
+  /**
+   * M8-S2: pending delivery of a revoked connection is denied with a
+   * deterministic safe code. The frozen profile is never rerouted and there
+   * is no fallback: the revocation state is the only dispatch-time
+   * authority check (health status remains projection, not authority).
+   */
+  private async assertConnectionNotRevoked(
+    pinned: ExecutorDescriptorV1,
+  ): Promise<void> {
+    const reference = pinned.connection;
+    if (!reference) return;
+    const connection = await this.dataSource
+      .getRepository(RuntimeConnectionEntity)
+      .findOne({
+        where: { connectionId: reference.connectionId },
+        select: ["statusState"],
+      });
+    // A REVOKED connection — or a frozen reference whose connection row no
+    // longer exists (revoked-then-deleted) — denies pending delivery. The
+    // frozen identity can never be rerouted and there is no fallback.
+    if (!connection || connection.statusState === "REVOKED") {
+      throw new AgentAdapterError(
+        "EXECUTOR_CONNECTION_REVOKED",
+        "router",
+        `Runtime connection "${reference.connectionId}" is revoked or no longer exists; pending delivery denied`,
+        {
+          invocationId: undefined,
+          retryable: false,
+        },
+      );
+    }
   }
 
   private async markDispatched(

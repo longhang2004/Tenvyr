@@ -4,6 +4,8 @@ import {
   type AgentResultV1,
 } from "@tenvyr/contracts";
 import { KafkaAgentAdapter } from "./kafka-agent.adapter";
+import { AgentTransportConfigService } from "./agent-transport-config.service";
+import { parseAgentTransportConfiguration } from "./agent-transport-config.service";
 import { EventPayloadTooLargeError } from "../services/agent-event.service";
 
 const invocation: AgentInvocationV1 = {
@@ -83,7 +85,19 @@ describe("KafkaAgentAdapter", () => {
       getStepExecution: jest.fn(),
     };
     resultHandler = jest.fn().mockResolvedValue(undefined);
-    adapter = new KafkaAgentAdapter(kafka as any, executionService as any);
+    // M11 closure: the spec exercises the CONNECTED path, so the transport
+    // config must declare a Kafka agent (otherwise the adapter idles).
+    adapter = new KafkaAgentAdapter(
+      kafka as any,
+      executionService as any,
+      new AgentTransportConfigService(
+        parseAgentTransportConfiguration({
+          AGENT_TRANSPORT_CONFIG: JSON.stringify({
+            "kafka-test-agent": { kind: "kafka" },
+          }),
+        }),
+      ),
+    );
   });
 
   describe("contract and lifecycle", () => {
@@ -565,6 +579,46 @@ describe("KafkaAgentAdapter", () => {
 
       expect(resultHandler).toHaveBeenCalledTimes(1);
       expect(eventHandler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("M11 closure: HTTP-only deployments (no Kafka brokers)", () => {
+    let idleAdapter: KafkaAgentAdapter;
+
+    beforeEach(() => {
+      const idleKafka = {
+        connect: jest.fn(),
+        subscribe: jest.fn(),
+        publish: jest.fn(),
+        disconnect: jest.fn(),
+      };
+      idleAdapter = new KafkaAgentAdapter(
+        idleKafka as any,
+        executionService as any,
+        new AgentTransportConfigService(
+          parseAgentTransportConfiguration({ AGENT_TRANSPORT_CONFIG: "{}" }),
+        ),
+      );
+    });
+
+    it("starts without connecting when no Kafka agents are configured", async () => {
+      await idleAdapter.start({ result: jest.fn(), event: jest.fn() });
+      const kafka = (idleAdapter as any).kafka;
+      expect(kafka.connect).not.toHaveBeenCalled();
+      expect(kafka.subscribe).not.toHaveBeenCalled();
+    });
+
+    it("dispatch of a Kafka-routed agent fails deterministically (non-retryable) on an idle transport", async () => {
+      await idleAdapter.start({ result: jest.fn(), event: jest.fn() });
+      await expect(
+        idleAdapter.invoke({
+          ...invocation,
+          invocationId: "idle-inv-1",
+        }),
+      ).rejects.toMatchObject({
+        code: "KAFKA_TRANSPORT_IDLE",
+        retryable: false,
+      });
     });
   });
 });

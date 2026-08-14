@@ -28,7 +28,15 @@
     "format": "prettier --write \"**/*.{ts,js,json,md,yml,yaml}\"",
     "skills:install": "./scripts/install-skills.sh",
     "codegraph:init": "./scripts/codegraph-init.sh",
-    "smoke:e2e": "node scripts/smoke-e2e.mjs"
+    "smoke:e2e": "node scripts/smoke-e2e.mjs",
+    "self-hosted:preflight": "node scripts/self-hosted/preflight.mjs",
+    "self-hosted:backup": "node scripts/self-hosted/backup.mjs",
+    "self-hosted:restore": "node scripts/self-hosted/restore.mjs",
+    "self-hosted:upgrade": "node scripts/self-hosted/upgrade.mjs",
+    "self-hosted:invariants": "node scripts/self-hosted/invariants.mjs",
+    "self-hosted:contract-test": "node --test scripts/self-hosted/contract.test.mjs",
+    "self-hosted:recovery-test": "node --test scripts/self-hosted/recovery.test.mjs",
+    "self-hosted:health": "curl -s http://127.0.0.1:3001/health"
   },
   "devDependencies": {
     "prettier": "^3.0.0"

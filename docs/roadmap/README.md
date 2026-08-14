@@ -7,6 +7,7 @@ audience:
 last_verified: 2026-07-28
 sources:
   - docs/roadmap/observability-provenance.md
+  - docs/plans/active/tenvyr-productization-roadmap/ROADMAP.md
   - docs/reference/implementation-status.md
 ---
 
@@ -24,6 +25,11 @@ Roadmap documents describe intended work, not current runtime guarantees. Check 
 
 ## Current roadmap
 
-- [Observability, provenance, and product differentiation](observability-provenance.md) — planned OpenTelemetry, W3C propagation, lineage, privacy, cost, dashboard, framework-integration, policy, and durability work, plus public-release blockers.
+- [M8–M11 productization roadmap](../plans/active/tenvyr-productization-roadmap/ROADMAP.md)
+  — accepted execution sequence for Runtime Connections, Supervised Agent Team
+  Execution, the Operator Workbench, and single-owner self-hosting.
+- [Observability, provenance, and product differentiation](observability-provenance.md)
+  — older thematic research. Implemented portions are superseded by M0–M7 truth;
+  remaining themes are discovery inputs, not a competing execution sequence.
 
 Plans and historical records may explain why a direction was chosen, but they do not override contracts, production code, tests, or current documentation.

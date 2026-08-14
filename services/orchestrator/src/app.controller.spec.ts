@@ -85,12 +85,28 @@ describe('AppController', () => {
   });
 
   describe('GET /health', () => {
-    it('returns a successful health envelope identifying the orchestrator service', () => {
-      const result = controller.getHealth();
+    it('returns a successful health envelope identifying the orchestrator service', async () => {
+      (controller as any).executionService.healthProbe = jest
+        .fn()
+        .mockResolvedValue({ ready: true, reasonCode: "ready" });
+      const result = await controller.getHealth();
 
       expect(result.success).toBe(true);
       expect(result.data.status).toBe('UP');
       expect(result.data.service).toBe('orchestrator');
+      expect(result.data.ready).toBe(true);
+      expect(result.data.reasonCode).toBe('ready');
+    });
+
+    it('reports DEGRADED with a safe reason code when migrations are missing', async () => {
+      (controller as any).executionService.healthProbe = jest
+        .fn()
+        .mockResolvedValue({ ready: false, reasonCode: "migrations-required" });
+      const result = await controller.getHealth();
+
+      expect(result.data.status).toBe('DEGRADED');
+      expect(result.data.reasonCode).toBe('migrations-required');
+      expect(JSON.stringify(result)).not.toContain('secret');
     });
   });
 

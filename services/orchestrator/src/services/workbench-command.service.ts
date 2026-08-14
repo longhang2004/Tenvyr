@@ -1,0 +1,535 @@
+import { Inject, Injectable } from "@nestjs/common";
+import { DataSource } from "typeorm";
+import { OperatorActionEntity } from "../entities/operator-action.entity";
+import { PipelineEntity } from "../entities/pipeline.entity";
+import { ExecutionEntity } from "../entities/execution.entity";
+import { LogicalStepEntity } from "../entities/step-execution.entity";
+import { StepAttemptEntity } from "../entities/step-attempt.entity";
+import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
+import { ExecutionService } from "./execution.service";
+import { RuntimeCoordinationService } from "./runtime-coordination.service";
+import { ExecutionCapsuleService } from "./execution-capsule.service";
+import { DelegationService } from "./delegation.service";
+import { RuntimeConnectionService } from "./runtime-connection.service";
+import type { ConnectionProfileV1 } from "../executors/runtime-connection";
+import { sha256Json } from "../domain/canonical-json";
+import { parseCoordinationConfig, type CoordinationConfigV1 } from "../domain/coordination";
+
+/**
+ * M10-S2: idempotent local operator commands through EXISTING authority
+ * services. Every command records durable audit evidence; duplicate
+ * delivery (same action + idempotency key) returns the stored outcome
+ * instead of re-executing authority. The UI never dispatches a Worker,
+ * applies a PlanPatch, advances an iteration, or marks completion
+ * directly. Initial actor is the single local operator.
+ */
+
+export const COMMAND_BOUNDS = {
+  idempotencyKeyMax: 128,
+  goalMaxChars: 4096,
+  runNameMax: 255,
+  payloadMaxBytes: 16 * 1024,
+} as const;
+
+export type CommandResult = {
+  action: string;
+  idempotencyKey: string;
+  outcome: "executed" | "duplicate";
+  result: Record<string, unknown>;
+};
+
+export class WorkbenchCommandError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "WorkbenchCommandError";
+    this.code = code;
+  }
+}
+
+@Injectable()
+export class WorkbenchCommandService {
+  constructor(
+    @Inject("DATA_SOURCE") private readonly dataSource: DataSource,
+    executionService?: ExecutionService,
+    coordination?: RuntimeCoordinationService,
+    capsules?: ExecutionCapsuleService,
+    connections?: RuntimeConnectionService,
+  ) {
+    this.executionService =
+      executionService ??
+      new ExecutionService(
+        this.dataSource.getRepository(ExecutionEntity),
+        this.dataSource.getRepository(LogicalStepEntity),
+        this.dataSource.getRepository(StepAttemptEntity),
+        this.dataSource.getRepository(ExecutionPlanRevisionEntity),
+        this.dataSource,
+      );
+    this.coordination = coordination ?? new RuntimeCoordinationService(this.dataSource);
+    this.capsules =
+      capsules ??
+      new ExecutionCapsuleService(
+        this.dataSource,
+        new DelegationService(this.dataSource, this.executionService),
+        this.executionService,
+      );
+    this.connections = connections ?? new RuntimeConnectionService(this.dataSource);
+  }
+
+  private readonly executionService: ExecutionService;
+  private readonly coordination: RuntimeCoordinationService;
+  private readonly capsules: ExecutionCapsuleService;
+  private readonly connections: RuntimeConnectionService;
+
+  private boundedKey(idempotencyKey: string): string {
+    if (
+      !idempotencyKey ||
+      idempotencyKey.length > COMMAND_BOUNDS.idempotencyKeyMax ||
+      /[^A-Za-z0-9_.:-]/.test(idempotencyKey)
+    ) {
+      throw new WorkbenchCommandError(
+        "INVALID_IDEMPOTENCY_KEY",
+        `idempotencyKey must be 1-${COMMAND_BOUNDS.idempotencyKeyMax} characters of [A-Za-z0-9_.:-]`,
+      );
+    }
+    return idempotencyKey;
+  }
+
+  private boundedGoal(goal: unknown): string {
+    const raw =
+      typeof goal === "string"
+        ? goal
+        : JSON.stringify(goal ?? {});
+    if (raw.length > COMMAND_BOUNDS.goalMaxChars) {
+      throw new WorkbenchCommandError(
+        "GOAL_TOO_LARGE",
+        `goal exceeds ${COMMAND_BOUNDS.goalMaxChars} characters`,
+      );
+    }
+    return raw;
+  }
+
+  /**
+   * Executes exactly once per (action, idempotencyKey). The audit row is
+   * inserted FIRST with a pending marker via INSERT ... ON CONFLICT DO
+   * NOTHING — a concurrent duplicate loses the insert (identifiers empty)
+   * and returns the winner's stored outcome WITHOUT executing authority.
+   * The authority mutation and the outcome CAS commit in the SAME
+   * transaction (manager-passable WithManager variants), so a crash can
+   * never leave an executed command without evidence or a duplicate
+   * authority action, and a caught 23505 can never abort the transaction
+   * (Postgres poisons the tx on any error).
+   *
+   * M10-S2: same idempotency identity + CONFLICTING payload is rejected —
+   * the stored request payload (canonical-hashed) is compared on every
+   * duplicate delivery, so the same key can never silently execute a
+   * different semantic request.
+   */
+  private async runCommand(
+    action: string,
+    idempotencyKey: string,
+    targetId: string | null,
+    payload: Record<string, unknown>,
+    execute: (
+      manager: import("typeorm").EntityManager,
+    ) => Promise<Record<string, unknown>>,
+  ): Promise<CommandResult> {
+    const key = this.boundedKey(idempotencyKey);
+    const actor = "local-operator";
+    const payloadHash = sha256Json(payload);
+    return this.dataSource.transaction(async (manager) => {
+      const actions = manager.getRepository(OperatorActionEntity);
+      const inserted = await actions
+        .createQueryBuilder()
+        .insert()
+        .into(OperatorActionEntity)
+        .values({
+          action,
+          idempotencyKey: key,
+          actor,
+          targetId,
+          payload,
+          outcome: { pending: true },
+        })
+        .orIgnore()
+        .execute();
+      if (inserted.identifiers.length === 0) {
+        // A concurrent delivery won the row; its outcome is authoritative
+        // and authority was NOT re-executed. The insert waited for that
+        // commit, so the row is readable now.
+        const winner = await actions.findOne({
+          where: { action, idempotencyKey: key },
+        });
+        if (!winner) throw new Error("Audit row disappeared");
+        assertSameRequestPayload(winner.payload, payloadHash, action, key);
+        return {
+          action,
+          idempotencyKey: key,
+          outcome: "duplicate",
+          result: (winner.outcome as Record<string, unknown>) ?? {},
+        };
+      }
+      // NOTE: with ON CONFLICT DO NOTHING Postgres returns no RETURNING
+      // rows, so `identifiers` is NOT the insert proof. The authoritative
+      // row is the one visible under (action, key) — ours when still
+      // pending, the winner's committed outcome otherwise.
+      const row = await actions.findOne({
+        where: { action, idempotencyKey: key },
+      });
+      if (!row) throw new Error("Audit insert produced no row");
+      if ((row.outcome as { pending?: boolean })?.pending !== true) {
+        assertSameRequestPayload(row.payload, payloadHash, action, key);
+        return {
+          action,
+          idempotencyKey: key,
+          outcome: "duplicate",
+          result: row.outcome as Record<string, unknown>,
+        };
+      }
+      // A pending row exists with a DIFFERENT payload: a concurrent caller
+      // is executing a conflicting semantic request under this key.
+      assertSameRequestPayload(row.payload, payloadHash, action, key);
+      const result = await execute(manager);
+      await actions.update({ id: row.id }, { outcome: result });
+      return { action, idempotencyKey: key, outcome: "executed", result };
+    });
+  }
+
+  /** Launch: pipeline (goal) + execution + coordination run + iteration 1.
+   *  The recovery tick drives the engine from here. */
+  async startTeamRun(input: {
+    idempotencyKey: string;
+    name: string;
+    goal: unknown;
+    config: CoordinationConfigV1;
+  }): Promise<CommandResult> {
+    const name = input.name.slice(0, COMMAND_BOUNDS.runNameMax);
+    const goal = this.boundedGoal(input.goal);
+    const config = parseCoordinationConfig(input.config);
+    return this.runCommand(
+      "start-team-run",
+      input.idempotencyKey,
+      null,
+      { name, config: summarizeConfig(config) },
+      async (manager) => {
+        const pipeline = await manager
+          .getRepository(PipelineEntity)
+          .save(
+            manager.getRepository(PipelineEntity).create({
+              name: name || "team-run",
+              version: "1.0",
+              steps: [],
+            }),
+          );
+        const execution =
+          await this.executionService.materializeExecutionWithManager(
+            manager,
+            pipeline,
+            { goal },
+          );
+        const run = await this.coordination.startRunWithManager(
+          manager,
+          execution.id,
+          config,
+          new Date(Date.now() + config.loopDeadlineMs),
+        );
+        const iteration =
+          await this.coordination.createNextIterationWithManager(manager, run.id);
+        return {
+          executionId: execution.id,
+          runId: run.id,
+          iterationNumber: iteration.iterationNumber,
+        };
+      },
+    );
+  }
+
+  /** WAIT decision through the existing authority (approve/deny). */
+  async resolveWait(input: {
+    idempotencyKey: string;
+    runId: string;
+    approve: boolean;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "resolve-wait",
+      input.idempotencyKey,
+      input.runId,
+      { runId: input.runId, approve: input.approve },
+      async (manager) => {
+        const phase = await this.coordination.resolveWaitWithManager(
+          manager,
+          input.runId,
+          input.approve,
+        );
+        return { runId: input.runId, phase };
+      },
+    );
+  }
+
+  /** Cancel through the existing whole-execution authority. */
+  async cancelExecution(input: {
+    idempotencyKey: string;
+    executionId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "cancel-execution",
+      input.idempotencyKey,
+      input.executionId,
+      { executionId: input.executionId },
+      async (manager) => {
+        await this.executionService.cancelExecutionWithManager(
+          manager,
+          input.executionId,
+        );
+        return { executionId: input.executionId, status: "CANCELLED" };
+      },
+    );
+  }
+
+  /** Controlled replay as a new execution (existing Capsule authority). */
+  async replayExecution(input: {
+    idempotencyKey: string;
+    executionId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "replay-execution",
+      input.idempotencyKey,
+      input.executionId,
+      { executionId: input.executionId },
+      async (manager) => {
+        const replay = await this.capsules.replayWithManager(
+          manager,
+          input.executionId,
+        );
+        return {
+          sourceExecutionId: input.executionId,
+          targetExecutionId: replay.targetExecutionId,
+        };
+      },
+    );
+  }
+
+  /** M10-S4: bounded structural comparison of two executions. */
+  async compareExecutions(input: {
+    idempotencyKey: string;
+    executionA: string;
+    executionB: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "compare-executions",
+      input.idempotencyKey,
+      null,
+      { executionA: input.executionA, executionB: input.executionB },
+      async () => {
+        const comparison = await this.capsules.compare(
+          input.executionA,
+          input.executionB,
+        );
+        return { comparison };
+      },
+    );
+  }
+
+  /**
+   * M10-S2: audited Runtime Connection creation (revision 1). The audit
+   * evidence and the authority mutation commit in ONE transaction. The
+   * profile is secret-free by construction (credential references only);
+   * the audit payload stores the same bounded profile the authority froze.
+   */
+  async createConnection(input: {
+    idempotencyKey: string;
+    connectionId: string;
+    profile: ConnectionProfileV1;
+  }): Promise<CommandResult> {
+    const profile = this.boundedProfile(input.profile);
+    return this.runCommand(
+      "create-connection",
+      input.idempotencyKey,
+      input.connectionId,
+      { connectionId: input.connectionId, profile },
+      async (manager) => {
+        const revision = await this.connections.createConnectionWithManager(
+          manager,
+          input.connectionId,
+          profile,
+        );
+        return { connectionId: input.connectionId, revisionNumber: revision.revisionNumber };
+      },
+    );
+  }
+
+  /** M10-S2: audited revision append (immutable revision N+1). */
+  async reviseConnection(input: {
+    idempotencyKey: string;
+    connectionId: string;
+    profile: ConnectionProfileV1;
+  }): Promise<CommandResult> {
+    const profile = this.boundedProfile(input.profile);
+    return this.runCommand(
+      "revise-connection",
+      input.idempotencyKey,
+      input.connectionId,
+      { connectionId: input.connectionId, profile },
+      async (manager) => {
+        const revision = await this.connections.reviseConnectionWithManager(
+          manager,
+          input.connectionId,
+          profile,
+        );
+        return { connectionId: input.connectionId, revisionNumber: revision.revisionNumber };
+      },
+    );
+  }
+
+  /**
+   * M10-S2: audited terminal revocation. Repeated equivalent revoke
+   * commands share one effective authority transition and one durable
+   * evidence row.
+   */
+  async revokeConnection(input: {
+    idempotencyKey: string;
+    connectionId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "revoke-connection",
+      input.idempotencyKey,
+      input.connectionId,
+      { connectionId: input.connectionId },
+      async (manager) => {
+        const status = await this.connections.revokeConnectionWithManager(
+          manager,
+          input.connectionId,
+        );
+        return { connectionId: input.connectionId, status };
+      },
+    );
+  }
+
+  /**
+   * M10-S2: audited connection test. Testing does not change authority;
+   * the command retains bounded evidence that the operator requested the
+   * test (the secret-free receipt, never probe output or credentials).
+   * The probe is bounded and rate-limited by the connection service.
+   */
+  async testConnection(input: {
+    idempotencyKey: string;
+    connectionId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "test-connection",
+      input.idempotencyKey,
+      input.connectionId,
+      { connectionId: input.connectionId },
+      async (manager) => {
+        // The probe must see the audit row's committed revision context;
+        // it resolves the CURRENT revision itself under the service's
+        // own claim lock and returns a bounded, secret-free receipt.
+        const receipt = await this.connections.testConnection(
+          input.connectionId,
+        );
+        return {
+          connectionId: input.connectionId,
+          receipt: {
+            revisionNumber: receipt.revisionNumber,
+            testedAt: receipt.testedAt,
+            state: receipt.state,
+            reasonCode: receipt.reasonCode,
+            durationMs: receipt.durationMs,
+            ...(receipt.testedVersion !== undefined
+              ? { testedVersion: receipt.testedVersion }
+              : {}),
+            ...(receipt.superseded === true ? { superseded: true } : {}),
+          },
+        };
+      },
+    );
+  }
+
+  private boundedProfile(profile: ConnectionProfileV1): ConnectionProfileV1 {
+    const rendered = JSON.stringify(profile);
+    if (rendered.length > COMMAND_BOUNDS.payloadMaxBytes) {
+      throw new WorkbenchCommandError(
+        "PAYLOAD_TOO_LARGE",
+        `connection profile exceeds ${COMMAND_BOUNDS.payloadMaxBytes} bytes`,
+      );
+    }
+    return profile;
+  }
+
+  /** Audit trail (bounded, newest first). */
+  async auditTrail(action?: string, limit = 50): Promise<{
+    items: Array<{
+      id: string;
+      action: string;
+      idempotencyKey: string;
+      actor: string;
+      targetId: string | null;
+      outcome: Record<string, unknown>;
+      createdAt: string;
+    }>;
+    truncated: boolean;
+  }> {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const rows = await this.dataSource.getRepository(OperatorActionEntity).find({
+      where: action ? { action } : {},
+      order: { createdAt: "DESC" },
+      take: take + 1,
+    });
+    const truncated = rows.length > take;
+    return {
+      items: rows.slice(0, take).map((row) => ({
+        id: row.id,
+        action: row.action,
+        idempotencyKey: row.idempotencyKey,
+        actor: row.actor,
+        targetId: row.targetId ?? null,
+        outcome: row.outcome,
+        createdAt:
+          row.createdAt instanceof Date
+            ? row.createdAt.toISOString()
+            : String(row.createdAt),
+      })),
+      truncated,
+    };
+  }
+}
+
+/** Redacted config summary for the audit payload (never secrets). */
+function summarizeConfig(config: CoordinationConfigV1): Record<string, unknown> {
+  return {
+    planner: config.planner,
+    verifier: config.verifier,
+    workerAgents: config.allowedWorkers
+      .filter((selection) => selection.kind === "agent")
+      .map((selection) => selection.name),
+    workerConnections: config.allowedWorkers
+      .filter((selection) => selection.kind === "connection")
+      .map((selection) => selection.name),
+    maxIterations: config.maxIterations,
+    maxWorkersPerIteration: config.maxWorkersPerIteration,
+    maxTotalWorkers: config.maxTotalWorkers,
+    loopDeadlineMs: config.loopDeadlineMs,
+    budgetAccountId: config.budgetAccountId ?? null,
+  };
+}
+
+/**
+ * M10-S2: same (action, idempotencyKey) with a DIFFERENT semantic request
+ * payload is a conflict, never a silent re-execution. The stored payload
+ * is compared by canonical hash (key order and formatting insensitive).
+ */
+function assertSameRequestPayload(
+  stored: Record<string, unknown> | null | undefined,
+  expectedHash: string,
+  action: string,
+  key: string,
+): void {
+  if (!stored) return; // legacy rows without payload: no comparison possible
+  if (sha256Json(stored) !== expectedHash) {
+    throw new WorkbenchCommandError(
+      "IDEMPOTENCY_CONFLICT",
+      `idempotencyKey "${key}" for action "${action}" was already used with a different request payload`,
+    );
+  }
+}

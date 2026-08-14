@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 
 export type HeartbeatExpectation = {
   expected: boolean;
@@ -27,8 +27,8 @@ const MIN_DURATION_MS = 1;
 export class SupervisionConfigService {
   private readonly config: SupervisionConfig;
 
-  constructor(env: NodeJS.ProcessEnv = process.env) {
-    this.config = this.parse(env.ORCHESTRATOR_SUPERVISION_CONFIG);
+  constructor(@Optional() env?: NodeJS.ProcessEnv) {
+    this.config = this.parse((env ?? process.env).ORCHESTRATOR_SUPERVISION_CONFIG);
   }
 
   forAgent(agent: string): HeartbeatExpectation {

@@ -279,6 +279,13 @@ export class EngineService {
     affectedExecutions: Set<string>,
   ): Promise<boolean> {
     await this.executionService.reconcileExecution(executionId);
+    // M9-S4: the deterministic Coordinator loop makes its autonomous
+    // decisions from PostgreSQL (planner result -> batch, fan-in ->
+    // VERIFYING, verifier result -> decision consume, terminal
+    // propagation). True progress re-runs the pass so new work schedules.
+    if (await this.executionService.reconcileCoordination(executionId)) {
+      return true;
+    }
     const execution = await this.executionService.getExecution(executionId);
     if (!execution || execution.status !== "RUNNING") return false;
     // Without an active plan revision there is nothing authoritative to
@@ -320,6 +327,12 @@ export class EngineService {
         return step && TERMINAL_STEP_STATUSES.includes(step.status);
       })
     ) {
+      // M9-S2 completion hold: a live coordination loop (or an unconsumed
+      // Verifier decision) keeps the Execution from completing until the
+      // Coordinator terminalizes. Non-coordinated executions are unaffected.
+      if (await this.executionService.isCoordinationCompletionHeld(execution.id)) {
+        return true;
+      }
       const outputs: Record<string, unknown> = {};
       for (const step of logicalSteps) outputs[step.stepId] = step.output;
       await this.executionService.updateExecutionStatus(
@@ -372,6 +385,22 @@ export class EngineService {
           execution.input,
           logicalSteps,
         );
+        // M9-S4: a Coordinator-owned Verifier step receives the bounded
+        // aggregation as its frozen input (built at claim time — later
+        // outcomes can never change a frozen attempt).
+        if (
+          await this.executionService.isCoordinationVerifierStep(
+            execution.id,
+            config.id,
+          )
+        ) {
+          resolvedInput = {
+            context: await this.executionService.buildVerifierInput(
+              execution.id,
+              config.id,
+            ),
+          };
+        }
       } catch (err) {
         await this.failExecution(execution.id, {
           failedStep: config.id,

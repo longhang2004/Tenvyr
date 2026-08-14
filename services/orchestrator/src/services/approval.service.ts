@@ -108,33 +108,39 @@ export class ApprovalService {
     const expiresAt = approvalExpiry(new Date(), expiresInMs);
     return this.tx(manager, async (manager) => {
       const repository = manager.getRepository(ApprovalRequestEntity);
-      try {
-        return await repository.save(
-          repository.create({
-            proposalId: proposal.proposalId,
-            proposalHash: proposal.hash,
-            actionType: proposal.actionType,
-            executionId: proposal.scope.executionId,
-            logicalStepId: proposal.scope.logicalStepId ?? "",
-            attemptNumber: proposal.scope.attemptNumber ?? 1,
-            targetAgent: proposal.target?.agent ?? null,
-            targetExecutor: proposal.target?.executor ?? null,
-            status: "PENDING",
-            expiresAt,
-            decidedAt: null,
-            decisionNote: null,
-          }),
-        );
-      } catch (error) {
-        if (
-          (error as { code?: string }).code === "23505" &&
-          (error as { constraint?: string }).constraint ===
-            "UQ_approval_request_proposal"
-        ) {
-          return this.replayRequest(manager, proposal.proposalId);
-        }
-        throw error;
+      // P1: INSERT ... ON CONFLICT DO NOTHING — catching a 23505 here would
+      // abort the whole Postgres transaction; the concurrent winner keeps
+      // the tx healthy and its request is replayed.
+      const inserted = await repository
+        .createQueryBuilder()
+        .insert()
+        .into(ApprovalRequestEntity)
+        .values({
+          proposalId: proposal.proposalId,
+          proposalHash: proposal.hash,
+          actionType: proposal.actionType,
+          executionId: proposal.scope.executionId,
+          logicalStepId: proposal.scope.logicalStepId ?? "",
+          attemptNumber: proposal.scope.attemptNumber ?? 1,
+          targetAgent: proposal.target?.agent ?? null,
+          targetExecutor: proposal.target?.executor ?? null,
+          status: "PENDING",
+          expiresAt,
+          decidedAt: null,
+          decisionNote: null,
+        })
+        .orIgnore()
+        .execute();
+      if (inserted.identifiers.length === 0) {
+        // A concurrent activation created the request first; its authority
+        // is authoritative.
+        return this.replayRequest(manager, proposal.proposalId);
       }
+      const saved = await repository.findOne({
+        where: { proposalId: proposal.proposalId },
+      });
+      if (!saved) throw new Error("Approval request insert produced no row");
+      return saved;
     });
   }
 

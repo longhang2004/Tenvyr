@@ -1,0 +1,106 @@
+# M11: single-owner self-hosted profile (supported deployment contract).
+#
+# One owner controls one host/private environment running one control plane
+# and PostgreSQL authority. Services bind loopback by default; the operator
+# may configure a reviewed private reverse proxy explicitly.
+#
+# Trust: trusted host administration + trusted configured local runtimes.
+# NOT tenant isolation, a sandbox, HA, or internet-safe by default.
+#
+# Versions pinned here are the SUPPORTED versions (see
+# docs/operations/self-hosted.md). Do not float tags in this profile.
+name: tenvyr-self-hosted
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tenvyr-self-hosted-postgres
+    environment:
+      POSTGRES_USER: tenvyr
+      # Secret REFERENCES only — never live values. The operator provides
+      # the value via a file or env reference at deploy time (bootstrap
+      # generates a template; see docs/operations/self-hosted.md).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (or POSTGRES_PASSWORD_FILE) at deploy time}
+      POSTGRES_DB: tenvyr
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - tenvyr_postgres_data:/var/lib/postgresql/data
+    networks:
+      - tenvyr-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenvyr -d tenvyr"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  orchestrator:
+    image: tenvyr-orchestrator:${TENVYR_VERSION:?set TENVYR_VERSION at deploy time}
+    # Clean-checkout bootable: the image is buildable from the repository
+    # context (production stage of services/orchestrator/Dockerfile) at the
+    # same pinned TENVYR_VERSION tag.
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+      target: production
+    container_name: tenvyr-self-hosted-orchestrator
+    environment:
+      ORCHESTRATOR_PORT: "3001"
+      # The orchestrator's database contract is POSTGRES_* (see
+      # database.provider.ts); POSTGRES_PASSWORD interpolates the operator's
+      # deploy.env reference — never a live value.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: tenvyr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (or POSTGRES_PASSWORD_FILE) at deploy time}
+      POSTGRES_DB: tenvyr
+      # Runtime connection secrets: environment-variable REFERENCES only.
+      # The names below must exist in the operator's environment; values are
+      # never generated, checked in, or logged.
+      HTTP_AGENT_CALLBACK_BASE_URL: ${HTTP_AGENT_CALLBACK_BASE_URL:?set the callback base URL}
+      HTTP_AGENT_CALLBACK_KEYS: ${HTTP_AGENT_CALLBACK_KEYS:?set callback keys (JSON of keyId -> secretEnv name)}
+      ORCHESTRATOR_SUPERVISION_CONFIG: ${ORCHESTRATOR_SUPERVISION_CONFIG:-{}}
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tenvyr-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health | grep -q '\"ready\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  gateway:
+    image: tenvyr-gateway:${TENVYR_VERSION}
+    # Clean-checkout bootable: same build context contract as the
+    # orchestrator (production stage of services/gateway/Dockerfile).
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+      target: production
+    container_name: tenvyr-self-hosted-gateway
+    environment:
+      GATEWAY_PORT: "3000"
+      ORCHESTRATOR_URL: http://orchestrator:3001
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - tenvyr-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  tenvyr_postgres_data:
+
+networks:
+  tenvyr-net:
+    driver: bridge

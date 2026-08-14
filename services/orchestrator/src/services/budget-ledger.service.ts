@@ -487,29 +487,27 @@ export class BudgetLedgerService {
       this.assertChildCeilingSubset(ceilings, parent, "ceilings");
       parentAccountId = parent.id;
     }
-    try {
-      return await repository.save(
-        repository.create({
-          scopeType: "execution",
-          scopeId: executionId,
-          parentAccountId,
-          ceilings,
-          softCeilings: null,
-        }),
-      );
-    } catch (error) {
-      if ((error as { code?: string }).code === "23505") {
-        // Concurrent creation: the winner's account is authoritative.
-        const winner = await repository.findOne({
-          where: { scopeType: "execution", scopeId: executionId },
-        });
-        if (winner) return winner;
-      }
-      if ((error as { code?: string }).code === "23514") {
-        throw error;
-      }
-      throw error;
-    }
+    // P1: INSERT ... ON CONFLICT DO NOTHING — catching a 23505 here would
+    // abort the whole Postgres transaction; the concurrent winner's account
+    // is authoritative and readable on the HEALTHY tx.
+    await repository
+      .createQueryBuilder()
+      .insert()
+      .into(BudgetAccountEntity)
+      .values({
+        scopeType: "execution",
+        scopeId: executionId,
+        parentAccountId,
+        ceilings,
+        softCeilings: null,
+      })
+      .orIgnore()
+      .execute();
+    const winner = await repository.findOne({
+      where: { scopeType: "execution", scopeId: executionId },
+    });
+    if (winner) return winner;
+    throw new Error("Budget account insert produced no row");
   }
 
   /**

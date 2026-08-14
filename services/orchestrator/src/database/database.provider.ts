@@ -19,6 +19,11 @@ import { DelegationRequestEntity } from "../entities/delegation-request.entity";
 import { DelegationRequestConflictEntity } from "../entities/delegation-request-conflict.entity";
 import { ExecutionExportEntity } from "../entities/execution-export.entity";
 import { ExecutionReplayEntity } from "../entities/execution-replay.entity";
+import { RuntimeConnectionEntity } from "../entities/runtime-connection.entity";
+import { ConnectionRevisionEntity } from "../entities/connection-revision.entity";
+import { CoordinationRunEntity } from "../entities/coordination-run.entity";
+import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
+import { OperatorActionEntity } from "../entities/operator-action.entity";
 import { BudgetAccountEntity } from "../entities/budget-account.entity";
 import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
 import { BudgetLedgerEntryEntity } from "../entities/budget-ledger-entry.entity";
@@ -39,6 +44,10 @@ import { MilestoneFourBudgetLedger1722270006000 } from "./migrations/17222700060
 import { MilestoneFourPolicy1722270007000 } from "./migrations/1722270007000-MilestoneFourPolicy";
 import { MilestoneFourApprovals1722270008000 } from "./migrations/1722270008000-MilestoneFourApprovals";
 import { RoadmapLineageIntegrity1722270013000 } from "./migrations/1722270013000-RoadmapLineageIntegrity";
+import { MilestoneEightConnections1722270014000 } from "./migrations/1722270014000-MilestoneEightConnections";
+import { MilestoneNineCoordination1722270015000 } from "./migrations/1722270015000-MilestoneNineCoordination";
+import { MilestoneTenOperatorActions1722270016000 } from "./migrations/1722270016000-MilestoneTenOperatorActions";
+import { CoordinationApprovalResume1722270017000 } from "./migrations/1722270017000-CoordinationApprovalResume";
 
 export function databaseOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -82,6 +91,11 @@ export function databaseOptions(
       DelegationRequestConflictEntity,
       ExecutionExportEntity,
       ExecutionReplayEntity,
+      RuntimeConnectionEntity,
+      ConnectionRevisionEntity,
+      CoordinationRunEntity,
+      CoordinationIterationEntity,
+      OperatorActionEntity,
     ],
     migrations: [
       MilestoneZeroFoundation1722270000000,
@@ -98,6 +112,10 @@ export function databaseOptions(
       MilestoneSixDelegationRequests1722270011000,
       MilestoneSevenCapsuleExports1722270012000,
       RoadmapLineageIntegrity1722270013000,
+      MilestoneEightConnections1722270014000,
+      MilestoneNineCoordination1722270015000,
+      MilestoneTenOperatorActions1722270016000,
+      CoordinationApprovalResume1722270017000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

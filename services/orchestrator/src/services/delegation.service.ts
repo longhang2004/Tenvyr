@@ -9,6 +9,7 @@ import { ExecutionService } from "./execution.service";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import { BudgetAccountEntity } from "../entities/budget-account.entity";
+import { CoordinationRunEntity } from "../entities/coordination-run.entity";
 import { DelegationObservationEntity } from "../entities/delegation-observation.entity";
 import { parsePipelineBudget } from "../domain/budget";
 import { DelegationRequestConflictEntity } from "../entities/delegation-request-conflict.entity";
@@ -137,6 +138,20 @@ export class DelegationService {
       if (childDepth > DELEGATION_BOUNDS.maxDepth) {
         throw new Error(
           `Delegation depth exceeds ${DELEGATION_BOUNDS.maxDepth}`,
+        );
+      }
+      // M9-S7: the coordination run's frozen delegationDepthMax is the
+      // authority for every descendant of the run — not just the first
+      // hop. A worker step (depth 1) that delegates again (depth 2) is
+      // bounded by the run's own limit, never silently widened to the
+      // global ceiling.
+      const runDepthMax = await this.coordinationDelegationDepthMax(
+        manager,
+        input.parentExecutionId,
+      );
+      if (runDepthMax !== undefined && childDepth > runDepthMax) {
+        throw new Error(
+          `Delegation depth exceeds the coordination run's delegationDepthMax ${runDepthMax}`,
         );
       }
       const request = await repository.save(
@@ -519,6 +534,36 @@ export class DelegationService {
       })
       .getRawOne<{ depth: string | null }>();
     return Number(row?.depth ?? 0);
+  }
+
+  /**
+   * M9-S7: the frozen delegationDepthMax of the coordination run this
+   * execution tree belongs to (walking the delegation chain to the root
+   * execution). `undefined` when the root is not a coordination run — the
+   * global DELEGATION_BOUNDS.maxDepth remains the ceiling.
+   */
+  private async coordinationDelegationDepthMax(
+    manager: EntityManager,
+    parentExecutionId: string,
+  ): Promise<number | undefined> {
+    let current = parentExecutionId;
+    const repository = manager.getRepository(DelegationRequestEntity);
+    for (let hop = 0; hop < DELEGATION_BOUNDS.maxDepth + 1; hop += 1) {
+      const row = await repository
+        .createQueryBuilder("request")
+        .select("request.parentExecutionId", "parentExecutionId")
+        .where("request.childExecutionId = :current", { current })
+        .andWhere("request.childExecutionId IS NOT NULL")
+        .orderBy("request.createdAt", "DESC")
+        .getRawOne<{ parentExecutionId: string } | null>();
+      if (!row) break;
+      current = row.parentExecutionId;
+    }
+    const run = await manager.getRepository(CoordinationRunEntity).findOne({
+      where: { executionId: current },
+      select: ["config"],
+    });
+    return run?.config.delegationDepthMax;
   }
 
   /** M6-S4: the child's budget grant must be a per-dimension subset of the

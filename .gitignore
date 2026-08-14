@@ -77,3 +77,7 @@ docs/_scratch/
 # Local owner artifacts
 /*.zip
 /scripts/compress.sh
+
+# Self-hosted deployment secrets (references, never checked in)
+deploy.env
+backups/

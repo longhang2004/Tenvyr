@@ -50,6 +50,16 @@
     "metadata": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connectionId", "revisionNumber", "configHash"],
+      "properties": {
+        "connectionId": { "type": "string", "minLength": 1 },
+        "revisionNumber": { "type": "integer", "minimum": 1 },
+        "configHash": { "type": "string", "minLength": 1 }
+      }
     }
   },
   "$defs": {

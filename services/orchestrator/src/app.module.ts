@@ -1,5 +1,8 @@
 import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller";
+import { ConnectionsController } from "./connections.controller";
+import { WorkbenchController } from "./workbench.controller";
+import { WorkbenchCommandsController } from "./workbench-commands.controller";
 import { databaseProviders } from "./database/database.provider";
 import { repositoryProviders } from "./database/repository.providers";
 import { PipelineService } from "./services/pipeline.service";
@@ -31,10 +34,20 @@ import { ApprovalService } from "./services/approval.service";
 import { PlanProposalService } from "./services/plan-proposal.service";
 import { DelegationService } from "./services/delegation.service";
 import { ExecutionCapsuleService } from "./services/execution-capsule.service";
+import { RuntimeConnectionService } from "./services/runtime-connection.service";
+import { RuntimeCoordinationService } from "./services/runtime-coordination.service";
+import { WorkbenchProjectionService } from "./services/workbench-projection.service";
+import { WorkbenchCommandService } from "./services/workbench-command.service";
 
 @Module({
   imports: [],
-  controllers: [AppController, HttpAgentCallbackController],
+  controllers: [
+    AppController,
+    HttpAgentCallbackController,
+    ConnectionsController,
+    WorkbenchController,
+    WorkbenchCommandsController,
+  ],
   providers: [
     ...databaseProviders,
     ...repositoryProviders,
@@ -70,6 +83,10 @@ import { ExecutionCapsuleService } from "./services/execution-capsule.service";
     PlanProposalService,
     DelegationService,
     ExecutionCapsuleService,
+    RuntimeConnectionService,
+    RuntimeCoordinationService,
+    WorkbenchProjectionService,
+    WorkbenchCommandService,
   ],
   exports: [
     ...databaseProviders,

@@ -4,6 +4,7 @@ import {
   readExecutorDescriptor,
   type ExecutorDescriptorV1,
 } from "../executors/executor-descriptor";
+import { CONNECTION_ID_PATTERN } from "../executors/runtime-connection";
 
 export type DelegationMode = "opaque" | "observed";
 
@@ -33,6 +34,10 @@ export type KafkaAgentTransportConfiguration = {
   kind: "kafka";
   /** M6-S5: runtime-advertised delegation modes (negotiation allowlist). */
   delegationModes: DelegationMode[];
+  /** M8-S2: optional Runtime Connection selected for this agent. When set,
+   *  attempt claims freeze the connection's current revision into the
+   *  executor snapshot. */
+  connectionId?: string;
 };
 
 export type HttpAgentTransportConfiguration = {
@@ -47,6 +52,8 @@ export type HttpAgentTransportConfiguration = {
   maxResponseBytes: number;
   /** M6-S5: operator-declared delegation modes (negotiation allowlist). */
   delegationModes: DelegationMode[];
+  /** M8-S2: optional Runtime Connection selected for this agent. */
+  connectionId?: string;
 };
 
 export type AgentTransportConfiguration =
@@ -95,10 +102,13 @@ export function parseAgentTransportConfiguration(
     if (!agent || !isRecord(entry))
       throw invalidConfiguration("Every agent configuration must be an object");
     if (entry.kind === "kafka") {
-      assertOnlyKeys(entry, ["kind", "delegationModes"], agent);
+      assertOnlyKeys(entry, ["kind", "delegationModes", "connectionId"], agent);
       agents.set(agent, {
         kind: "kafka",
         delegationModes: parseDelegationModes(entry.delegationModes, agent),
+        ...(entry.connectionId !== undefined
+          ? { connectionId: parseConnectionId(entry.connectionId, agent) }
+          : {}),
       });
       continue;
     }
@@ -117,6 +127,7 @@ export function parseAgentTransportConfiguration(
         "requestTimeoutMs",
         "maxResponseBytes",
         "delegationModes",
+        "connectionId",
       ],
       agent,
     );
@@ -152,6 +163,9 @@ export function parseAgentTransportConfiguration(
       requestTimeoutMs,
       maxResponseBytes,
       delegationModes: parseDelegationModes(entry.delegationModes, agent),
+      ...(entry.connectionId !== undefined
+        ? { connectionId: parseConnectionId(entry.connectionId, agent) }
+        : {}),
     });
   }
 
@@ -207,6 +221,19 @@ export class AgentTransportConfigService {
         kind: "kafka",
         delegationModes: ["opaque", "observed"],
       }
+    );
+  }
+
+  /**
+   * M11 closure: whether any agent is EXPLICITLY configured on the Kafka
+   * transport. When false, the Kafka adapter must not require a broker at
+   * startup — HTTP-only self-hosted deployments have none. Unconfigured
+   * agents still default to Kafka routing (legacy behavior) and fail
+   * deterministically at dispatch if the transport is idle.
+   */
+  hasKafkaAgents(): boolean {
+    return Array.from(this.configuration.agents.values()).some(
+      (configuration) => configuration.kind === "kafka",
     );
   }
 
@@ -359,6 +386,20 @@ function optionalPositiveInteger(
 function positiveInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw invalidConfiguration(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseConnectionId(value: unknown, agent: string): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > 255 ||
+    !CONNECTION_ID_PATTERN.test(value)
+  ) {
+    throw invalidConfiguration(
+      `Agent "${agent}" connectionId must match ${CONNECTION_ID_PATTERN} (at most 255 characters)`,
+    );
   }
   return value;
 }

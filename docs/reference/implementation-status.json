@@ -4,8 +4,14 @@
     {
       "id": "contracts-v1",
       "status": "implemented",
-      "sources": ["contracts/schemas", "packages/contracts/src"],
-      "tests": ["packages/contracts/test", "contracts/conformance"],
+      "sources": [
+        "contracts/schemas",
+        "packages/contracts/src"
+      ],
+      "tests": [
+        "packages/contracts/test",
+        "contracts/conformance"
+      ],
       "docs": [
         "docs/architecture/contracts/agent-protocol-v1.md",
         "docs/architecture/contracts/json-interoperability.md"
@@ -25,7 +31,9 @@
         "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
         "services/orchestrator/src/services/kafka.service.spec.ts"
       ],
-      "docs": ["docs/architecture/transports/kafka-runtime-v1.md"],
+      "docs": [
+        "docs/architecture/transports/kafka-runtime-v1.md"
+      ],
       "limitations": [
         "Kafka v1 topics and consumer identities remain compatibility identifiers"
       ]
@@ -40,7 +48,9 @@
         "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
         "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/transports/http-agent-adapter-v1.md"],
+      "docs": [
+        "docs/architecture/transports/http-agent-adapter-v1.md"
+      ],
       "limitations": [
         "Callback replay protection and dispatch state are process-local"
       ]
@@ -48,9 +58,15 @@
     {
       "id": "typescript-worker-sdk",
       "status": "implemented",
-      "sources": ["packages/worker/src"],
-      "tests": ["packages/worker/test"],
-      "docs": ["docs/architecture/workers/typescript-worker-sdk.md"],
+      "sources": [
+        "packages/worker/src"
+      ],
+      "tests": [
+        "packages/worker/test"
+      ],
+      "docs": [
+        "docs/architecture/workers/typescript-worker-sdk.md"
+      ],
       "limitations": [
         "Queue, idempotency, and callback state are process-local"
       ]
@@ -58,9 +74,15 @@
     {
       "id": "python-worker-sdk",
       "status": "implemented",
-      "sources": ["sdks/python-worker/src/tenvyr_worker"],
-      "tests": ["sdks/python-worker/tests"],
-      "docs": ["docs/architecture/workers/python-worker-sdk.md"],
+      "sources": [
+        "sdks/python-worker/src/tenvyr_worker"
+      ],
+      "tests": [
+        "sdks/python-worker/tests"
+      ],
+      "docs": [
+        "docs/architecture/workers/python-worker-sdk.md"
+      ],
       "limitations": [
         "Queue, idempotency, and callback state are process-local",
         "Thread cancellation is cooperative"
@@ -77,7 +99,9 @@
         "packages/contracts/test/json-numbers.spec.ts",
         "sdks/python-worker/tests/test_schema_protocol.py"
       ],
-      "docs": ["docs/architecture/contracts/json-interoperability.md"],
+      "docs": [
+        "docs/architecture/contracts/json-interoperability.md"
+      ],
       "limitations": [
         "Exact cross-language decimal equality is not guaranteed for non-integer floats"
       ]
@@ -85,9 +109,15 @@
     {
       "id": "gateway",
       "status": "implemented",
-      "sources": ["services/gateway/src"],
-      "tests": ["services/gateway/src/app.controller.spec.ts"],
-      "docs": ["docs/architecture/control-plane.md"],
+      "sources": [
+        "services/gateway/src"
+      ],
+      "tests": [
+        "services/gateway/src/app.controller.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Thin HTTP and WebSocket relay; no production agent-memory API",
         "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
@@ -115,7 +145,9 @@
         "services/orchestrator/src/database/migrations/milestone-zero-foundation.spec.ts",
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Execution plan snapshots and attempt history are durable",
         "Logical steps materialize unfrozen (PENDING, frozenSpecHash/frozenAt null) and freeze only when a claim or gate decision becomes authoritative; engine-level reconcileExecution is the single idempotent autonomous progression path and resumeAfterResult is a compatibility alias",
@@ -158,8 +190,12 @@
     {
       "id": "java-agent-runner",
       "status": "implemented",
-      "sources": ["services/agent-runner/src/main/java"],
-      "tests": ["services/agent-runner/src/test/java"],
+      "sources": [
+        "services/agent-runner/src/main/java"
+      ],
+      "tests": [
+        "services/agent-runner/src/test/java"
+      ],
       "docs": [
         "docs/architecture/agents-and-runners.md",
         "docs/showcase/using-model-providers.md"
@@ -172,12 +208,16 @@
     {
       "id": "code-reviewer-agent",
       "status": "implemented",
-      "sources": ["services/agent-code-reviewer/src"],
+      "sources": [
+        "services/agent-code-reviewer/src"
+      ],
       "tests": [
         "services/agent-code-reviewer/src/app.controller.spec.ts",
         "services/agent-code-reviewer/src/kafka.service.spec.ts"
       ],
-      "docs": ["docs/architecture/agents-and-runners.md"],
+      "docs": [
+        "docs/architecture/agents-and-runners.md"
+      ],
       "limitations": [
         "Kafka-specialized service; not a general framework integration"
       ]
@@ -185,12 +225,16 @@
     {
       "id": "observability-agent",
       "status": "implemented",
-      "sources": ["services/agent-observability/src"],
+      "sources": [
+        "services/agent-observability/src"
+      ],
       "tests": [
         "services/agent-observability/src/app.controller.spec.ts",
         "services/agent-observability/src/kafka.service.spec.ts"
       ],
-      "docs": ["docs/architecture/agents-and-runners.md"],
+      "docs": [
+        "docs/architecture/agents-and-runners.md"
+      ],
       "limitations": [
         "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
       ]
@@ -198,9 +242,16 @@
     {
       "id": "frontend-dashboard",
       "status": "implemented",
-      "sources": ["frontend/src/app"],
-      "tests": ["frontend/src/app/dashboard/safe-preview.test.mjs"],
-      "docs": ["docs/architecture/overview.md", "docs/showcase/demo-guide.md"],
+      "sources": [
+        "frontend/src/app"
+      ],
+      "tests": [
+        "frontend/src/app/dashboard/safe-preview.test.mjs"
+      ],
+      "docs": [
+        "docs/architecture/overview.md",
+        "docs/showcase/demo-guide.md"
+      ],
       "limitations": [
         "Safe-preview logic has a focused test; end-to-end UI behavior is exercised through showcase smoke URLs"
       ]
@@ -208,9 +259,15 @@
     {
       "id": "setup-readiness-check",
       "status": "implemented",
-      "sources": ["scripts/setup-check.mjs"],
-      "tests": ["scripts/setup-check.mjs"],
-      "docs": ["docs/operations/local-development.md"],
+      "sources": [
+        "scripts/setup-check.mjs"
+      ],
+      "tests": [
+        "scripts/setup-check.mjs"
+      ],
+      "docs": [
+        "docs/operations/local-development.md"
+      ],
       "limitations": [
         "Reports machine state and actions but does not install or reconfigure prerequisites"
       ]
@@ -226,8 +283,14 @@
         "services/agent-code-reviewer/Dockerfile",
         "services/agent-observability/Dockerfile"
       ],
-      "tests": ["scripts/setup-check.test.mjs", "scripts/smoke-e2e.test.mjs"],
-      "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
+      "tests": [
+        "scripts/setup-check.test.mjs",
+        "scripts/smoke-e2e.test.mjs"
+      ],
+      "docs": [
+        "docs/showcase/demo-guide.md",
+        "docs/showcase/case-study.md"
+      ],
       "limitations": [
         "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
         "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
@@ -245,7 +308,9 @@
         "scripts/verify-package-packs.mjs",
         "scripts/verify-python-worker-package.py"
       ],
-      "docs": ["docs/operations/package-verification.md"],
+      "docs": [
+        "docs/operations/package-verification.md"
+      ],
       "limitations": [
         "Verification is local/private and does not authorize publication"
       ]
@@ -265,7 +330,9 @@
         "scripts/verify-package-packs.mjs",
         "scripts/verify-python-worker-package.py"
       ],
-      "docs": ["docs/product/identity.md"],
+      "docs": [
+        "docs/product/identity.md"
+      ],
       "limitations": [
         "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
       ]
@@ -299,7 +366,9 @@
         "services/orchestrator/src/database/postgres.integration.spec.ts",
         "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Outbound-only traceparent (no inbound trust); tracestate not propagated; OTLP exporter surface not wired"
       ]
@@ -368,7 +437,9 @@
         "services/orchestrator/src/database/postgres.integration.spec.ts",
         "services/orchestrator/src/domain/state-writes.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Internal durable primitive only: no agent/result mutation authority and no AgentResultV1.statePatch",
         "Mutation evidence is not full event-sourced state history (no revision table)",
@@ -394,7 +465,9 @@
         "services/orchestrator/src/domain/policy.spec.ts",
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Trusted configuration uses bounded deterministic exact-match rules, not a general policy language",
         "Operator/admin control surfaces remain service-level while the external exposure gate is open"
@@ -405,15 +478,21 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/README.md"],
-      "limitations": ["No CLI transport adapter"]
+      "docs": [
+        "docs/roadmap/README.md"
+      ],
+      "limitations": [
+        "No CLI transport adapter"
+      ]
     },
     {
       "id": "framework-integrations",
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/README.md"],
+      "docs": [
+        "docs/roadmap/README.md"
+      ],
       "limitations": [
         "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
       ]
@@ -423,7 +502,9 @@
       "status": "planned",
       "sources": [],
       "tests": [],
-      "docs": ["docs/roadmap/README.md"],
+      "docs": [
+        "docs/roadmap/README.md"
+      ],
       "limitations": [
         "Worker callback and idempotency records are lost on process restart"
       ]
@@ -433,7 +514,9 @@
       "status": "blocked",
       "sources": [],
       "tests": [],
-      "docs": ["docs/product/identity.md"],
+      "docs": [
+        "docs/product/identity.md"
+      ],
       "limitations": [
         "Blocked by registry, legal, repository, and explicit publication approval gates"
       ]
@@ -481,7 +564,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "No operator/admin approval API surface yet (external exposure gate open); transitions are service-level",
         "Approval expiry default is 7 days (bounded by config)"
@@ -496,7 +581,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Export, replay, comparison, provenance, and telemetry projection are service-level while the external exposure gate is open",
         "The OTLP-shaped projection is not a wired exporter and has no real timings",
@@ -516,7 +603,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Service-level request/decision only; runtimes without a durable pause/resume capability use explicit workflow child work outside a paused attempt",
         "No public delegation graph/control API while the external exposure gate is open"
@@ -535,7 +624,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Observed evidence remains a runtime assertion and never proves Tenvyr authority or semantic consumption",
         "Opaque runtime children intentionally create no lineage"
@@ -552,7 +643,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Policy rules match actionType/agents/executors; growth is bounded structurally by candidate validation, not by policy rules"
       ]
@@ -568,7 +661,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Explicit planner-step trigger only; Tenvyr does not implement a general autonomous planning framework"
       ]
@@ -584,7 +679,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Proposal activation and approval are service-level while the external exposure gate is open"
       ]
@@ -596,8 +693,12 @@
         "services/orchestrator/src/domain/plan-patch.ts",
         "services/orchestrator/src/services/pipeline-validation.service.ts"
       ],
-      "tests": ["services/orchestrator/src/domain/plan-patch.spec.ts"],
-      "docs": ["docs/architecture/control-plane.md"],
+      "tests": [
+        "services/orchestrator/src/domain/plan-patch.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Patch operations intentionally remain restricted to addStep and replaceUnfrozenStep"
       ]
@@ -614,7 +715,9 @@
       "tests": [
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Adjust is not idempotency-keyed (explicit operator correction)",
         "Tenant/plan accounts are operator-created; no grant-rotation API beyond adjust"
@@ -635,7 +738,9 @@
         "services/orchestrator/src/domain/policy.spec.ts",
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Interception is wired at dispatch, PlanPatch activation, and supervised delegation approval",
         "REQUIRE_APPROVAL produces the durable ApprovalRequest + WAITING flow for dispatch and PlanPatch; supervised delegation uses its explicit operator approval seam",
@@ -658,13 +763,108 @@
         "services/orchestrator/src/domain/budget.spec.ts",
         "services/orchestrator/src/database/postgres.integration.spec.ts"
       ],
-      "docs": ["docs/architecture/control-plane.md"],
+      "docs": [
+        "docs/architecture/control-plane.md"
+      ],
       "limitations": [
         "Enforcement is opt-in per pipeline budget declaration; un-budgeted pipelines run unchanged",
         "Supervised child accounts are linked to parent execution accounts and every child attempt reserve traverses the ancestor chain",
         "Adjust is not idempotency-keyed (explicit operator correction; chain-propagated since M4-S5)",
         "Projection is exact below 10,000 entries per account; larger accounts need paging",
         "Terminal results without usage leave the reservation consumed by default (unknown semantics); only cancellation/failed-dispatch release explicitly"
+      ]
+    },
+    {
+      "id": "single-owner-self-hosted",
+      "status": "implemented",
+      "sources": [
+        "docker-compose.self-hosted.yml",
+        ".env.self-hosted.example",
+        "scripts/self-hosted/preflight.mjs",
+        "scripts/self-hosted/backup.mjs",
+        "scripts/self-hosted/restore.mjs",
+        "scripts/self-hosted/contract.test.mjs",
+        "services/orchestrator/src/services/execution.service.ts"
+      ],
+      "tests": [
+        "scripts/self-hosted/contract.test.mjs",
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "services/orchestrator/src/app.controller.spec.ts"
+      ],
+      "docs": [
+        "docs/operations/self-hosted.md",
+        "docs/operations/self-hosted-runbooks.md"
+      ],
+      "limitations": [
+        "M11 milestone implemented: supported profile + contract, references-only bootstrap/preflight, verified backup/restore with two clean drills, migration-failure rollback proof, readiness health, and runbooks are in place",
+        "Milestone closure is Sol's decision; M11 is READY FOR INDEPENDENT TECH LEAD VERIFICATION; M8-M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
+        "External Production Exposure Gate stays OPEN; no public bindings by default; no HA/Kubernetes/sandbox claims",
+        "No prior-version upgrade drill (no published prior version); upgrade path documented, migration machinery proven",
+        "M11 closure hardening (implementer): numeric semantic version comparison (major/minor/patch, no JS array relational traps); upgrade propagates TENVYR_VERSION into the resolved and running deployment with fail-closed target verification BEFORE mutation and AFTER recreate; deploy.env deployed-version metadata is persisted only after proven success; restore explicitly separates --drill (isolated verification database; active authority never touched) from --promote (verify then swap with rollback, bounded pre-restore safety copy, restart, readiness, invariants, and a post-recovery write proof through the app API); migration-failure runbook identifies the executable recovery path",
+        "M11 closure hardening 2 (implementer): ONE documented deployment identity model — TENVYR_VERSION is the releaseVersion (vMAJOR.MINOR.PATCH, must name a real git tag) and TENVYR_SOURCE_REVISION is the immutable full commit SHA; a source-build upgrade PROVES the checkout is the exact clean release commit (tag == HEAD == clean tree), bakes the proven SHA into the images (ARG/ENV TENVYR_SOURCE_REVISION), verifies it on the RUNNING containers after recreate (an image tag alone is never sufficient proof), and persists both values in deploy.env only after success; missing release tags fail closed with the documented prerequisite; backups REQUIRE source provenance and capture bounded snapshot anchors (migration ledger fingerprint, table inventory/count fingerprint, plan revision hash-ledger fingerprint, execution provenance anchor, terminal Capsule/export anchor) into the manifest, which is the RESTORE AUTHORITY — restore recomputes anchors on the restored snapshot and compares against the MANIFEST, never the current active database (drift vs current is informational only), making legitimate historical recovery possible after the live database has advanced; disposable-infrastructure recovery E2E (state A -> backup -> live B -> drill A PASS -> promote A -> identity A -> readiness -> new write) in scripts/self-hosted/recovery.test.mjs",
+        "M11 closure hardening 3 (implementer): VERIFIED backup invariant — backup.mjs reports PASS only after the dump was restored into an isolated verification database (tenvyr_backup_verify) and ALL manifest anchors were computed FROM THE RESTORED DUMP (never the live DB) and proven structurally valid; a failed verification removes the staging artifact and never labels it a backup; the backup inventory is the complete authoritative 31-table entity/schema set (pipelines and plan_proposals added; regression compares anchors.mjs TABLES against the entity and migration inventories so a future authority table cannot be silently omitted); restore --promote now verifies (checksum + manifest + deep manifest-relative integrity) BEFORE quiescing any writer, and the authority swap is an explicit state machine with deterministic automatic rollback (tenvyr -> tenvyr_pre_restore, tenvyr_restore -> tenvyr; on second-rename failure tenvyr_pre_restore -> tenvyr is attempted immediately; rollback failure preserves every copy and prints the exact observed state plus bounded operator recovery commands); the pre-recovery safety copy is kept until ALL post-promotion gates pass (start, orchestrator readiness, gateway readiness, invariants, Capsule/provenance reconstruction, post-recovery write); any gate failure automatically rolls back (restored active -> bounded tenvyr_failed_promotion; safety -> active; restart; readiness; invariants; failure, never PASS); quiesce partial failure restarts both services; bounded one-shot TENVYR_RESTORE_FAULT test hooks (second-rename/rollback-rename/post-gate-readiness) drive real fault-injection E2E tests (concurrent-write backup consistency, invalid-backup promotion safety, rename-failure rollback, rollback-failure recovery commands, post-promotion gate rollback); upgrade.mjs refuses build/up mutation when the verified backup fails; hosted CI adds a real-PostgreSQL job running the integration suite TWICE on reinitialized state with a no-silent-skip guard (scripts/assert-jest-run.mjs), a required self-hosted contract gate, and a required disposable recovery E2E job"
+      ]
+    },
+    {
+      "id": "operator-workbench-projections",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/services/workbench-projection.service.ts",
+        "services/orchestrator/src/workbench.controller.ts",
+        "services/orchestrator/src/services/workbench-command.service.ts",
+        "services/orchestrator/src/workbench-commands.controller.ts",
+        "services/orchestrator/src/entities/operator-action.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270016000-MilestoneTenOperatorActions.ts",
+        "services/gateway/src/app.controller.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/services/workbench-projection.service.spec.ts",
+        "services/orchestrator/src/services/workbench-command.service.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/workbench.md"
+      ],
+      "limitations": [
+        "M10 milestone implemented: bounded read projections, idempotent command surface with audit, accessible Workbench shell, inspection, deterministic offline demo, and full VERIFY (incl. live showcase smoke) are in place",
+        "Milestone closure is Sol's decision; M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
+        "External Production Exposure Gate stays OPEN: the workbench surface is loopback/private trusted-operator only",
+        "Design-partner interviews: 0 this cycle; no discovery-gated program is promoted without real evidence",
+        "M10 closure hardening (implementer): Runtime Connection create/revise/test/revoke run through the audited idempotent command layer \u2014 operator-action evidence commits in the same transaction as the authority mutation; same idempotency key with a conflicting payload is rejected (IDEMPOTENCY_CONFLICT); repeated revoke commands produce one effective transition; gateway proxies and the Workbench page send idempotency keys"
+      ]
+    },
+    {
+      "id": "coordinator-loop-domain",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/coordination.ts",
+        "services/orchestrator/src/services/runtime-coordination.service.ts",
+        "services/orchestrator/src/entities/coordination-run.entity.ts",
+        "services/orchestrator/src/entities/coordination-iteration.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270015000-MilestoneNineCoordination.ts",
+        "services/orchestrator/src/database/migrations/1722270017000-CoordinationApprovalResume.ts",
+        "services/orchestrator/src/services/delegation.service.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/engine.service.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/domain/coordination.spec.ts",
+        "services/orchestrator/src/services/runtime-coordination.service.spec.ts",
+        "services/orchestrator/src/database/migrations/milestone-nine-coordination.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "services/orchestrator/src/services/engine.service.spec.ts",
+        "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/coordination-loop.md"
+      ],
+      "limitations": [
+        "M9 milestone implemented: pure semantics, durable run/iteration authority, Planner-to-batch over PlanPatch, fan-out/fan-in/decision loop, authority integration, and the deterministic real-HTTP team example are in place",
+        "Closure hardening: executor allowlist enforced at batch admission (agent-kind tasks resolve to `agent:<name>`, connection-kind to the revision's executorId); connection-kind Planner/Verifier routing with claimability rechecks; pending PlanPatch proposal identity persisted and resumed exactly once (no approval storms); coordinator-owned failures terminalize run AND execution atomically; run-level delegation depth enforced by chain walk",
+        "Milestone closure is Sol's decision; M9 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
+        "Connection-kind worker selectors are recorded on compiled steps, enforced at batch admission, and the typed selection freezes the connection revision at attempt claim; dispatch-time enforcement beyond admission is the existing M8 mechanism",
+        "M9-S8 closure hardening (implementer): run-creation authority parity (startRun/startRunWithManager enforce role connection claims + executor allowlist inside the create transaction; the manager path can no longer bypass them); concurrent equivalent starts converge on exactly one run (execution-row lock + unique-violation re-read); exact iteration identity at batch admission (current iteration only); Planner attempt ownership gate (same execution/iteration/Coordinator-owned step, terminal SUCCESS, frozen plan revision); strict baseRevision (proposal base == Planner frozen revision; active revision must still equal it, else deterministic STALE with no worker activation and no silent rebase); the Planner step input carries the frozen plan revision so truthful planners can declare it",
+        "M9-S8 closure hardening 2 (implementer): EXACT TaskBatch iteration identity — the untrusted proposal's embedded iterationNumber must equal run.currentIterationNumber (older and future proposal iterations are rejected with the same ITERATION_NOT_FOUND evidence as the caller-declared identity, before any worker/verifier materialization or plan revision creation; Postgres regressions for current=2/input=2 with proposal 1 and 3); the precheck/propose silent-rebase race is closed by acquiring the EXECUTION row lock BEFORE the authoritative active-revision check and holding it through proposal creation and activation — an authorized PlanPatch activating N+1 can never interleave between the check and the base-revision pin (T1 linearizes first with base N preserved and T2 becomes STALE, or T2 wins first and T1 is deterministically STALE; real-Postgres race tests with explicit pg_stat_activity lock-wait barriers prove both linearizations)"
       ]
     },
     {
@@ -686,15 +886,64 @@
         "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
         "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
         "services/orchestrator/src/services/engine.service.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
       ],
-      "docs": ["docs/architecture/transports/adapter-model.md"],
+      "docs": [
+        "docs/architecture/transports/adapter-model.md"
+      ],
       "limitations": [
         "Executor kinds cover Kafka/HTTP transports plus the trusted-code-only local host; Codex/Claude stay inside runtime applications and A2A remains deferred",
+        "Closure hardening: LocalExecutorProfileV1 freezes secret-free CLI execution data (command/argv/cwd/env REFERENCES \u2014 never values) into the attempt snapshot at claim for connection-selected steps",
         "Capabilities are conservative and negotiated per configured executor; remote cancellation remains best-effort where supported",
         "Cancel notification is best-effort post-commit evidence; it never guarantees the runtime stopped opaque work",
         "No public executor administration API while the external exposure gate is open",
         "Legacy { agent } snapshots keep live-configuration routing by design (never rewritten)"
+      ]
+    },
+    {
+      "id": "runtime-connection-domain",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/executors/runtime-connection.ts",
+        "services/orchestrator/src/executors/runtime-profiles.ts",
+        "services/orchestrator/src/services/runtime-connection.service.ts",
+        "services/orchestrator/src/services/cli-probe.ts",
+        "services/orchestrator/src/entities/runtime-connection.entity.ts",
+        "services/orchestrator/src/entities/connection-revision.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270014000-MilestoneEightConnections.ts",
+        "services/orchestrator/src/executors/executor-descriptor.ts",
+        "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/dispatch-outbox.service.ts",
+        "services/orchestrator/src/connections.controller.ts",
+        "services/gateway/src/app.controller.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/executors/runtime-connection.spec.ts",
+        "services/orchestrator/src/executors/runtime-profiles.spec.ts",
+        "services/orchestrator/src/services/runtime-connection.service.spec.ts",
+        "services/orchestrator/src/services/cli-probe.spec.ts",
+        "services/orchestrator/src/connections.controller.spec.ts",
+        "services/orchestrator/src/database/migrations/milestone-eight-connections.spec.ts",
+        "services/orchestrator/src/database/postgres.integration.spec.ts",
+        "services/orchestrator/src/m8-cli-connections.e2e.spec.ts",
+        "services/gateway/src/app.controller.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/executors/runtime-connections.md",
+        "docs/operations/configuration.md",
+        "docs/plans/active/tenvyr-productization-roadmap/RESEARCH_REGISTER.md"
+      ],
+      "limitations": [
+        "Milestone closure is Sol's decision; implementer verification is complete (READY FOR INDEPENDENT SOL VERIFICATION)",
+        "Closure hardening: typed step selection (`metadata.tenvyrConnectionId`) beats static transport config at claim and freezes the connection revision plus a secret-free local CLI profile (command/argv/cwd/env references) in the attempt snapshot; create/revise API surface exists (POST/PATCH /connections with gateway proxies); testConnection persists conditionally under row lock (REVOKED stays terminal, stale probes yield a superseded receipt); revise resets the card to DRAFT with cleared tested metadata",
+        "Connection administration is local/internal behind the open External Production Exposure Gate; no public admin API claim",
+        "Installed Claude Code (2.1.97) predates the template pin (2.1.228); detected versions are evidence, pins are operator-tested versions",
+        "Probe concurrency is limited per connection (in-flight dedupe); a global probe semaphore would matter for multi-replica deployments",
+        "Live runtime gates are opt-in and non-billable; deterministic fake-CLI conformance always runs",
+        "Connection health status is projection, not dispatch authority; only REVOKED denies claims and pending delivery",
+        "M8 closure hardening (implementer): claimRevision is linearizable under the authority-row lock (manager-aware claimRevisionWithManager for caller-owned transactions); a revoke committed before the claim lock denies the claim, a claim that locks first returns its immutable frozen revision and the later revoke applies at dispatch; Python Worker schema re-synced to canonical (AgentInvocationV1 optional connection identity) with both acceptance paths proven"
       ]
     }
   ]

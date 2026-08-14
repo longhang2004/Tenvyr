@@ -74,33 +74,33 @@ export class PolicyService {
         }
         return { version: existing.version, hash: existing.hash, rules: existing.rules as PolicyRule[] };
       }
-      try {
-        const saved = await repository.save(
-          repository.create({
-            version: configured.version,
-            hash: configured.hash,
-            rules: configured.rules,
-          }),
-        );
-        return { version: saved.version, hash: saved.hash, rules: saved.rules as PolicyRule[] };
-      } catch (error) {
-        if ((error as { code?: string }).code === "23505") {
-          // Concurrent freeze: the winner is authoritative; verify the hash.
-          const winner = await repository.findOne({
-            where: { version: configured.version },
-          });
-          if (winner && winner.hash === configured.hash) {
-            return { version: winner.version, hash: winner.hash, rules: winner.rules as PolicyRule[] };
-          }
-          if (winner) {
-            throw new PolicyError(
-              "POLICY_VERSION_CONFLICT",
-              `Policy version ${configured.version} was frozen concurrently with a different rules hash; bump the version to rotate`,
-            );
-          }
-        }
-        throw error;
+      // P1: INSERT ... ON CONFLICT DO NOTHING — catching a 23505 here would
+      // abort the whole Postgres transaction. The concurrent winner is
+      // authoritative; its hash is verified on the HEALTHY tx.
+      const inserted = await repository
+        .createQueryBuilder()
+        .insert()
+        .into(PolicySnapshotEntity)
+        .values({
+          version: configured.version,
+          hash: configured.hash,
+          rules: configured.rules,
+        })
+        .orIgnore()
+        .execute();
+      const winner = await repository.findOne({
+        where: { version: configured.version },
+      });
+      if (winner && winner.hash === configured.hash) {
+        return { version: winner.version, hash: winner.hash, rules: winner.rules as PolicyRule[] };
       }
+      if (winner) {
+        throw new PolicyError(
+          "POLICY_VERSION_CONFLICT",
+          `Policy version ${configured.version} was frozen concurrently with a different rules hash; bump the version to rotate`,
+        );
+      }
+      throw new Error("Policy freeze insert produced no row");
     };
     return manager ? run(manager) : this.dataSource.transaction(run);
   }

@@ -1,5 +1,12 @@
-import { Controller, Get, Post, Body, Param, Query } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Body, Param, Query, Res } from "@nestjs/common";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { SocketGateway } from "./socket.gateway";
+
+const WORKBENCH_PAGE = readFileSync(
+  join(__dirname, "workbench-page.html"),
+  "utf8",
+);
 
 @Controller()
 export class AppController {
@@ -55,6 +62,147 @@ export class AppController {
       method: "POST",
       body,
     });
+  }
+
+  @Get("api/connections")
+  async getConnections() {
+    return this.forwardToOrchestrator("/connections");
+  }
+
+  /** M8-S4/S6: version-pinned runtime templates for the onboarding form.
+   *  Declared before the `:connectionId` route (literal segment wins). */
+  @Get("api/connections/templates")
+  async getConnectionTemplates() {
+    return this.forwardToOrchestrator("/connections/templates");
+  }
+
+  /** M8-S6: local operator create (revision 1). */
+  @Post("api/connections")
+  async createConnection(@Body() body: any) {
+    return this.forwardToOrchestrator("/connections", {
+      method: "POST",
+      body,
+    });
+  }
+
+  /** M8-S6: local operator revise (append immutable revision N+1). */
+  @Patch("api/connections/:connectionId")
+  async reviseConnection(
+    @Param("connectionId") connectionId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/connections/${encodeURIComponent(connectionId)}`,
+      { method: "PATCH", body },
+    );
+  }
+
+  @Get("api/connections/:connectionId")
+  async getConnection(@Param("connectionId") connectionId: string) {
+    return this.forwardToOrchestrator(
+      `/connections/${encodeURIComponent(connectionId)}`,
+    );
+  }
+
+  @Get("api/workbench/connections")
+  async getWorkbenchConnections() {
+    return this.forwardToOrchestrator("/workbench/connections");
+  }
+
+  @Get("api/workbench/executions")
+  async getWorkbenchExecutions(@Query("page") page?: string) {
+    return this.forwardToOrchestrator(
+      `/workbench/executions${page ? `?page=${encodeURIComponent(page)}` : ""}`,
+    );
+  }
+
+  @Get("api/workbench/executions/:executionId")
+  async getWorkbenchExecution(@Param("executionId") executionId: string) {
+    return this.forwardToOrchestrator(
+      `/workbench/executions/${encodeURIComponent(executionId)}`,
+    );
+  }
+
+  @Post("api/workbench/commands/start-team-run")
+  async startTeamRun(@Body() body: any) {
+    return this.forwardToOrchestrator("/workbench/commands/start-team-run", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Post("api/workbench/commands/waits/:runId")
+  async resolveWait(@Param("runId") runId: string, @Body() body: any) {
+    return this.forwardToOrchestrator(
+      `/workbench/commands/waits/${encodeURIComponent(runId)}`,
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/workbench/commands/executions/:executionId/cancel")
+  async workbenchCancelExecution(
+    @Param("executionId") executionId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/workbench/commands/executions/${encodeURIComponent(executionId)}/cancel`,
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/workbench/commands/executions/:executionId/replay")
+  async workbenchReplayExecution(
+    @Param("executionId") executionId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/workbench/commands/executions/${encodeURIComponent(executionId)}/replay`,
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/workbench/commands/compare")
+  async workbenchCompare(@Body() body: any) {
+    return this.forwardToOrchestrator("/workbench/commands/compare", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Get("api/workbench/executions/:executionId/capsule")
+  async getWorkbenchCapsule(@Param("executionId") executionId: string) {
+    return this.forwardToOrchestrator(
+      `/workbench/executions/${encodeURIComponent(executionId)}/capsule`,
+    );
+  }
+
+  @Get("api/workbench/commands/audit")
+  async workbenchAudit(@Query("action") action?: string) {
+    return this.forwardToOrchestrator(
+      `/workbench/commands/audit${action ? `?action=${encodeURIComponent(action)}` : ""}`,
+    );
+  }
+
+  @Post("api/connections/:connectionId/test")
+  async testConnection(
+    @Param("connectionId") connectionId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/connections/${encodeURIComponent(connectionId)}/test`,
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/connections/:connectionId/revoke")
+  async revokeConnection(
+    @Param("connectionId") connectionId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/connections/${encodeURIComponent(connectionId)}/revoke`,
+      { method: "POST", body },
+    );
   }
 
   @Get("api/pipelines")
@@ -147,6 +295,12 @@ export class AppController {
 
   private getErrorMessage(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
+  }
+
+  @Get("workbench")
+  getWorkbench(@Res() response: any) {
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.send(WORKBENCH_PAGE);
   }
 
   @Get()

@@ -27,6 +27,12 @@ RUN pnpm --filter gateway run build
 # Production stage
 FROM node:22-alpine AS production
 ENV NODE_ENV=production
+# M11 closure: immutable source provenance baked at build time. The
+# self-hosted upgrade passes the PROVEN release commit SHA as a build arg
+# and verifies it on the running container after recreate — an image tag
+# alone is never proof of what source was built.
+ARG TENVYR_SOURCE_REVISION
+ENV TENVYR_SOURCE_REVISION=${TENVYR_SOURCE_REVISION}
 WORKDIR /usr/src/app
 RUN npm install -g pnpm@9.0.0
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./

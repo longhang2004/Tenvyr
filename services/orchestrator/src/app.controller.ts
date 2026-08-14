@@ -24,12 +24,18 @@ export class AppController {
   ) {}
 
   @Get("health")
-  getHealth() {
+  async getHealth() {
+    // M11-S4: liveness vs readiness with safe reason codes. PostgreSQL is
+    // the authority: readiness requires migrations applied and the DB
+    // reachable. Never returns secrets or raw errors.
+    const probe = await this.executionService.healthProbe();
     return {
       success: true,
       data: {
-        status: "UP",
+        status: probe.ready ? "UP" : "DEGRADED",
         service: "orchestrator",
+        ready: probe.ready,
+        reasonCode: probe.reasonCode,
       },
       error: null,
       meta: {

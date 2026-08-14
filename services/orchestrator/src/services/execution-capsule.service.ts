@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
-import { DataSource } from "typeorm";
+import { DataSource, type EntityManager } from "typeorm";
 import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
+import { CoordinationRunEntity } from "../entities/coordination-run.entity";
+import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
@@ -28,6 +30,7 @@ export const CAPSULE_BOUNDS = {
   maxInputBytes: 65_536,
   maxRevisions: 20,
   maxAttempts: 100,
+  maxCoordinationIterations: 100,
 } as const;
 
 /** M7-S3: structural comparison between two capsules. Drift is computed
@@ -202,6 +205,24 @@ export type ExecutionCapsuleV1 = {
     terminalAt: Date | null;
     error: string | null;
   }>;
+  /** M9-S5: bounded loop projection; absent for non-coordinated runs. */
+  coordination?: {
+    run: {
+      phase: string;
+      currentIterationNumber: number;
+      cumulativeWorkers: number;
+      config: unknown;
+    };
+    iterations: Array<{
+      iterationNumber: number;
+      workerCount: number;
+      requiredCount: number;
+      verifierStepId: string | null;
+      decisionAction: string | null;
+      decisionHash: string | null;
+      outcome: string | null;
+    }>;
+  };
   evidenceCompleteness: string[];
 };
 
@@ -288,7 +309,41 @@ export class ExecutionCapsuleService {
     if (!capsule.header.activeRevisionHash) {
       throw new Error("Source capsule has no active revision hash");
     }
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction((manager) =>
+      this.replayWithManager(
+        manager,
+        sourceExecutionId,
+        capsule,
+        requester,
+        note,
+      ),
+    );
+  }
+
+  /** P1/M10: manager-passable replay — caller-owned transactions compose
+   *  authority atomically (Workbench audit + replay commit together). The
+   *  capsule is built by the caller when already available; otherwise it is
+   *  rebuilt here (a pure read) with the same terminal-source guard. */
+  async replayWithManager(
+    manager: EntityManager,
+    sourceExecutionId: string,
+    capsule?: Awaited<ReturnType<ExecutionCapsuleService["build"]>>,
+    requester = "operator",
+    note?: string,
+  ): Promise<{
+    replay: ExecutionReplayEntity;
+    capsuleHash: string;
+    targetExecutionId: string;
+  }> {
+    const resolved = capsule ?? (await this.build(sourceExecutionId));
+    if (resolved.pointInTime !== "terminal") {
+      throw new Error(
+        `Execution ${sourceExecutionId} is ${resolved.sourceStatus}; replays require a terminal source`,
+      );
+    }
+    if (!resolved.header.activeRevisionHash) {
+      throw new Error("Source capsule has no active revision hash");
+    }
       const source = await manager
         .getRepository(ExecutionEntity)
         .createQueryBuilder("execution")
@@ -300,13 +355,13 @@ export class ExecutionCapsuleService {
       const existing = await replayRepository.findOne({
         where: {
           sourceExecutionId,
-          sourceCapsuleHash: capsule.contentHash,
+          sourceCapsuleHash: resolved.contentHash,
         },
       });
       if (existing) {
         return {
           replay: existing,
-          capsuleHash: capsule.contentHash,
+          capsuleHash: resolved.contentHash,
           targetExecutionId: existing.targetExecutionId,
         };
       }
@@ -315,7 +370,7 @@ export class ExecutionCapsuleService {
         .findOne({
           where: {
             executionId: sourceExecutionId,
-            planHash: capsule.header.activeRevisionHash,
+            planHash: resolved.header.activeRevisionHash,
           },
         });
       if (!revision) {
@@ -344,18 +399,40 @@ export class ExecutionCapsuleService {
       const replay = await replayRepository.save(
         replayRepository.create({
           sourceExecutionId,
-          sourceCapsuleHash: capsule.contentHash,
+          sourceCapsuleHash: resolved.contentHash,
           targetExecutionId: target.id,
           requester,
           note: note ?? null,
         }),
       );
+      // M9-S5: replay of a coordinated execution creates a NEW
+      // CoordinationRun from the frozen team template with a FRESH loop
+      // deadline — current connections, credentials, policy, approvals,
+      // budgets, permissions, and deadline are re-resolved by the normal
+      // claim/consume authority. Historical identity is provenance.
+      const sourceRun = await manager
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { executionId: sourceExecutionId } });
+      if (sourceRun) {
+        await manager.getRepository(CoordinationRunEntity).save(
+          manager.getRepository(CoordinationRunEntity).create({
+            executionId: target.id,
+            config: sourceRun.config,
+            phase: "PLANNING",
+            currentIterationNumber: 0,
+            cumulativeWorkers: 0,
+            loopDeadlineAt: new Date(
+              Date.now() + sourceRun.config.loopDeadlineMs,
+            ),
+            version: 1,
+          }),
+        );
+      }
       return {
         replay,
-        capsuleHash: capsule.contentHash,
+        capsuleHash: resolved.contentHash,
         targetExecutionId: target.id,
       };
-    });
   }
 
   /**
@@ -797,6 +874,52 @@ export class ExecutionCapsuleService {
         steps.map((step) => [step.id, step.stepId]),
       );
 
+      // M9-S5: bounded coordination loop projection — run phase + iteration
+      // manifests and consumed decisions. Provenance only: authority stays
+      // in the coordination tables and replay re-resolves current authority.
+      const coordinationRun = await manager
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { executionId } });
+      let coordination:
+        | ExecutionCapsuleV1["coordination"]
+        | undefined;
+      if (coordinationRun) {
+        const coordinationIterations = await manager
+          .getRepository(CoordinationIterationEntity)
+          .find({
+            where: { coordinationRunId: coordinationRun.id },
+            order: { iterationNumber: "ASC" },
+            take: CAPSULE_BOUNDS.maxCoordinationIterations,
+          });
+        const iterationCount = await manager
+          .getRepository(CoordinationIterationEntity)
+          .count({ where: { coordinationRunId: coordinationRun.id } });
+        if (iterationCount > CAPSULE_BOUNDS.maxCoordinationIterations) {
+          warnings.push(
+            `Coordination iterations truncated to ${CAPSULE_BOUNDS.maxCoordinationIterations} of ${iterationCount}`,
+          );
+        }
+        coordination = {
+          run: {
+            phase: coordinationRun.phase,
+            currentIterationNumber: coordinationRun.currentIterationNumber,
+            cumulativeWorkers: coordinationRun.cumulativeWorkers,
+            config: coordinationRun.config,
+          },
+          iterations: coordinationIterations.map((iteration) => ({
+            iterationNumber: iteration.iterationNumber,
+            workerCount: iteration.workerManifest.length,
+            requiredCount: iteration.workerManifest.filter(
+              (entry) => entry.required,
+            ).length,
+            verifierStepId: iteration.verifierStepId ?? null,
+            decisionAction: iteration.decision?.action ?? null,
+            decisionHash: iteration.decisionHash ?? null,
+            outcome: iteration.outcome ?? null,
+          })),
+        };
+      }
+
       // Attempts: newest first, bounded.
       const attempts = await manager.getRepository(StepAttemptEntity).find({
         where: { executionId },
@@ -1056,6 +1179,7 @@ export class ExecutionCapsuleService {
           terminalAt: attempt.terminalAt ?? null,
           error: attempt.error ?? null,
         })),
+        ...(coordination ? { coordination } : {}),
         evidenceCompleteness: warnings,
       };
       const {

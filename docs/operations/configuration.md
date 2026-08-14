@@ -43,6 +43,13 @@ Values below are variable names and source defaults, never production secret val
 
 HTTP agent transport is disabled when `AGENT_TRANSPORT_CONFIG` is absent or blank. When present, it must be a JSON object keyed by exact agent name. Each entry selects `kafka` or `http`; HTTP entries contain the submit URL, time/size limits, and names of environment variables holding bearer/callback secrets.
 
+M8 Runtime Connections: an agent entry may also declare `connectionId`
+(`conn:...`). At claim time the Orchestrator then freezes the connection's
+current immutable revision (connection ID, revision number, runtime kind,
+config hash, conservative capabilities — never secret values) into the
+attempt's `executorSnapshot`; pending delivery of a REVOKED connection fails
+with a deterministic `EXECUTOR_CONNECTION_REVOKED` and never falls back.
+
 M3 executor descriptors: at claim time the Orchestrator freezes a bounded,
 versioned, secret-free executor descriptor (executor kind, HTTP routing
 profile, capability flags, config hash) into the attempt's `executorSnapshot`.

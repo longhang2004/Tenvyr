@@ -27,6 +27,15 @@ import { ArtifactProjectionResolver } from "./artifact-projection.resolver";
 import { sha256Json } from "../domain/canonical-json";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
 import { AgentTransportConfigService } from "../agent-adapters/agent-transport-config.service";
+import { RuntimeConnectionService } from "./runtime-connection.service";
+import { RuntimeCoordinationService } from "./runtime-coordination.service";
+import {
+  buildConnectionReference,
+} from "../executors/runtime-connection";
+import {
+  attachLocalExecutorProfile,
+  type ExecutorDescriptorV1,
+} from "../executors/executor-descriptor";
 import { BudgetLedgerService } from "./budget-ledger.service";
 import { BudgetError, parsePipelineBudget } from "../domain/budget";
 import { PolicyService } from "./policy.service";
@@ -94,6 +103,8 @@ export class ExecutionService {
     budgetLedger?: BudgetLedgerService,
     policyService?: PolicyService,
     approvalService?: ApprovalService,
+    connections?: RuntimeConnectionService,
+    coordinationService?: RuntimeCoordinationService,
   ) {
     // M4-S2: default ledger bound to the injected DataSource so direct
     // constructions (tests) and Nest DI both get a working instance.
@@ -102,11 +113,102 @@ export class ExecutionService {
     this.policyService = policyService ?? new PolicyService(this.dataSource);
     this.approvalService =
       approvalService ?? new ApprovalService(this.dataSource);
+    this.connections =
+      connections ?? new RuntimeConnectionService(this.dataSource);
+    this.coordination =
+      coordinationService ?? new RuntimeCoordinationService(this.dataSource);
   }
 
   private readonly budgetLedger: BudgetLedgerService;
   private readonly policyService: PolicyService;
   private readonly approvalService: ApprovalService;
+  private readonly connections: RuntimeConnectionService;
+  private readonly coordination: RuntimeCoordinationService;
+
+  /**
+   * M11-S4: liveness/readiness probe with safe reason codes (never
+   * secrets or raw errors). Readiness requires PostgreSQL reachable and
+   * migrations applied.
+   */
+  async healthProbe(): Promise<{ ready: boolean; reasonCode: string }> {
+    try {
+      await this.dataSource.query("SELECT 1");
+      const migrationsTable = (await this.dataSource.query(
+        "SELECT to_regclass('public.migrations') AS name",
+      )) as Array<{ name: string | null }>;
+      if (migrationsTable[0]?.name === null) {
+        return { ready: false, reasonCode: "migrations-required" };
+      }
+      const rows = (await this.dataSource.query(
+        "SELECT count(*)::int AS applied FROM migrations",
+      )) as Array<{ applied: number }>;
+      if ((rows[0]?.applied ?? 0) > 0) {
+        return { ready: true, reasonCode: "ready" };
+      }
+      return { ready: false, reasonCode: "migrations-required" };
+    } catch {
+      return { ready: false, reasonCode: "postgres-unreachable" };
+    }
+  }
+
+  /**
+   * M9-S2: completion hold — a non-terminal CoordinationRun prevents the
+   * generic engine from marking the Execution COMPLETED. The hold releases
+   * when the run reaches a terminal phase (ACCEPTED/Failed/etc.).
+   */
+  async isCoordinationCompletionHeld(executionId: string): Promise<boolean> {
+    return this.coordination.isCompletionHeld(executionId);
+  }
+
+  /** M9-S4: deterministic Coordinator loop reconciliation (PostgreSQL
+   *  only). True when the loop made an autonomous decision. */
+  async reconcileCoordination(executionId: string): Promise<boolean> {
+    return this.coordination.reconcileCoordination(executionId);
+  }
+
+  /** M9-S4: is this logical step a Coordinator-owned Verifier step? */
+  async isCoordinationVerifierStep(
+    executionId: string,
+    stepId: string,
+  ): Promise<boolean> {
+    return this.coordination.isVerifierStep(executionId, stepId);
+  }
+
+  /** M9-S4: bounded Verifier aggregation, frozen at claim time. */
+  async buildVerifierInput(
+    executionId: string,
+    stepId: string,
+  ): Promise<unknown> {
+    return this.coordination.buildVerifierInput(executionId, stepId);
+  }
+
+  /**
+   * M8-S2/S6: freezes the attempt's secret-free executor snapshot. When a
+   * Runtime Connection is selected — either by the STEP's typed selection
+   * (`metadata.tenvyrConnectionId`, authoritative when present) or by the
+   * agent's static transport configuration — the claim resolves the
+   * connection's CURRENT immutable revision and embeds its exact reference
+   * (connectionId/revisionNumber/configHash/capabilities) plus the frozen
+   * secret-free local CLI execution profile (command/argv/cwd/env
+   * references) into the descriptor; dispatch and Capsule provenance
+   * consume exactly that frozen identity. Without a connection the pre-M8
+   * descriptor path applies unchanged.
+   */
+  private async resolveAttemptSnapshot(
+    agent: string,
+    stepConnectionId?: string,
+    manager?: import("typeorm").EntityManager,
+  ): Promise<ExecutorDescriptorV1> {
+    const connectionId =
+      stepConnectionId ?? this.transportConfig.forAgent(agent).connectionId;
+    if (!connectionId) return this.transportConfig.resolveExecutorDescriptor(agent);
+    const revision = manager
+      ? await this.connections.claimRevisionWithManager(manager, connectionId)
+      : await this.connections.claimRevision(connectionId);
+    const descriptor = this.transportConfig.resolveExecutorDescriptor(agent);
+    descriptor.connection = buildConnectionReference(revision);
+    return attachLocalExecutorProfile(descriptor, revision);
+  }
 
   /**
    * Materialize an idempotent scheduling candidate, then make the scheduling
@@ -207,6 +309,12 @@ export class ExecutionService {
           `Step ${stepConfig.id} execution specification is frozen`,
         );
       }
+      // M8-S6: the TYPED runtime selection rides on the step (PlanPatch
+      // validation -> materialization -> claim). The step's frozen
+      // connection wins over the static agent transport configuration —
+      // two steps selecting different connections can never be silently
+      // routed through the same static config entry.
+      const stepConnectionId = stepConnectionIdOf(stepConfig);
 
       const allSteps = await logicalRepository.find({
         where: { executionId },
@@ -293,8 +401,10 @@ export class ExecutionService {
               frozenSpecHash,
               inputSnapshot,
               contextSnapshot: null,
-              executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+              executorSnapshot: await this.resolveAttemptSnapshot(
                 stepConfig.agent,
+                stepConnectionId,
+                manager,
               ),
               status: "FAILED",
               deadlineAt: attemptDeadlineAt,
@@ -357,8 +467,10 @@ export class ExecutionService {
             frozenSpecHash,
             inputSnapshot,
             contextSnapshot,
-            executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+            executorSnapshot: await this.resolveAttemptSnapshot(
               stepConfig.agent,
+              stepConnectionId,
+              manager,
             ),
             status: "FAILED",
             deadlineAt: attemptDeadlineAt,
@@ -434,8 +546,10 @@ export class ExecutionService {
               frozenSpecHash,
               inputSnapshot,
               contextSnapshot,
-              executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
+              executorSnapshot: await this.resolveAttemptSnapshot(
                 stepConfig.agent,
+                stepConnectionId,
+                manager,
               ),
               status: "WAITING",
               deadlineAt: attemptDeadlineAt,
@@ -488,6 +602,14 @@ export class ExecutionService {
         }
       }
 
+      // M8-S6: the frozen snapshot (connection reference + local profile)
+      // is computed ONCE per claim and reused for the attempt row AND the
+      // outbox invocation, so dispatch carries exactly what the claim froze.
+      const executorSnapshot = await this.resolveAttemptSnapshot(
+        stepConfig.agent,
+        stepConnectionId,
+        manager,
+      );
       const attempt = await attemptRepository.save(
         attemptRepository.create({
           executionId,
@@ -498,9 +620,7 @@ export class ExecutionService {
           frozenSpecHash,
           inputSnapshot,
           contextSnapshot,
-          executorSnapshot: this.transportConfig.resolveExecutorDescriptor(
-            stepConfig.agent,
-          ),
+          executorSnapshot,
           status: "CREATED",
           deadlineAt: attemptDeadlineAt,
         }),
@@ -544,6 +664,20 @@ export class ExecutionService {
               correlationId: attempt.invocationId,
             },
             metadata: { orchestration: { maxAttempts } },
+            // M8-S6: the frozen connection revision identity rides the
+            // invocation; the executor host validates its fixed operator
+            // configuration against it and fails closed on mismatch. Only
+            // the identity triple crosses the wire (the full reference
+            // stays in the attempt snapshot).
+            ...(executorSnapshot.connection
+              ? {
+                  connection: {
+                    connectionId: executorSnapshot.connection.connectionId,
+                    revisionNumber: executorSnapshot.connection.revisionNumber,
+                    configHash: executorSnapshot.connection.configHash,
+                  },
+                }
+              : {}),
           },
         }),
       );
@@ -943,7 +1077,20 @@ export class ExecutionService {
     executionId: string,
     reason = "Execution cancelled by request",
   ): Promise<ExecutionEntity> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction((manager) =>
+      this.cancelExecutionWithManager(manager, executionId, reason),
+    );
+  }
+
+  /** P1/M10: manager-passable cancel — caller-owned transactions compose
+   *  authority atomically (Workbench command audit + cancel commit
+   *  together). Mirrors the exact locking order of the terminal-result
+   *  path (attempt -> logical step -> execution). */
+  async cancelExecutionWithManager(
+    manager: EntityManager,
+    executionId: string,
+    reason = "Execution cancelled by request",
+  ): Promise<ExecutionEntity> {
       const attemptRepository = manager.getRepository(StepAttemptEntity);
       const logicalRepository = manager.getRepository(LogicalStepEntity);
       const executionRepository = manager.getRepository(ExecutionEntity);
@@ -1026,7 +1173,6 @@ export class ExecutionService {
       execution.endTime = now;
       execution.terminationReason = reason;
       return executionRepository.save(execution);
-    });
   }
 
   async getExecution(id: string): Promise<ExecutionEntity | null> {
@@ -1364,4 +1510,28 @@ export class ExecutionService {
         return "CREATED";
     }
   }
+}
+
+/**
+ * M8-S6: extracts the typed Runtime Connection selection recorded on a
+ * materialized step (`metadata.tenvyrConnectionId`, written by the
+ * Coordinator's PlanPatch compilation or the operator). Strict bounds
+ * mirror the connection-id contract; anything malformed is a
+ * deterministic configuration failure, never silently ignored — a step
+ * that claims a connection must claim a REAL one.
+ */
+export function stepConnectionIdOf(stepConfig: PipelineStepConfig): string | undefined {
+  const raw = stepConfig.metadata?.tenvyrConnectionId;
+  if (raw === undefined || raw === null) return undefined;
+  if (
+    typeof raw !== "string" ||
+    raw.length === 0 ||
+    raw.length > 255 ||
+    !/^[A-Za-z0-9_.:-]+$/.test(raw)
+  ) {
+    throw new Error(
+      `Step "${stepConfig.id}" metadata.tenvyrConnectionId must match [A-Za-z0-9_.:-] (at most 255 characters)`,
+    );
+  }
+  return raw;
 }

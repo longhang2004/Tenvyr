@@ -31,6 +31,10 @@ contracts.
 | Gateway, frontend, readiness, showcase                    | implemented | General external APIs remain behind the open production-exposure gate                         |
 | AgentEvents and deterministic supervision                 | implemented | Events are evidence/liveness input, never execution authority                                 |
 | Executor descriptors and local executor host              | implemented | Host is trusted-code-only, bounded process execution; it is not a sandbox                     |
+| Runtime Connections (M8)                                  | implemented | Immutable secret-free revisions, linearizable claim/revoke under the authority-row lock, frozen attempt identity, bounded probes and test receipts, audited local create/revise/test/revoke commands; runtime profiles pinned 2026-08-12 (codex 0.147.0, claude 2.1.228, opencode 1.18.16); live gates opt-in |
+| Supervised agent team execution (M9)                      | implemented | Deterministic Coordinator loop with exact iteration identity, Planner-attempt ownership, strict baseRevision (stale proposals activate nothing; no silent rebase), concurrent-start convergence, and role/executor allowlist enforcement on every run-creation path |
+| Operator Workbench (M10)                                  | implemented | Bounded read projections; idempotent audited command surface including Runtime Connection operations (create/revise/test/revoke); deterministic offline demo; loopback/private trusted-operator surface |
+| Single-owner self-hosted (M11)                            | implemented | Numeric semver upgrade with fail-closed target verification and truthful metadata; verified backup; restore explicitly separated into --drill (isolated verification) and --promote (deep integrity checks, bounded safety copy, atomic promotion, post-recovery write proof); references-only bootstrap |
 | Budget ledger and hierarchy                               | implemented | Budgets are opt-in; operator adjustments are not idempotency-keyed                            |
 | Policy decisions, approvals, and WAITING                  | implemented | Internal authority services; no public approval administration API                            |
 | PlanPatch, proposals, policy, and planner trigger         | implemented | Restricted additive/replacement patch model; service-level activation                         |
@@ -65,3 +69,8 @@ contracts.
 
 The complete numbered M0–M7 roadmap is closed. That is an internal technical
 milestone claim, not an external production-readiness or public-release claim.
+
+M8–M11 are IMPLEMENTED and READY FOR INDEPENDENT TECH LEAD VERIFICATION
+(implementer status only — closure is the independent reviewer's decision).
+Their accepted planning authority remains
+[docs/plans/active/tenvyr-productization-roadmap/ROADMAP.md](../plans/active/tenvyr-productization-roadmap/ROADMAP.md).

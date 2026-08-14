@@ -33,13 +33,17 @@ prose. The conflict must still be corrected rather than ignored.
 
 - [System overview](architecture/overview.md)
 - [Control plane](architecture/control-plane.md)
+- [Coordinator loop domain](architecture/coordination-loop.md)
+- [Operator Workbench](architecture/workbench.md)
+- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md)
 - [Agents and runners](architecture/agents-and-runners.md)
 - Contracts: [agent protocol v1](architecture/contracts/agent-protocol-v1.md)
   and [JSON interoperability](architecture/contracts/json-interoperability.md)
 - Transports: [adapter model](architecture/transports/adapter-model.md),
   [Kafka runtime v1](architecture/transports/kafka-runtime-v1.md), and
   [HTTP adapter v1](architecture/transports/http-agent-adapter-v1.md)
-- Executors: [local executor host](architecture/executors/local-executor-host.md)
+- Executors: [local executor host](architecture/executors/local-executor-host.md),
+  [runtime connections](architecture/executors/runtime-connections.md),
   and the [native integration matrix](architecture/executors/native-integrations.md)
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md), and the
@@ -78,8 +82,12 @@ Developer tooling is not a Tenvyr production runtime feature.
 
 ## Roadmap, plans, and history
 
-- Planned work: [roadmap index](roadmap/README.md) and
-  [observability/provenance roadmap](roadmap/observability-provenance.md)
+- Planned work: [roadmap index](roadmap/README.md), the accepted
+  [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md),
+  and its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md)
+- The older [observability/provenance roadmap](roadmap/observability-provenance.md)
+  is thematic research; current M0–M7 contracts and the accepted roadmap take
+  precedence where its assumptions are stale.
 - Plan policy: [plan lifecycle](plans/README.md)
 - Closed M3–M7 evidence: [independent review](archive/reviews/2026-08-12-m3-m7-independent-closure.md)
   and [historical execution roadmap](archive/plans/tenvyr-roadmap/ROADMAP.md)

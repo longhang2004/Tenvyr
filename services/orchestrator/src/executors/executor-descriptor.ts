@@ -1,6 +1,10 @@
 import { AgentAdapterError } from "../agent-adapters/agent-adapter.errors";
 import type { AgentTransportConfiguration } from "../agent-adapters/agent-transport-config.service";
 import { sha256Json } from "../domain/canonical-json";
+import {
+  parseConnectionReference,
+  type ConnectionReferenceV1,
+} from "./runtime-connection";
 
 /**
  * M3: bounded, versioned, secret-free executor descriptor frozen on one step
@@ -32,6 +36,28 @@ export type HttpExecutorProfileV1 = {
   maxResponseBytes: number;
 };
 
+/**
+ * M8-S6: frozen secret-free LOCAL execution profile for CLI runtime
+ * connections (codex/claude/opencode/generic-cli), captured at attempt
+ * claim from the connection revision's fixed cli profile. Command, argv,
+ * cwd, and environment are REFERENCES/operator configuration — never
+ * secret values and never pipeline input. Dispatch/provenance consume
+ * exactly this frozen data; a revised connection can never change what
+ * an already-dispatched attempt was pinned to.
+ */
+export type LocalExecutorProfileV1 = {
+  /** Absolute fixed executable path. */
+  command: string;
+  /** Fixed argv; no shell, no interpolation, no evaluation. */
+  args: string[];
+  /** Optional absolute working directory. */
+  cwd?: string;
+  /** Environment allowlist: child var name -> host env var name. */
+  envAllowlist?: Record<string, string>;
+  /** Secret references: child var name -> host env var name. */
+  secrets?: Record<string, string>;
+};
+
 export type ExecutorDescriptorV1 = {
   schemaVersion: typeof EXECUTOR_DESCRIPTOR_SCHEMA_VERSION;
   /** Stable logical executor reference the pipeline selected. */
@@ -44,6 +70,14 @@ export type ExecutorDescriptorV1 = {
   configHash: string;
   /** Conservative capability declarations; false unless proven. */
   capabilities: ExecutorCapabilitiesV1;
+  /** M8-S2: frozen connection revision identity when the agent's routing
+   *  selected a Runtime Connection at claim time; secret-free by
+   *  construction. Absent for pre-M8 routing. */
+  connection?: ConnectionReferenceV1;
+  /** M8-S6: frozen CLI execution data when the selected connection is a
+   *  CLI runtime (codex/claude/opencode/generic-cli); secret-free by
+   *  construction (references only). Absent for worker/agent-only routing. */
+  localProfile?: LocalExecutorProfileV1;
   /** Frozen HTTP routing profile; present iff kind === "http". */
   httpProfile?: HttpExecutorProfileV1;
 };
@@ -55,7 +89,17 @@ const BOUNDS = {
   configHashLength: 64,
 } as const;
 
+/** Bounds mirror the connection CLI profile bounds (runtime-connection.ts). */
+export const LOCAL_PROFILE_BOUNDS = {
+  commandMaxLength: 4096,
+  argsMaxCount: 64,
+  argMaxLength: 1024,
+  envMaxEntries: 64,
+} as const;
+
 const HTTP_PROFILE_KEYS = ["submitUrl", "requestTimeoutMs", "maxResponseBytes"];
+const LOCAL_PROFILE_KEYS = ["command", "args", "cwd", "envAllowlist", "secrets"];
+const ENV_NAME_PATTERN = /^[A-Za-z0-9_]+$/;
 const DESCRIPTOR_KEYS = [
   "schemaVersion",
   "executorId",
@@ -63,6 +107,8 @@ const DESCRIPTOR_KEYS = [
   "kind",
   "configHash",
   "capabilities",
+  "connection",
+  "localProfile",
   "httpProfile",
 ];
 
@@ -153,12 +199,116 @@ export function parseExecutorDescriptor(value: unknown): ExecutorDescriptorV1 {
     configHash,
     capabilities: { cancel: capabilities.cancel },
   };
+  if (snapshot.connection !== undefined) {
+    descriptor.connection = parseConnectionReference(snapshot.connection);
+  }
+  if (snapshot.localProfile !== undefined) {
+    descriptor.localProfile = parseLocalProfile(snapshot.localProfile);
+  }
   if (kind === "http") {
     descriptor.httpProfile = parseHttpProfile(snapshot.httpProfile);
   } else if (snapshot.httpProfile !== undefined) {
     throw descriptorInvalid("Kafka executor descriptors must not carry an HTTP profile");
   }
   return descriptor;
+}
+
+/**
+ * M8-S6: attaches the frozen secret-free local execution profile of a
+ * claimed connection revision (CLI runtime kinds only). The frozen data
+ * mirrors the revision's fixed cli profile exactly — command/argv/cwd and
+ * environment REFERENCES, never values. Attempts without a cli profile
+ * (worker transports) stay unchanged.
+ */
+export function attachLocalExecutorProfile(
+  descriptor: ExecutorDescriptorV1,
+  revision: import("./runtime-connection").ConnectionRevisionV1,
+): ExecutorDescriptorV1 {
+  const cli = revision.profile.cli;
+  if (!cli) return descriptor;
+  const localProfile: LocalExecutorProfileV1 = {
+    command: cli.command,
+    args: cli.args,
+  };
+  if (cli.cwd !== undefined) localProfile.cwd = cli.cwd;
+  if (cli.envAllowlist && Object.keys(cli.envAllowlist).length > 0) {
+    localProfile.envAllowlist = cli.envAllowlist;
+  }
+  if (cli.secrets && Object.keys(cli.secrets).length > 0) {
+    localProfile.secrets = cli.secrets;
+  }
+  return { ...descriptor, localProfile };
+}
+
+/**
+ * Strict parse of the frozen local execution profile (trust boundary:
+ * the value comes from durable jsonb evidence). Only reference-shaped
+ * fields are accepted — a snapshot can never smuggle a secret value in.
+ */
+export function parseLocalProfile(value: unknown): LocalExecutorProfileV1 {
+  const profile = record(value, "Local executor profile");
+  assertOnlyKeys(profile, LOCAL_PROFILE_KEYS, "Local executor profile");
+  const command = boundedString(
+    profile.command,
+    "command",
+    LOCAL_PROFILE_BOUNDS.commandMaxLength,
+  );
+  const args = parseLocalArgs(profile.args);
+  const local: LocalExecutorProfileV1 = { command, args };
+  if (profile.cwd !== undefined) {
+    local.cwd = boundedString(profile.cwd, "cwd", LOCAL_PROFILE_BOUNDS.commandMaxLength);
+  }
+  if (profile.envAllowlist !== undefined) {
+    local.envAllowlist = parseEnvReferenceMap(profile.envAllowlist, "envAllowlist");
+  }
+  if (profile.secrets !== undefined) {
+    local.secrets = parseEnvReferenceMap(profile.secrets, "secrets");
+  }
+  return local;
+}
+
+function parseLocalArgs(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > LOCAL_PROFILE_BOUNDS.argsMaxCount) {
+    throw descriptorInvalid(
+      `Local executor profile args must be an array of at most ${LOCAL_PROFILE_BOUNDS.argsMaxCount} strings`,
+    );
+  }
+  return value.map((arg, index) =>
+    boundedString(arg, `args[${index}]`, LOCAL_PROFILE_BOUNDS.argMaxLength),
+  );
+}
+
+function parseEnvReferenceMap(
+  value: unknown,
+  what: string,
+): Record<string, string> {
+  const map = record(value, `Local executor profile ${what}`);
+  const entries = Object.entries(map);
+  if (entries.length > LOCAL_PROFILE_BOUNDS.envMaxEntries) {
+    throw descriptorInvalid(
+      `Local executor profile ${what} exceeds ${LOCAL_PROFILE_BOUNDS.envMaxEntries} entries`,
+    );
+  }
+  const result: Record<string, string> = {};
+  for (const [child, envName] of entries) {
+    if (!child || child.length > 255 || !ENV_NAME_PATTERN.test(child)) {
+      throw descriptorInvalid(
+        `Local executor profile ${what} contains an invalid child variable name: "${child}"`,
+      );
+    }
+    if (
+      typeof envName !== "string" ||
+      !envName.trim() ||
+      envName.length > 255 ||
+      !ENV_NAME_PATTERN.test(envName)
+    ) {
+      throw descriptorInvalid(
+        `Local executor profile ${what} value for "${child}" must match ${ENV_NAME_PATTERN}`,
+      );
+    }
+    result[child] = envName;
+  }
+  return result;
 }
 
 /**

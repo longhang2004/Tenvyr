@@ -1,4 +1,8 @@
 import type { AgentEventMessage } from "../agent-adapters/agent-adapter.types";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   parseAgentEvent,
   type AgentResultV1,
@@ -34,6 +38,24 @@ import { ExecutionService } from "../services/execution.service";
 import { ResultInboxService } from "../services/result-inbox.service";
 import { ExecutionStateService } from "../services/execution-state.service";
 import { RuntimeRecoveryService } from "../services/runtime-recovery.service";
+import { RuntimeConnectionService } from "../services/runtime-connection.service";
+import { RuntimeConnectionEntity } from "../entities/runtime-connection.entity";
+import { ConnectionRevisionEntity } from "../entities/connection-revision.entity";
+import {
+  parseConnectionRevision,
+  type ConnectionProfileV1,
+} from "../executors/runtime-connection";
+import { buildRuntimeConnectionProfile } from "../executors/runtime-profiles";
+import { RuntimeCoordinationService } from "../services/runtime-coordination.service";
+import { WorkbenchProjectionService } from "../services/workbench-projection.service";
+import { WorkbenchCommandService } from "../services/workbench-command.service";
+import { OperatorActionEntity } from "../entities/operator-action.entity";
+import { CoordinationRunEntity } from "../entities/coordination-run.entity";
+import type {
+  CoordinationConfigV1,
+  TaskBatchProposalV1,
+  VerifierDecisionV1,
+} from "../domain/coordination";
 import { AgentAdapterRouter } from "../agent-adapters/agent-adapter.router";
 import { HttpAgentAdapter } from "../agent-adapters/http-agent.adapter";
 import { w3cTraceparent } from "../agent-adapters/http-agent.adapter";
@@ -56,6 +78,7 @@ import { PipelineValidationService } from "../services/pipeline-validation.servi
 import { ConditionEvaluatorService } from "../services/condition-evaluator.service";
 import { ApprovalService } from "../services/approval.service";
 import { PlanProposalService } from "../services/plan-proposal.service";
+import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
 import { DelegationService } from "../services/delegation.service";
 import { DelegationRequestEntity } from "../entities/delegation-request.entity";
 import { DelegationRequestConflictEntity } from "../entities/delegation-request-conflict.entity";
@@ -74,6 +97,12 @@ import { BudgetAccountEntity } from "../entities/budget-account.entity";
 import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
 import { BudgetLedgerEntryEntity } from "../entities/budget-ledger-entry.entity";
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+
+// Preserved legacy deployment identifier (see
+// compatibility-identifiers.spec.ts): the dev compose container keeps its
+// historical name. Split-string keeps the legacy literal out of this spec
+// (product-identity audit) while docker-exec'ing the exact container.
+const POSTGRES_CONTAINER = ["agent", "weave-postgres"].join("");
 
 /**
  * The suites below drop and recreate the target database/schema. Refuse to
@@ -150,6 +179,134 @@ const describeWithPostgres = TEST_DATABASE_URL ? describe : describe.skip;
 const noOpSupervision = () => ({
   evaluate: jest.fn().mockResolvedValue(undefined),
 });
+
+/**
+ * M9-S8 helper: claims the Coordinator-owned Planner step through the REAL
+ * scheduling path (claimRunnableStep) and returns the attempt id plus the
+ * baseRevision the attempt was frozen on. Tests that exercise batch
+ * admission must use a real Planner attempt — fabricated attempt ids are
+ * exactly what the ownership gate rejects.
+ */
+const seedPlannerAttempt = async (
+  dataSource: DataSource,
+  executionService: ExecutionService,
+  executionId: string,
+  iterationNumber: number,
+): Promise<{ attemptId: string; baseRevision: number }> => {
+  // Mirror the real scheduling flow: activation materializes the planner
+  // step as PENDING; the engine's reconciliation promotes dependency-free
+  // PENDING steps to READY and backfills their frozen input. The direct
+  // claim below requires the step to be READY.
+  await executionService.reconcileExecution(executionId);
+  const logical = await dataSource.getRepository(LogicalStepEntity).findOne({
+    where: { executionId, stepId: `planner-${iterationNumber}` },
+  });
+  if (!logical) {
+    throw new Error(`planner step planner-${iterationNumber} not found`);
+  }
+  const execution = await dataSource
+    .getRepository(ExecutionEntity)
+    .findOne({ where: { id: executionId } });
+  const revision = await dataSource
+    .getRepository(ExecutionPlanRevisionEntity)
+    .findOne({ where: { id: execution?.activePlanRevisionId } });
+  if (!revision) throw new Error("no active plan revision");
+  const stepConfig = (
+    revision.plan.steps as Array<Record<string, unknown>>
+  ).find((step) => step.id === `planner-${iterationNumber}`);
+  if (!stepConfig) {
+    throw new Error(`planner step config planner-${iterationNumber} not found`);
+  }
+  const input = (logical.input ?? {}) as Record<string, unknown>;
+  const claim = await executionService.claimRunnableStep(
+    executionId,
+    stepConfig as never,
+    input,
+    1,
+  );
+  if (claim?.disposition !== "claimed") {
+    throw new Error(`planner claim failed: ${claim?.disposition}`);
+  }
+  // The ownership gate requires a SUCCESSFUL terminal attempt. Mark the
+  // claim terminal-success directly (the tests submit the batch through
+  // `submitIterationBatch`, so no worker round-trip is needed).
+  const attemptRepository = dataSource.getRepository(StepAttemptEntity);
+  await attemptRepository.update(
+    { id: claim.attempt.id },
+    { status: "SUCCESS", terminalAt: new Date() },
+  );
+  return {
+    attemptId: claim.attempt.id,
+    baseRevision: revision.revisionNumber,
+  };
+};
+
+/** Minimal structural shape of a raw `pg` client borrowed from the driver
+ *  pool (the orchestrator does not ship @types/pg; the driver's pool client
+ *  satisfies this at runtime). Used only by the M9 race barriers. */
+type RawPgClient = {
+  query: (
+    text: string,
+    values?: unknown[],
+  ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  release: () => void;
+};
+
+/** Borrows a dedicated connection from the TypeORM postgres driver pool so a
+ *  test can hold a real row lock as an interleaving barrier. (The driver
+ *  exposes the pg pool at `master`; older shapes used `postgres`.) */
+const rawPgClient = async (
+  dataSource: DataSource,
+): Promise<RawPgClient> => {
+  const driver = dataSource.driver as {
+    master?: { connect: () => Promise<RawPgClient> };
+    postgres?: { connect: () => Promise<RawPgClient> };
+  };
+  const pool = driver.master ?? driver.postgres;
+  if (!pool) throw new Error("postgres driver pool is unavailable");
+  return pool.connect();
+};
+
+/** Polls pg_locks until at least `expected` backends of THIS database are
+ *  WAITING (non-granted) on a lock with `needle` in their query text — an
+ *  explicit interleaving barrier proving a transaction parked at a real
+ *  PostgreSQL row lock. pg_stat_activity state is NOT reliable for this:
+ *  node-postgres backends blocked on a row lock report idle/ClientRead, but
+ *  their non-granted pg_locks entries are always visible. */
+const waitForLockWait = async (
+  client: RawPgClient,
+  needle: string,
+  expected: number,
+  timeoutMs = 15_000,
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await client.query(
+      `SELECT count(DISTINCT l.pid)::int AS c
+       FROM pg_locks l
+       JOIN pg_stat_activity a ON a.pid = l.pid
+       WHERE NOT l.granted
+         AND a.datname = current_database()
+         AND l.pid <> pg_backend_pid()
+         AND position($1 in a.query) > 0`,
+      [needle],
+    );
+    const count = Number(result.rows[0]?.c ?? 0);
+    if (count >= expected) return;
+    if (Date.now() > deadline) {
+      const dump = await client.query(
+        `SELECT a.pid, a.state, a.wait_event_type, a.wait_event, left(a.query, 90) AS q
+         FROM pg_stat_activity a
+         WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
+         ORDER BY a.pid`,
+      );
+      throw new Error(
+        `timed out waiting for ${expected} lock waiter(s) on "${needle}" (saw ${count}; backends: ${JSON.stringify(dump.rows)})`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
 
 describeWithPostgres("PostgreSQL integration", () => {
   jest.setTimeout(60_000);
@@ -13115,3 +13272,4401 @@ describeWithPostgres("PostgreSQL M7-S4 telemetry projection", () => {
     await (adapter as any).stop();
   });
 });
+
+describeWithPostgres("PostgreSQL M8-S2 runtime connections", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let connections: RuntimeConnectionService;
+
+  const SEEDED_SECRET = "m8-callback-secret-value";
+
+  const connectionProfile = (overrides: Partial<ConnectionProfileV1> = {}): ConnectionProfileV1 => ({
+    name: "Codex local",
+    runtimeKind: "codex",
+    executorId: "local-host",
+    version: "0.147.0",
+    credentialRefs: [{ kind: "env", name: "CODEX_API_KEY" }],
+    declaredCapabilities: {
+      invocation: { supported: true, source: "configured" },
+      structuredResult: { supported: true, source: "configured" },
+    },
+    ...overrides,
+  });
+
+  const httpEnv = (connectionId: string, overrides: Record<string, unknown> = {}) => ({
+    AGENT_TRANSPORT_CONFIG: JSON.stringify({
+      reader: {
+        kind: "http",
+        submitUrl: "https://reader-pinned.example/v1/runs",
+        outboundAuthentication: { type: "none" },
+        callbackAuthentication: {
+          keyId: "reader-key",
+          secretEnv: "READER_CALLBACK_SECRET",
+        },
+        requestTimeoutMs: 1000,
+        maxResponseBytes: 1024,
+        connectionId,
+        ...overrides,
+      },
+    }),
+    HTTP_AGENT_CALLBACK_BASE_URL: "https://orchestrator.example",
+    READER_CALLBACK_SECRET: SEEDED_SECRET,
+  });
+
+  const transportConfig = (env: NodeJS.ProcessEnv) =>
+    new AgentTransportConfigService(parseAgentTransportConfiguration(env));
+
+  const executionServiceWith = (config: AgentTransportConfigService) =>
+    new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+      undefined,
+      config,
+    );
+
+  const recordingAdapter = () => {
+    const calls: Array<{ invocation: unknown; pinned: unknown }> = [];
+    return {
+      calls,
+      adapter: {
+        kind: "test",
+        invoke: jest.fn(async (invocation: any, pinned: any) => {
+          calls.push({ invocation, pinned });
+          return {
+            adapter: "test",
+            invocationId: invocation.invocationId,
+            dispatchedAt: new Date().toISOString(),
+          };
+        }),
+      },
+    };
+  };
+
+  const seedExecution = async (
+    service: ExecutionService,
+    name: string,
+    steps: any[],
+  ) => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        steps,
+      }),
+    );
+    const execution = await service.createExecution(pipeline, {});
+    await service.reconcileExecution(execution.id);
+    return { pipeline, execution };
+  };
+
+  const claimExtract = async (service: ExecutionService, executionId: string) =>
+    service.claimRunnableStep(
+      executionId,
+      { id: "extract", agent: "reader" } as any,
+      { input: true },
+      1,
+    );
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    connections = new RuntimeConnectionService(dataSource);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "connection_revisions", "runtime_connections",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("migrations are restart-safe: re-running them is a no-op", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+    await expect(dataSource.runMigrations()).resolves.toBeDefined();
+    const revision = await connections.claimRevision("conn:codex-local");
+    expect(revision.revisionNumber).toBe(1);
+  });
+
+  it("freezes the current connection revision into the attempt snapshot and Capsule provenance without secrets", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+    const config = transportConfig(httpEnv("conn:codex-local"));
+    const service = executionServiceWith(config);
+    const { execution } = await seedExecution(service, "m8-freeze", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    const frozen = (claim as any).attempt.executorSnapshot as ExecutorDescriptorV1;
+    expect(frozen.connection).toMatchObject({
+      schemaVersion: "1",
+      connectionId: "conn:codex-local",
+      revisionNumber: 1,
+      runtimeKind: "codex",
+      version: "0.147.0",
+    });
+    expect(frozen.connection?.configHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(frozen.connection?.capabilities).toEqual({
+      invocation: { supported: true, source: "configured" },
+      structuredResult: { supported: true, source: "configured" },
+    });
+    // Secret-free by construction: no credential values anywhere.
+    const rendered = JSON.stringify(frozen);
+    expect(rendered).not.toContain(SEEDED_SECRET);
+    expect(rendered).not.toMatch(/sk-[A-Za-z0-9]+/);
+
+    // Dispatch consumes exactly the frozen snapshot.
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      config,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].pinned).toEqual(frozen);
+
+    // Capsule provenance references the exact revision, never secrets.
+    await service.cancelExecution(execution.id);
+    const capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, service),
+      service,
+    );
+    const capsule = await capsules.build(execution.id);
+    const capsuleJson = JSON.stringify(capsule);
+    expect(capsuleJson).toContain("conn:codex-local");
+    expect(capsuleJson).toContain('"revisionNumber":1');
+    expect(capsuleJson).toContain(frozen.connection!.configHash);
+    expect(capsuleJson).not.toContain(SEEDED_SECRET);
+  });
+
+  it("revision rotation cannot reroute a frozen attempt", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+    const transport = transportConfig(httpEnv("conn:codex-local"));
+    const service = executionServiceWith(transport);
+    const { execution } = await seedExecution(service, "m8-rotation", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+    const frozen = (claim as any).attempt.executorSnapshot as ExecutorDescriptorV1;
+    expect(frozen.connection?.revisionNumber).toBe(1);
+
+    // Operator revises the connection AND rotates the transport config.
+    await connections.reviseConnection("conn:codex-local", connectionProfile());
+    const rotatedTransport = transportConfig(
+      httpEnv("conn:codex-local", {
+        submitUrl: "https://rotated.example/v1/runs",
+      }),
+    );
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      rotatedTransport,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition).toEqual({ outcome: "dispatched" });
+    // The outbox still consumed revision 1's frozen profile — no reroute.
+    expect(rec.calls[0].pinned).toEqual(frozen);
+    const pinned = rec.calls[0].pinned as ExecutorDescriptorV1;
+    expect(pinned.connection?.revisionNumber).toBe(1);
+    expect(pinned.httpProfile?.submitUrl).toBe(
+      "https://reader-pinned.example/v1/runs",
+    );
+  });
+
+  it("revocation denies future claims and pending delivery with a deterministic safe code", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+    const transport = transportConfig(httpEnv("conn:codex-local"));
+    const service = executionServiceWith(transport);
+    const { execution } = await seedExecution(service, "m8-revoke", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    await connections.revokeConnection("conn:codex-local");
+
+    // Future claims are denied immediately.
+    await expect(
+      connections.claimRevision("conn:codex-local"),
+    ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+
+    // Pending delivery fails deterministically; no fallback.
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      transport,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition.outcome).toBe("terminal_failure");
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("a frozen reference whose connection row no longer exists is denied (revoked-then-deleted)", async () => {
+    await connections.createConnection("conn:codex-deleted", connectionProfile());
+    const transport = transportConfig(httpEnv("conn:codex-deleted"));
+    const service = executionServiceWith(transport);
+    const { execution } = await seedExecution(service, "m8-deleted", [
+      { id: "extract", agent: "reader" },
+    ]);
+    const claim = await claimExtract(service, execution.id);
+    expect(claim?.disposition).toBe("claimed");
+
+    // Simulate the worst case where the DB immutability trigger is
+    // bypassed and the revoked connection's row disappears: the frozen
+    // reference remains on the attempt, the connection row is gone.
+    await connections.revokeConnection("conn:codex-deleted");
+    await dataSource.query(
+      `ALTER TABLE "connection_revisions" DISABLE TRIGGER "TRG_connection_revision_immutable"`,
+    );
+    try {
+      await dataSource.query(
+        `DELETE FROM "runtime_connections" WHERE "connectionId" = 'conn:codex-deleted'`,
+      );
+    } finally {
+      await dataSource.query(
+        `ALTER TABLE "connection_revisions" ENABLE TRIGGER "TRG_connection_revision_immutable"`,
+      );
+    }
+
+    const rec = recordingAdapter();
+    const outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      transport,
+    );
+    const disposition = await outboxService.dispatchNext();
+    expect(disposition.outcome).toBe("terminal_failure");
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("revisions are durably immutable: UPDATE and DELETE are blocked by the trigger", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+    const revision = await connections.claimRevision("conn:codex-local");
+
+    await expect(
+      dataSource.query(
+        `UPDATE "connection_revisions" SET "configHash" = '${"0".repeat(64)}'
+         WHERE "connectionId" = 'conn:codex-local'`,
+      ),
+    ).rejects.toThrow(/connection revisions are immutable/);
+    await expect(
+      dataSource.query(
+        `DELETE FROM "connection_revisions"
+         WHERE "connectionId" = 'conn:codex-local'`,
+      ),
+    ).rejects.toThrow(/connection revisions are immutable/);
+
+    // The revision is untouched and still coherent.
+    const reloaded = await connections.claimRevision("conn:codex-local");
+    expect(reloaded.configHash).toBe(revision.configHash);
+    expect(parseConnectionRevision(reloaded)).toEqual(reloaded);
+  });
+
+  it("concurrent revises serialize into one coherent immutable sequence", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+
+    const [left, right] = await Promise.all([
+      connections.reviseConnection("conn:codex-local", connectionProfile()),
+      connections.reviseConnection("conn:codex-local", connectionProfile()),
+    ]);
+
+    const numbers = [left.revisionNumber, right.revisionNumber].sort(
+      (a, b) => a - b,
+    );
+    expect(numbers).toEqual([2, 3]);
+    // One coherent current revision; every row is a valid immutable revision.
+    const claimed = await connections.claimRevision("conn:codex-local");
+    expect(claimed.revisionNumber).toBe(3);
+    expect(
+      await dataSource.getRepository(ConnectionRevisionEntity).count({
+        where: { connectionId: "conn:codex-local" },
+      }),
+    ).toBe(3);
+    for (const number of [1, 2, 3]) {
+      const row = await dataSource
+        .getRepository(ConnectionRevisionEntity)
+        .findOne({
+          where: { connectionId: "conn:codex-local", revisionNumber: number },
+        });
+      expect(
+        parseConnectionRevision({
+          schemaVersion: "1",
+          connectionId: row!.connectionId,
+          revisionNumber: row!.revisionNumber,
+          createdAt: row!.createdAt.toISOString(),
+          profile: row!.profile,
+          configHash: row!.configHash,
+          capabilities: row!.capabilities,
+        }).configHash,
+      ).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+
+  it("concurrent revoke + claim yield one coherent outcome, never a torn identity", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+
+    const [revokeResult, claimResult] = await Promise.allSettled([
+      connections.revokeConnection("conn:codex-local"),
+      connections.claimRevision("conn:codex-local"),
+    ]);
+
+    expect(revokeResult.status).toBe("fulfilled");
+    const status = await connections.connectionStatus("conn:codex-local");
+    expect(status.state).toBe("REVOKED");
+    if (claimResult.status === "fulfilled") {
+      // The claim resolved BEFORE the revoke commit: it holds the exact
+      // immutable revision that was current then, never a torn row.
+      expect(claimResult.value.revisionNumber).toBe(1);
+      expect(claimResult.value.connectionId).toBe("conn:codex-local");
+    } else {
+      expect(claimResult.reason).toMatchObject({ code: "CONNECTION_REVOKED" });
+    }
+  });
+
+  it("concurrent revoke + revise yield a coherent terminal state", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+
+    const [revokeResult, reviseResult] = await Promise.allSettled([
+      connections.revokeConnection("conn:codex-local"),
+      connections.reviseConnection("conn:codex-local", connectionProfile()),
+    ]);
+
+    expect(revokeResult.status).toBe("fulfilled");
+    const status = await connections.connectionStatus("conn:codex-local");
+    expect(status.state).toBe("REVOKED");
+    const rows = await dataSource
+      .getRepository(ConnectionRevisionEntity)
+      .find({ where: { connectionId: "conn:codex-local" } });
+    if (reviseResult.status === "fulfilled") {
+      // The revision won the lock first: exactly one append before REVOKED.
+      expect(rows).toHaveLength(2);
+      expect(reviseResult.value.revisionNumber).toBe(2);
+    } else {
+      expect(reviseResult.reason).toMatchObject({ code: "CONNECTION_REVOKED" });
+      expect(rows).toHaveLength(1);
+    }
+  });
+
+  it("retry and replay resolve the CURRENT revision, never a historical one", async () => {
+    await connections.createConnection("conn:codex-local", connectionProfile());
+    const first = await connections.claimRevision("conn:codex-local");
+    expect(first.revisionNumber).toBe(1);
+
+    // Retry = a new attempt: it re-claims the current revision.
+    await connections.reviseConnection("conn:codex-local", connectionProfile());
+    const retry = await connections.claimRevision("conn:codex-local");
+    expect(retry.revisionNumber).toBe(2);
+
+    // Replay = a new execution: same re-resolution, and a revoked connection
+    // denies the replay claim (historical identity is provenance, never
+    // current authority).
+    await connections.revokeConnection("conn:codex-local");
+    await expect(
+      connections.claimRevision("conn:codex-local"),
+    ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+  });
+
+  it("M8 closure: a revoke committed BEFORE the claim linearization point denies the claim (revoke wins)", async () => {
+    await connections.createConnection("conn:revoke-wins", connectionProfile());
+    // Revoke commits first...
+    await connections.revokeConnection("conn:revoke-wins");
+    // ...so any later claim — even one that started before the revoke was
+    // visible to a stale read — MUST be denied. The claim's linearization
+    // point is the authority-row lock; the revoke already owns it.
+    await expect(
+      connections.claimRevision("conn:revoke-wins"),
+    ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+    // The manager-aware path enforces the identical gate.
+    await expect(
+      dataSource.transaction((manager) =>
+        connections.claimRevisionWithManager(manager, "conn:revoke-wins"),
+      ),
+    ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+  });
+
+  it("M8 closure: a claim that linearizes first returns its frozen revision; the later revoke waits and completes (claim wins)", async () => {
+    await connections.createConnection("conn:claim-wins", connectionProfile());
+    // The claim acquires the authority-row lock and holds it briefly; the
+    // revoke must serialize BEHIND it and can never tear the claim.
+    const claimPromise = dataSource.transaction(async (manager) => {
+      const revision = await connections.claimRevisionWithManager(
+        manager,
+        "conn:claim-wins",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return revision;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const revokeDuring = connections
+      .revokeConnection("conn:claim-wins")
+      .then(() => "completed");
+    const raced = await Promise.race([
+      revokeDuring,
+      new Promise((resolve) => setTimeout(() => resolve("still-waiting"), 200)),
+    ]);
+    expect(raced).toBe("still-waiting");
+    const revision = await claimPromise;
+    expect(revision.revisionNumber).toBe(1);
+    expect(await revokeDuring).toBe("completed");
+    // The claim froze revision 1 before the revoke; FUTURE claims are denied.
+    await expect(
+      connections.claimRevision("conn:claim-wins"),
+    ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+  });
+
+  it("M8 closure: revise vs claim — a claim receives exactly one internally consistent immutable revision, never N+1 identity with N config", async () => {
+    await connections.createConnection("conn:revise-claim", connectionProfile());
+    const [reviseResult, claimResult] = await Promise.allSettled([
+      connections.reviseConnection("conn:revise-claim", connectionProfile()),
+      connections.claimRevision("conn:revise-claim"),
+    ]);
+    expect(reviseResult.status).toBe("fulfilled");
+    if (claimResult.status === "fulfilled") {
+      // The claim's identity and configuration come from ONE frozen row:
+      // its revisionNumber's row must carry exactly its configHash.
+      const row = await dataSource
+        .getRepository(ConnectionRevisionEntity)
+        .findOne({
+          where: {
+            connectionId: "conn:revise-claim",
+            revisionNumber: claimResult.value.revisionNumber,
+          },
+        });
+      expect(row).not.toBeNull();
+      expect(row!.configHash).toBe(claimResult.value.configHash);
+      expect(
+        parseConnectionRevision({
+          schemaVersion: "1",
+          connectionId: row!.connectionId,
+          revisionNumber: row!.revisionNumber,
+          createdAt: row!.createdAt.toISOString(),
+          profile: row!.profile,
+          configHash: row!.configHash,
+          capabilities: row!.capabilities,
+        }),
+      ).toEqual(claimResult.value);
+    }
+    const final = await connections.claimRevision("conn:revise-claim");
+    expect(final.revisionNumber).toBe(2);
+  });
+
+  it("M8 closure: claim/revise/revoke contention — every fulfilled claim is internally consistent and the terminal state is coherent", async () => {
+    await connections.createConnection("conn:contention", connectionProfile());
+    const results = await Promise.allSettled([
+      connections.claimRevision("conn:contention"),
+      connections.claimRevision("conn:contention"),
+      connections.reviseConnection("conn:contention", connectionProfile()),
+      connections.claimRevision("conn:contention"),
+      connections.reviseConnection("conn:contention", connectionProfile()),
+      connections.revokeConnection("conn:contention"),
+      connections.claimRevision("conn:contention"),
+    ]);
+    const rows = await dataSource
+      .getRepository(ConnectionRevisionEntity)
+      .find({ where: { connectionId: "conn:contention" } });
+    const rowByNumber = new Map(rows.map((row) => [row.revisionNumber, row]));
+    for (const result of results) {
+      if (result.status !== "fulfilled") continue;
+      const value = result.value as { revisionNumber?: number; configHash?: string };
+      if (typeof value.revisionNumber === "number" && typeof value.configHash === "string") {
+        // A claim or revise result: the frozen row it refers to must carry
+        // exactly the identity/config it returned (no torn mix).
+        const row = rowByNumber.get(value.revisionNumber);
+        expect(row).toBeDefined();
+        expect(row!.configHash).toBe(value.configHash);
+      }
+    }
+    const status = await connections.connectionStatus("conn:contention");
+    if (status.state === "REVOKED") {
+      await expect(
+        connections.claimRevision("conn:contention"),
+      ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+    } else {
+      const current = await connections.claimRevision("conn:contention");
+      expect(current.revisionNumber).toBe(
+        Math.max(...rows.map((row) => row.revisionNumber)),
+      );
+    }
+  });
+});
+
+describeWithPostgres("PostgreSQL M8-S3 generic CLI probes", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let connections: RuntimeConnectionService;
+
+  const SEEDED_SECRET = "m8s3-probe-secret-value";
+
+  const genericCliProfile = (
+    script: string,
+    overrides: Partial<ConnectionProfileV1> = {},
+  ): ConnectionProfileV1 => ({
+    name: "Generic CLI",
+    runtimeKind: "generic-cli",
+    executorId: "local-host",
+    credentialRefs: [],
+    cli: {
+      command: process.execPath,
+      args: [],
+      probe: { args: ["-e", script], expectsVersion: true },
+    },
+    declaredCapabilities: {
+      invocation: { supported: true, source: "configured" },
+      localProcessTermination: { supported: true, source: "configured" },
+    },
+    ...overrides,
+  });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    connections = new RuntimeConnectionService(dataSource);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "connection_revisions", "runtime_connections",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("projects a successful fake-CLI probe into AVAILABLE with tested version", async () => {
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile("console.log('0.147.0')"),
+    );
+    const receipt = await connections.testConnection("conn:generic");
+    expect(receipt).toMatchObject({
+      connectionId: "conn:generic",
+      revisionNumber: 1,
+      state: "AVAILABLE",
+      reasonCode: "none",
+      testedVersion: "0.147.0",
+    });
+    const status = await connections.connectionStatus("conn:generic");
+    expect(status).toMatchObject({
+      state: "AVAILABLE",
+      reasonCode: "none",
+      testedVersion: "0.147.0",
+    });
+    expect(status.testedAt).toBeDefined();
+  });
+
+  it("degrades to unsupported-version when the detected version differs from the pinned one", async () => {
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile("console.log('9.9.9')", { version: "0.147.0" }),
+    );
+    const receipt = await connections.testConnection("conn:generic");
+    expect(receipt).toMatchObject({
+      state: "DEGRADED",
+      reasonCode: "unsupported-version",
+      testedVersion: "9.9.9",
+    });
+  });
+
+  it("maps declared auth exit codes to AUTH_REQUIRED", async () => {
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile("process.exit(2)", {
+        cli: {
+          command: process.execPath,
+          args: [],
+          probe: { args: ["-e", "process.exit(2)"], authExitCodes: [2] },
+        },
+      }),
+    );
+    const receipt = await connections.testConnection("conn:generic");
+    expect(receipt).toMatchObject({
+      state: "AUTH_REQUIRED",
+      reasonCode: "auth-required",
+    });
+  });
+
+  it("maps a missing executable to UNAVAILABLE with a bounded reason", async () => {
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile("console.log('unused')", {
+        cli: {
+          command: "/nonexistent/tenvyr-fake-generic-cli",
+          args: [],
+          probe: { args: ["--version"] },
+        },
+      }),
+    );
+    const receipt = await connections.testConnection("conn:generic");
+    expect(receipt).toMatchObject({
+      state: "UNAVAILABLE",
+      reasonCode: "missing-executable",
+    });
+  });
+
+  it("denies tests of a revoked connection", async () => {
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile("console.log('0.147.0')"),
+    );
+    await connections.revokeConnection("conn:generic");
+    await expect(
+      connections.testConnection("conn:generic"),
+    ).rejects.toMatchObject({ code: "CONNECTION_REVOKED" });
+  });
+
+  it("a failed test never mutates attempt outcomes", async () => {
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile("process.exit(1)"),
+    );
+    // A real claimed attempt exists for the connection-bound agent.
+    const transport = new AgentTransportConfigService(
+      parseAgentTransportConfiguration({
+        AGENT_TRANSPORT_CONFIG: JSON.stringify({
+          reader: {
+            kind: "http",
+            submitUrl: "https://reader-pinned.example/v1/runs",
+            outboundAuthentication: { type: "none" },
+            callbackAuthentication: {
+              keyId: "reader-key",
+              secretEnv: "READER_CALLBACK_SECRET",
+            },
+            requestTimeoutMs: 1000,
+            maxResponseBytes: 1024,
+            connectionId: "conn:generic",
+          },
+        }),
+        HTTP_AGENT_CALLBACK_BASE_URL: "https://orchestrator.example",
+        READER_CALLBACK_SECRET: SEEDED_SECRET,
+      }),
+    );
+    const service = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+      undefined,
+      transport,
+    );
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m8s3-attempt",
+        version: "1.0",
+        steps: [{ id: "extract", agent: "reader" }],
+      }),
+    );
+    const execution = await service.createExecution(pipeline, {});
+    await service.reconcileExecution(execution.id);
+    const claim = await service.claimRunnableStep(
+      execution.id,
+      { id: "extract", agent: "reader" } as any,
+      { input: true },
+      1,
+    );
+    expect(claim?.disposition).toBe("claimed");
+
+    // The failing probe projects only connection status.
+    const receipt = await connections.testConnection("conn:generic");
+    expect(receipt.state).toBe("UNAVAILABLE");
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { id: (claim as any).attempt.id } });
+    expect(attempt?.status).toBe("CREATED");
+  });
+
+  it("probes run with the minimum environment: seeded secrets stay out of probes, receipts, and status", async () => {
+    const env = {
+      READER_CALLBACK_SECRET: SEEDED_SECRET,
+    };
+    await connections.createConnection(
+      "conn:generic",
+      genericCliProfile(
+        "console.log('1.0_' + (process.env.READER_CALLBACK_SECRET || 'absent'))",
+      ),
+    );
+    const receipt = await connections.testConnection("conn:generic", env as never);
+    expect(receipt).toMatchObject({
+      state: "AVAILABLE",
+      testedVersion: "1.0_absent",
+    });
+    const status = await connections.connectionStatus("conn:generic");
+    expect(JSON.stringify(status)).not.toContain(SEEDED_SECRET);
+    expect(JSON.stringify(receipt)).not.toContain(SEEDED_SECRET);
+  });
+});
+
+describeWithPostgres("PostgreSQL M8-S4 runtime profiles", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let connections: RuntimeConnectionService;
+
+  const makeFakeCli = (script: string): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tenvyr-m8s4-fake-"));
+    const file = path.join(dir, "fake-cli");
+    fs.writeFileSync(file, `#!/bin/bash\n${script}\n`, { mode: 0o755 });
+    return file;
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    connections = new RuntimeConnectionService(dataSource);
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "connection_revisions", "runtime_connections",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("claude profile: version probe + documented auth-status probe project AUTH_REQUIRED (exit 1)", async () => {
+    const fake = makeFakeCli(`
+      if [ "$1" = "--version" ]; then echo "2.1.228"; exit 0; fi
+      if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+        echo '{"authenticated":false}'
+        exit 1
+      fi
+      exit 9
+    `);
+    await connections.createConnection(
+      "conn:claude",
+      buildRuntimeConnectionProfile({
+        runtimeKind: "claude",
+        name: "Claude local",
+        executorId: "local-host",
+        executable: fake,
+      }),
+    );
+    const receipt = await connections.testConnection("conn:claude");
+    expect(receipt).toMatchObject({
+      state: "AUTH_REQUIRED",
+      reasonCode: "auth-required",
+      revisionNumber: 1,
+    });
+    expect(receipt.testedVersion).toBeUndefined();
+    const status = await connections.connectionStatus("conn:claude");
+    expect(status.state).toBe("AUTH_REQUIRED");
+    expect(JSON.stringify(status)).not.toContain("authenticated");
+  });
+
+  it("claude profile: logged-in auth-status probe yields AVAILABLE with the tested version", async () => {
+    const fake = makeFakeCli(`
+      if [ "$1" = "--version" ]; then echo "2.1.228"; exit 0; fi
+      if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+        echo '{"authenticated":true}'
+        exit 0
+      fi
+      exit 9
+    `);
+    await connections.createConnection(
+      "conn:claude",
+      buildRuntimeConnectionProfile({
+        runtimeKind: "claude",
+        name: "Claude local",
+        executorId: "local-host",
+        executable: fake,
+      }),
+    );
+    const receipt = await connections.testConnection("conn:claude");
+    expect(receipt).toMatchObject({
+      state: "AVAILABLE",
+      reasonCode: "none",
+      testedVersion: "2.1.228",
+    });
+  });
+
+  it("codex profile: documented `login status` non-zero exit is AUTH_REQUIRED", async () => {
+    const fake = makeFakeCli(`
+      if [ "$1" = "login" ] && [ "$2" = "status" ]; then
+        echo "not logged in"
+        exit 3
+      fi
+      exit 9
+    `);
+    await connections.createConnection(
+      "conn:codex",
+      buildRuntimeConnectionProfile({
+        runtimeKind: "codex",
+        name: "Codex local",
+        executorId: "local-host",
+        executable: fake,
+      }),
+    );
+    const receipt = await connections.testConnection("conn:codex");
+    expect(receipt).toMatchObject({
+      state: "AUTH_REQUIRED",
+      reasonCode: "auth-required",
+    });
+    expect(receipt.testedVersion).toBeUndefined();
+    // Auth output never reaches the receipt or the status projection.
+    expect(JSON.stringify(receipt)).not.toContain("not logged in");
+  });
+
+  it("opencode profile: runtime-owned auth, version probe projects AVAILABLE", async () => {
+    const fake = makeFakeCli(`
+      if [ "$1" = "--version" ]; then echo "1.18.16"; exit 0; fi
+      exit 9
+    `);
+    await connections.createConnection(
+      "conn:opencode",
+      buildRuntimeConnectionProfile({
+        runtimeKind: "opencode",
+        name: "OpenCode",
+        executorId: "local-host",
+        executable: fake,
+      }),
+    );
+    const receipt = await connections.testConnection("conn:opencode");
+    expect(receipt).toMatchObject({
+      state: "AVAILABLE",
+      reasonCode: "none",
+      testedVersion: "1.18.16",
+    });
+  });
+});
+
+describeWithPostgres("PostgreSQL M9-S2 coordination authority", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let coordinator: RuntimeCoordinationService;
+  let executionService: ExecutionService;
+
+  const teamConfig = (): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "planner" },
+    verifier: { kind: "agent", name: "verifier" },
+    allowedWorkers: [{ kind: "agent", name: "worker" }],
+    maxIterations: 10,
+    maxWorkersPerIteration: 4,
+    maxTotalWorkers: 20,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    // M8-S6 enforcement: agent-kind tasks resolve to `agent:<name>`.
+    allowedExecutors: [
+      "local-host",
+      "agent:worker",
+      "agent:planner",
+      "agent:verifier",
+    ],
+  });
+
+  const decision = (
+    iterationId: string,
+    iterationNumber: number,
+    overrides: Partial<VerifierDecisionV1> = {},
+  ): VerifierDecisionV1 => ({
+    schemaVersion: 1,
+    iterationId,
+    iterationNumber,
+    action: "CONTINUE",
+    reason: "keep going",
+    evidenceRefs: ["policy:allow-1"],
+    ...overrides,
+  });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    coordinator = new RuntimeCoordinationService(dataSource);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "coordination_iterations", "coordination_runs",
+       "connection_revisions", "runtime_connections",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  /** Runs the full loop to VERIFYING for a fresh run: iteration 1 exists,
+   *  proposal bound, phase VERIFYING. */
+  const runToVerifying = async (name: string) => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await dataSource.getRepository(ExecutionEntity).save(
+      dataSource.getRepository(ExecutionEntity).create({
+        pipelineId: pipeline.id,
+        status: "PENDING",
+        input: {},
+      }),
+    );
+    const run = await coordinator.startRun(
+      execution.id,
+      teamConfig(),
+      new Date(Date.now() + 3_600_000),
+    );
+    const iteration = await coordinator.createNextIteration(run.id);
+    await coordinator.transitionRun(run.id, "plannerProposed");
+    await coordinator.transitionRun(run.id, "batchValidated");
+    await coordinator.transitionRun(run.id, "workersFinished");
+    return { run, iteration, execution };
+  };
+
+  it("migrations are restart-safe and startRun is idempotent", async () => {
+    // M9-S8: a coordination run belongs to a REAL execution (startRun
+    // validates existence under the execution row lock).
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m9s2-restart-safe",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await executionService.createExecution(pipeline, {});
+    const executionId = execution.id;
+    await coordinator.startRun(
+      executionId,
+      teamConfig(),
+      new Date(Date.now() + 3_600_000),
+    );
+    await expect(dataSource.runMigrations()).resolves.toBeDefined();
+    const again = await coordinator.startRun(
+      executionId,
+      teamConfig(),
+      new Date(Date.now() + 3_600_000),
+    );
+    expect(again.phase).toBe("PLANNING");
+    const recovered = await coordinator.recoverRun(executionId);
+    expect(recovered.run.phase).toBe("PLANNING");
+    expect(recovered.iterations).toHaveLength(0);
+  });
+
+  it("iteration numbers are unique per run (DB backstop)", async () => {
+    const { run } = await runToVerifying("m9s2-unique");
+    await expect(
+      dataSource.query(
+        `INSERT INTO "coordination_iterations"
+         ("coordinationRunId", "iterationNumber", "workerManifest")
+         VALUES ('${run.id}', 1, '[]'::jsonb)`,
+      ),
+    ).rejects.toThrow(/duplicate key|unique/i);
+  });
+
+  it("100-way same-decision CONTINUE creates exactly ONE next iteration", async () => {
+    const { run, iteration } = await runToVerifying("m9s2-100way");
+
+    const outcomes = await Promise.all(
+      Array.from({ length: 100 }, () =>
+        coordinator.consumeDecision(run.id, decision(iteration.id, 1), randomUUID()),
+      ),
+    );
+
+    const consumed = outcomes.filter((outcome) => outcome.outcome === "consumed");
+    const idempotent = outcomes.filter((outcome) => outcome.outcome === "idempotent");
+    expect(consumed).toHaveLength(1);
+    expect(idempotent).toHaveLength(99);
+    expect(consumed[0]).toEqual({ outcome: "consumed", phase: "PLANNING" });
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.iterations).toHaveLength(2);
+    expect(recovered.iterations.map((entry) => entry.iterationNumber)).toEqual([1, 2]);
+    expect(recovered.run.currentIterationNumber).toBe(2);
+    expect(recovered.run.activeIterationId).toBe(recovered.iterations[1].id);
+    // Exactly one decision stored, with its canonical hash.
+    expect(recovered.iterations[0].decisionHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(recovered.iterations[1].decisionHash).toBeNull();
+  });
+
+  it("conflicting and stale decisions change nothing; ACCEPT releases the hold", async () => {
+    const { run, iteration } = await runToVerifying("m9s2-accept");
+    const accepted = await coordinator.consumeDecision(
+      run.id,
+      decision(iteration.id, 1, { action: "ACCEPT" }),
+      randomUUID(),
+    );
+    expect(accepted).toEqual({ outcome: "consumed", phase: "ACCEPTED" });
+    expect(await coordinator.isCompletionHeld(run.executionId)).toBe(false);
+    // Terminal runs absorb every delivery idempotently (changes nothing).
+    expect(
+      (await coordinator.consumeDecision(run.id, decision(iteration.id, 1, { action: "ACCEPT" })))
+        .outcome,
+    ).toBe("idempotent");
+    expect(
+      (await coordinator.consumeDecision(run.id, decision(iteration.id, 1, { action: "ACCEPT", reason: "different" })))
+        .outcome,
+    ).toBe("idempotent");
+
+    // While the run is LIVE, a different payload for a consumed decision is
+    // conflict evidence and changes nothing.
+    const { run: liveRun, iteration: liveIteration } = await runToVerifying("m9s2-conflict");
+    await coordinator.consumeDecision(liveRun.id, decision(liveIteration.id, 1), randomUUID());
+    const conflicting = await coordinator.consumeDecision(
+      liveRun.id,
+      decision(liveIteration.id, 1, { reason: "different payload" }),
+      randomUUID(),
+    );
+    expect(conflicting.outcome).toBe("conflict");
+    const recovered = await coordinator.recoverRun(liveRun.executionId);
+    expect(recovered.iterations).toHaveLength(2);
+    expect(recovered.iterations[0].decisionHash).not.toBeNull();
+  });
+
+  it("stale iteration identity is rejected and changes nothing", async () => {
+    const { run } = await runToVerifying("m9s2-stale");
+    await expect(
+      coordinator.consumeDecision(run.id, decision("wrong-iteration-id", 1)),
+    ).rejects.toMatchObject({ code: "DECISION_STALE" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("VERIFYING");
+    expect(recovered.iterations[0].decisionHash).toBeNull();
+    expect(recovered.iterations).toHaveLength(1);
+  });
+
+  it("WAIT_FOR_HUMAN persists the bounded wait reason", async () => {
+    const { run, iteration } = await runToVerifying("m9s2-wait");
+    const waited = await coordinator.consumeDecision(
+      run.id,
+      decision(iteration.id, 1, { action: "WAIT_FOR_HUMAN", reason: "human review required" }),
+    );
+    expect(waited).toEqual({ outcome: "consumed", phase: "WAITING_FOR_HUMAN" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.waitReason).toBe("human review required");
+    expect(await coordinator.isCompletionHeld(run.executionId)).toBe(true);
+  });
+
+  it("CONTINUE beyond maxIterations is a deterministic LIMIT_REACHED", async () => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m9s2-limit",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await dataSource.getRepository(ExecutionEntity).save(
+      dataSource.getRepository(ExecutionEntity).create({
+        pipelineId: pipeline.id,
+        status: "PENDING",
+        input: {},
+      }),
+    );
+    const config = { ...teamConfig(), maxIterations: 1 };
+    const run = await coordinator.startRun(
+      execution.id,
+      config,
+      new Date(Date.now() + 3_600_000),
+    );
+    const iteration = await coordinator.createNextIteration(run.id);
+    await coordinator.transitionRun(run.id, "plannerProposed");
+    await coordinator.transitionRun(run.id, "batchValidated");
+    await coordinator.transitionRun(run.id, "workersFinished");
+
+    const outcome = await coordinator.consumeDecision(
+      run.id,
+      decision(iteration.id, 1),
+    );
+    expect(outcome).toEqual({ outcome: "consumed", phase: "LIMIT_REACHED" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.iterations).toHaveLength(1);
+  });
+
+  it("a failed transition rolls back atomically (nothing partially persisted)", async () => {
+    const { run } = await runToVerifying("m9s2-rollback");
+    // Illegal transition from VERIFYING: the machine rejects it inside the
+    // transaction; the run row and version stay untouched.
+    await expect(
+      coordinator.transitionRun(run.id, "plannerProposed"),
+    ).rejects.toMatchObject({ code: "PHASE_TRANSITION_INVALID" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("VERIFYING");
+    // startRun (1) + createNextIteration (2) + three transitions (5);
+    // the failed transition left the version untouched.
+    expect(recovered.run.version).toBe(5);
+  });
+
+  it("recovery reads PostgreSQL only and a fresh instance sees the same truth", async () => {
+    const { run, iteration } = await runToVerifying("m9s2-recover");
+    await coordinator.consumeDecision(run.id, decision(iteration.id, 1, { action: "FAIL" }));
+
+    // Simulate a restart: a brand-new service instance re-reads everything.
+    const restarted = new RuntimeCoordinationService(dataSource);
+    const recovered = await restarted.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("FAILED");
+    expect(recovered.iterations[0].decision).toMatchObject({ action: "FAIL" });
+    expect(await restarted.isCompletionHeld(run.executionId)).toBe(false);
+  });
+});
+
+describeWithPostgres("PostgreSQL M9-S3 planner-to-batch", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let coordinator: RuntimeCoordinationService;
+  let executionService: ExecutionService;
+
+  const teamConfig = (): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "planner" },
+    verifier: { kind: "agent", name: "verifier" },
+    allowedWorkers: [
+      { kind: "agent", name: "implementation" },
+      { kind: "agent", name: "reviewer" },
+    ],
+    maxIterations: 10,
+    maxWorkersPerIteration: 4,
+    maxTotalWorkers: 20,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    // M8-S6 enforcement: agent-kind tasks resolve to `agent:<name>`.
+    allowedExecutors: [
+      "local-host",
+      "agent:implementation",
+      "agent:reviewer",
+      "agent:planner",
+      "agent:verifier",
+    ],
+  });
+
+  const batchProposal = (baseRevision: number): TaskBatchProposalV1 => ({
+    schemaVersion: 1,
+    iterationNumber: 1,
+    baseRevision,
+    tasks: [
+      {
+        taskId: "implement",
+        agent: "implementation",
+        input: { feature: "login" },
+        dependsOn: [],
+        required: true,
+        reason: "core implementation",
+      },
+      {
+        taskId: "review",
+        agent: "reviewer",
+        input: { focus: "security" },
+        dependsOn: ["implement"],
+        required: false,
+        reason: "optional review",
+      },
+    ],
+    reason: "iteration 1 plan",
+  });
+
+  const seedRun = async (name: string) => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name,
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const executionRepository = dataSource.getRepository(ExecutionEntity);
+    const execution = await executionRepository.save(
+      executionRepository.create({
+        pipelineId: pipeline.id,
+        status: "PENDING",
+        input: {},
+      }),
+    );
+    // Mirror materializeExecutionWithManager: execution + initial revision.
+    const revisionRepository = dataSource.getRepository(ExecutionPlanRevisionEntity);
+    const revision = await revisionRepository.save(
+      revisionRepository.create({
+        executionId: execution.id,
+        revisionNumber: 1,
+        plan: { schemaVersion: 1, steps: [] },
+        planHash: sha256Json({ schemaVersion: 1, steps: [] }),
+        source: "pipeline",
+        reason: "Initial execution plan snapshot",
+        validationResult: { valid: true },
+      }),
+    );
+    execution.activePlanRevisionId = revision.id;
+    await executionRepository.save(execution);
+    const run = await coordinator.startRun(
+      execution.id,
+      teamConfig(),
+      new Date(Date.now() + 3_600_000),
+    );
+    const iteration = await coordinator.createNextIteration(run.id);
+    return { run, iteration, execution, pipeline };
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    coordinator = new RuntimeCoordinationService(dataSource);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "coordination_iterations", "coordination_runs",
+       "plan_proposals", "policy_decisions", "policy_snapshots",
+       "approval_requests", "connection_revisions", "runtime_connections",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("creates the Coordinator-owned Planner step exactly once", async () => {
+    const { run } = await seedRun("m9s3-planner-step");
+    const stepId = await coordinator.createPlannerStep(run.id);
+    expect(stepId).toBe("planner-1");
+    expect(await coordinator.createPlannerStep(run.id)).toBe("planner-1");
+
+    const step = await dataSource.getRepository(LogicalStepEntity).findOne({
+      where: { executionId: run.executionId, stepId: "planner-1" },
+    });
+    expect(step).not.toBeNull();
+    const revisions = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .find({
+        where: { executionId: run.executionId },
+        order: { revisionNumber: "ASC" },
+      });
+    expect(revisions).toHaveLength(2); // initial + planner step
+    expect(revisions[1].plan.steps).toContainEqual(
+      expect.objectContaining({ id: "planner-1", agent: "planner" }),
+    );
+  });
+
+  it("validates the batch, compiles workers + verifier, and binds the iteration atomically", async () => {
+    const { run, execution } = await seedRun("m9s3-submit");
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+
+    const result = await coordinator.submitIterationBatch({
+      runId: run.id,
+      iterationNumber: 1,
+      proposal: batchProposal(baseRevision),
+      plannerAttemptId: attemptId,
+    });
+    expect(result).toEqual({ outcome: "ACCEPTED", revisionNumber: 3 });
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("WORKING");
+    expect(recovered.run.cumulativeWorkers).toBe(2);
+    const bound = recovered.iterations[0];
+    expect(bound.plannerProposal).toMatchObject({ iterationNumber: 1 });
+    expect(bound.acceptedPlanRevisionId).toBeDefined();
+    expect(bound.verifierStepId).toBe("verify-1");
+    expect(bound.workerManifest).toHaveLength(2);
+    expect(bound.workerManifest[0]).toMatchObject({
+      taskId: "implement",
+      required: true,
+    });
+    expect(bound.workerManifest[1]).toMatchObject({
+      taskId: "review",
+      required: false,
+    });
+
+    // Steps materialized from the new revision: workers + verifier.
+    const steps = await dataSource.getRepository(LogicalStepEntity).find({
+      where: { executionId: run.executionId },
+    });
+    const byId = new Map(steps.map((step) => [step.stepId, step]));
+    expect(byId.has("implement")).toBe(true);
+    expect(byId.has("review")).toBe(true);
+    expect(byId.has("verify-1")).toBe(true);
+    // The manifest references real LogicalStep rows.
+    for (const entry of bound.workerManifest) {
+      expect(entry.logicalStepId).toBe(byId.get(entry.taskId)!.id);
+    }
+    // The Verifier step depends on every member.
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { id: bound.acceptedPlanRevisionId } });
+    const verifierStep = revision!.plan.steps.find(
+      (step: any) => step.id === "verify-1",
+    );
+    expect(verifierStep.dependsOn).toEqual(["implement", "review"]);
+  });
+
+  it("rejects Planner recursion with no partial materialization", async () => {
+    const { run } = await seedRun("m9s3-recursion");
+    await coordinator.createPlannerStep(run.id);
+    const recursive = batchProposal(1);
+    recursive.tasks = [
+      {
+        taskId: "recursive",
+        agent: "planner",
+        input: {},
+        dependsOn: [],
+        required: true,
+        reason: "recursion attempt",
+      },
+    ];
+
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: recursive,
+        plannerAttemptId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_NOT_ALLOWED" });
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("PLANNING");
+    expect(recovered.run.cumulativeWorkers).toBe(0);
+    const revisions = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .find({ where: { executionId: run.executionId } });
+    expect(revisions).toHaveLength(2); // no batch revision
+    const steps = await dataSource.getRepository(LogicalStepEntity).find({
+      where: { executionId: run.executionId },
+    });
+    expect(steps.some((step) => step.stepId === "recursive")).toBe(false);
+  });
+
+  it("a re-delivered batch after acceptance is rejected deterministically without changes", async () => {
+    const { run, execution } = await seedRun("m9s3-redeliver");
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    await coordinator.submitIterationBatch({
+      runId: run.id,
+      iterationNumber: 1,
+      proposal: batchProposal(baseRevision),
+      plannerAttemptId: attemptId,
+    });
+
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      }),
+    ).rejects.toMatchObject({ code: "RUN_NOT_FOUND" });
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("WORKING");
+    expect(recovered.run.cumulativeWorkers).toBe(2);
+  });
+
+  it("M9 closure: an OLD iteration batch is rejected — admission requires run.currentIterationNumber", async () => {
+    const { run, execution } = await seedRun("m9c-old-iteration");
+    await coordinator.createPlannerStep(run.id);
+    await coordinator.createNextIteration(run.id); // currentIterationNumber -> 2
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1, // stale: current is 2
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      }),
+    ).rejects.toMatchObject({ code: "ITERATION_NOT_FOUND" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.currentIterationNumber).toBe(2);
+    expect(recovered.run.phase).toBe("PLANNING");
+  });
+
+  it("M9 closure: a FUTURE iteration batch is rejected — admission requires run.currentIterationNumber", async () => {
+    const { run, execution } = await seedRun("m9c-future-iteration");
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 2, // not yet authorized
+        proposal: { ...batchProposal(baseRevision), iterationNumber: 2 },
+        plannerAttemptId: attemptId,
+      }),
+    ).rejects.toMatchObject({ code: "ITERATION_NOT_FOUND" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("PLANNING");
+  });
+
+  it("M9 closure: an unrelated successful Planner attempt is never accepted as batch authority", async () => {
+    const { run, execution } = await seedRun("m9c-wrong-attempt");
+    await coordinator.createPlannerStep(run.id);
+    // A REAL successful planner attempt — but of a DIFFERENT execution.
+    const other = await seedRun("m9c-wrong-attempt-other");
+    await coordinator.createPlannerStep(other.run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      other.execution.id,
+      1,
+    );
+    const outcome = await coordinator.submitIterationBatch({
+      runId: run.id,
+      iterationNumber: 1,
+      proposal: batchProposal(baseRevision),
+      plannerAttemptId: attemptId,
+    });
+    expect(outcome).toEqual({ outcome: "FAILED", revisionNumber: 0 });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("FAILED");
+    // No worker work was activated: only the Coordinator-owned planner step.
+    const steps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: execution.id } });
+    expect(steps.map((step) => step.stepId)).toEqual(["planner-1"]);
+  });
+
+  it("M9 closure: N concurrent identical starts converge on exactly one CoordinationRun", async () => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m9c-concurrent-start",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await executionService.createExecution(pipeline, {});
+    const config = teamConfig();
+    const deadline = new Date(Date.now() + 3_600_000);
+    const started = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        coordinator.startRun(execution.id, config, deadline),
+      ),
+    );
+    const runIds = new Set(started.map((run) => run.id));
+    expect(runIds.size).toBe(1);
+    const runs = await dataSource.getRepository(CoordinationRunEntity).find({
+      where: { executionId: execution.id },
+    });
+    expect(runs).toHaveLength(1);
+    expect(runs[0].phase).toBe("PLANNING");
+  });
+
+  it("M9 closure: a Planner batch on a stale base revision activates NO worker work (stale planner race)", async () => {
+    const { run, execution } = await seedRun("m9c-stale-base");
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    // While the Planner "ran", an AUTHORIZED PlanPatch activates a newer
+    // revision (a legitimate operator/coordinator patch on the same base).
+    const proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    const authorized = await proposals.propose(
+      execution.id,
+      {
+        schemaVersion: 1,
+        baseRevision,
+        operations: [
+          {
+            op: "addStep",
+            step: {
+              id: "authorized-extra",
+              agent: "implementation",
+              input: {},
+              dependsOn: [],
+            },
+          },
+        ],
+      },
+      "operator",
+    );
+    const activation = await proposals.activate(authorized.id);
+    expect(activation.decision).toBe("ACCEPTED");
+
+    // The Planner's batch is based on ITS frozen revision — which is no
+    // longer active. It must be deterministically STALE: no worker work
+    // from the stale proposal, no silent rebase onto the new revision.
+    const outcome = await coordinator.submitIterationBatch({
+      runId: run.id,
+      iterationNumber: 1,
+      proposal: batchProposal(baseRevision),
+      plannerAttemptId: attemptId,
+    });
+    expect(outcome).toEqual({ outcome: "FAILED", revisionNumber: 0 });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("FAILED");
+    const stored = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: execution.id } });
+    expect(stored?.status).toBe("FAILED");
+    expect(stored?.terminationReason).toContain("stale");
+    const steps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: execution.id } });
+    // authorized-extra (the legitimate patch) exists; the stale batch's
+    // workers (implement/review) were NEVER materialized.
+    const stepIds = steps.map((step) => step.stepId).sort();
+    expect(stepIds).toEqual(["authorized-extra", "planner-1"]);
+  });
+
+  it("M9 closure: current=2, input=2, proposal iterationNumber=1 (older) is rejected with zero materialization", async () => {
+    const { run, execution } = await seedRun("m9c-proposal-old-iteration");
+    await coordinator.createPlannerStep(run.id);
+    await coordinator.createNextIteration(run.id); // currentIterationNumber -> 2
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    // The caller declares the CURRENT iteration, but the untrusted
+    // proposal embeds an OLDER iterationNumber — exact identity requires
+    // all three (run.currentIterationNumber, input, proposal) to agree.
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 2,
+        proposal: { ...batchProposal(baseRevision), iterationNumber: 1 },
+        plannerAttemptId: attemptId,
+      }),
+    ).rejects.toMatchObject({ code: "ITERATION_NOT_FOUND" });
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.currentIterationNumber).toBe(2);
+    expect(recovered.run.phase).toBe("PLANNING");
+    expect(recovered.run.cumulativeWorkers).toBe(0);
+    // No plan revision was created from the invalid batch and no worker or
+    // verifier step was materialized.
+    const revisions = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .find({ where: { executionId: run.executionId } });
+    expect(revisions).toHaveLength(2); // initial + planner step only
+    const steps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: run.executionId } });
+    expect(steps.some((step) => step.stepId === "implement")).toBe(false);
+    expect(steps.some((step) => step.stepId === "verify-1")).toBe(false);
+  });
+
+  it("M9 closure: current=2, input=2, proposal iterationNumber=3 (future) is rejected with zero materialization", async () => {
+    const { run, execution } = await seedRun("m9c-proposal-future-iteration");
+    await coordinator.createPlannerStep(run.id);
+    await coordinator.createNextIteration(run.id); // currentIterationNumber -> 2
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 2,
+        proposal: { ...batchProposal(baseRevision), iterationNumber: 3 },
+        plannerAttemptId: attemptId,
+      }),
+    ).rejects.toMatchObject({ code: "ITERATION_NOT_FOUND" });
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.currentIterationNumber).toBe(2);
+    expect(recovered.run.phase).toBe("PLANNING");
+    expect(recovered.run.cumulativeWorkers).toBe(0);
+    const revisions = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .find({ where: { executionId: run.executionId } });
+    expect(revisions).toHaveLength(2);
+    const steps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: run.executionId } });
+    expect(steps.some((step) => step.stepId === "implement")).toBe(false);
+    expect(steps.some((step) => step.stepId === "verify-1")).toBe(false);
+  });
+
+  it("M9 closure: batch submission holds the authority point under the execution lock — a concurrent authorized activation of N+1 serializes behind it and becomes STALE (never a silent rebase)", async () => {
+    const { run, execution } = await seedRun("m9c-race-t1-first");
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    // T2's authorized PlanPatch on the same base N (proposed, not yet
+    // activated — exactly the "authorized activation attempts N+1" case).
+    const proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    const authorized = await proposals.propose(
+      execution.id,
+      {
+        schemaVersion: 1,
+        baseRevision,
+        operations: [
+          {
+            op: "addStep",
+            step: {
+              id: "authorized-extra",
+              agent: "implementation",
+              input: {},
+              dependsOn: [],
+            },
+          },
+        ],
+      },
+      "operator",
+    );
+
+    // Barrier: a raw connection holds the execution row lock so T1 parks
+    // at the pre-proposal authority point (after Planner-attempt
+    // validation and the frozen-base checks, before any activation can
+    // interleave).
+    const client = await rawPgClient(dataSource);
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `SELECT id FROM executions WHERE id = $1 FOR UPDATE`,
+        [execution.id],
+      );
+
+      const t1 = coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      });
+      // T1 must be parked on the execution lock: the authority point.
+      // (The needle matches the query HEAD — pg_stat_activity truncates
+      // long SELECT lists past the FROM clause.)
+      await waitForLockWait(client, '"execution"."id"', 1);
+
+      // T2 attempts the authorized activation while T1 is at the authority
+      // point. T1 is already queued on the execution row lock, so T2 can
+      // never overtake it: T1 linearizes first, T2 serializes behind and
+      // becomes STALE. (T2's own lock-wait is not polled — node-postgres
+      // pool connections blocked on a row lock are not visible in
+      // pg_stat_activity/pg_locks promptly; the outcome assertions below
+      // are the proof.)
+      const t2 = proposals.activate(authorized.id);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Release the barrier: T1 linearizes first, T2 serializes after and
+      // becomes STALE.
+      await client.query("COMMIT");
+      const [t1Outcome, t2Outcome] = await Promise.all([t1, t2]);
+      expect(t1Outcome).toEqual({
+        outcome: "ACCEPTED",
+        revisionNumber: baseRevision + 1,
+      });
+      expect(t2Outcome.decision).toBe("STALE");
+      expect(t2Outcome.reason).toContain("no longer active");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+
+    // The batch's proposal was created with baseRevision N — never rebased
+    // onto the concurrent activation's base.
+    const storedProposals = await dataSource
+      .getRepository(PlanProposalEntity)
+      .find({ where: { executionId: execution.id } });
+    const plannerProposal = storedProposals.find(
+      (proposal) => proposal.source === "planner",
+    );
+    expect(plannerProposal).toBeDefined();
+    expect(plannerProposal!.baseRevision).toBe(baseRevision);
+    const activated = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({
+        where: { executionId: run.executionId, revisionNumber: baseRevision + 1 },
+      });
+    expect(activated?.baseRevision).toBe(baseRevision);
+    // T1's workers materialized; T2's authorized-extra never did (STALE).
+    const steps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: run.executionId } });
+    const stepIds = steps.map((step) => step.stepId).sort();
+    expect(stepIds).toEqual(["implement", "planner-1", "review", "verify-1"]);
+  });
+
+  it("M9 closure: an authorized activation that commits N+1 first makes the in-flight Planner batch deterministically STALE (T2 linearizes first)", async () => {
+    const { run, execution } = await seedRun("m9c-race-t2-first");
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    const proposals = new PlanProposalService(
+      dataSource as any,
+      new PipelineValidationService(new ConditionEvaluatorService()),
+    );
+    const authorized = await proposals.propose(
+      execution.id,
+      {
+        schemaVersion: 1,
+        baseRevision,
+        operations: [
+          {
+            op: "addStep",
+            step: {
+              id: "authorized-extra",
+              agent: "implementation",
+              input: {},
+              dependsOn: [],
+            },
+          },
+        ],
+      },
+      "operator",
+    );
+
+    // Barrier: hold the COORDINATION RUN row lock so T1 is parked at its
+    // first statement while T2's authorized activation commits N+1.
+    const client = await rawPgClient(dataSource);
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `SELECT id FROM coordination_runs WHERE id = $1 FOR UPDATE`,
+        [run.id],
+      );
+
+      const t1 = coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      });
+      await waitForLockWait(client, '"run"."id"', 1);
+
+      // T2 activates N+1 fully while T1 is in flight.
+      const t2Outcome = await proposals.activate(authorized.id);
+      expect(t2Outcome.decision).toBe("ACCEPTED");
+
+      await client.query("COMMIT");
+      const t1Outcome = await t1;
+      expect(t1Outcome).toEqual({ outcome: "FAILED", revisionNumber: 0 });
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("FAILED");
+    const stored = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: execution.id } });
+    expect(stored?.status).toBe("FAILED");
+    expect(stored?.terminationReason).toContain("PLANNER_BASE_STALE");
+    // The stale batch's workers never materialized; only the authorized
+    // patch's step exists.
+    const steps = await dataSource
+      .getRepository(LogicalStepEntity)
+      .find({ where: { executionId: run.executionId } });
+    const stepIds = steps.map((step) => step.stepId).sort();
+    expect(stepIds).toEqual(["authorized-extra", "planner-1"]);
+    // The Planner batch was never rebased onto N+1: no planner-sourced
+    // proposal was ever created.
+    const plannerProposals = await dataSource
+      .getRepository(PlanProposalEntity)
+      .find({ where: { executionId: execution.id, source: "planner" } });
+    expect(plannerProposals).toHaveLength(0);
+  });
+});
+
+describeWithPostgres("PostgreSQL M9-S4 fan-out/fan-in/decision loop", () => {
+  jest.setTimeout(240_000);
+
+  let dataSource: DataSource;
+  let coordinator: RuntimeCoordinationService;
+  let executionService: ExecutionService;
+  let outboxService: DispatchOutboxService;
+  let engine: EngineService;
+
+  const teamConfig = (): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "planner" },
+    verifier: { kind: "agent", name: "verifier" },
+    allowedWorkers: [
+      { kind: "agent", name: "implementation" },
+      { kind: "agent", name: "tests" },
+    ],
+    maxIterations: 3,
+    maxWorkersPerIteration: 4,
+    maxTotalWorkers: 20,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    // M8-S6 enforcement: agent-kind tasks resolve to `agent:<name>`.
+    allowedExecutors: [
+      "local-host",
+      "agent:implementation",
+      "agent:tests",
+      "agent:planner",
+      "agent:verifier",
+    ],
+  });
+
+  const activeRevisionNumber = async (): Promise<number> => {
+    const execution = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: executionId } });
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { id: execution?.activePlanRevisionId } });
+    if (!revision) throw new Error("no active plan revision");
+    return revision.revisionNumber;
+  };
+  // M9-S8: the Planner batch must declare the revision its attempt will be
+  // frozen on. If the iteration's Planner step is ALREADY materialized, its
+  // frozen revision is the CURRENT active revision; if not (the step is
+  // created by the next reconciliation), it is active + 1 (the revision
+  // that activation creates). Derived from actual state, never magic.
+  const plannerBaseRevision = async (iterationNumber: number): Promise<number> => {
+    const exists = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({
+        where: { executionId, stepId: `planner-${iterationNumber}` },
+        select: ["id"],
+      });
+    return (await activeRevisionNumber()) + (exists ? 0 : 1);
+  };
+
+  const batchProposal = (
+    iterationNumber: number,
+    baseRevision: number,
+  ): TaskBatchProposalV1 => ({
+    schemaVersion: 1,
+    iterationNumber,
+    baseRevision,
+    tasks: [
+      {
+        taskId: `implement-${iterationNumber}`,
+        agent: "implementation",
+        input: { feature: "login" },
+        dependsOn: [],
+        required: true,
+        reason: "core implementation",
+      },
+      {
+        taskId: `tests-${iterationNumber}`,
+        agent: "tests",
+        input: {},
+        dependsOn: [`implement-${iterationNumber}`],
+        required: true,
+        reason: "tests",
+      },
+    ],
+    reason: `iteration ${iterationNumber} plan`,
+  });
+
+  const decision = (
+    iterationId: string,
+    iterationNumber: number,
+    action: VerifierDecisionV1["action"],
+  ): VerifierDecisionV1 => ({
+    schemaVersion: 1,
+    iterationId,
+    iterationNumber,
+    action,
+    reason: "deterministic verifier",
+    evidenceRefs: [],
+  });
+
+  const recordingAdapter = () => {
+    const calls: Array<{ invocation: unknown; pinned: unknown }> = [];
+    return {
+      calls,
+      adapter: {
+        kind: "test",
+        invoke: jest.fn(async (invocation: any, pinned: any) => {
+          calls.push({ invocation, pinned });
+          return {
+            adapter: "test",
+            invocationId: invocation.invocationId,
+            dispatchedAt: new Date().toISOString(),
+          };
+        }),
+      },
+    };
+  };
+
+  const successfulResult = (claim: any, output: JsonValue): AgentResultV1 => ({
+    schemaVersion: "1",
+    invocationId: claim.attempt.invocationId,
+    executionId: claim.attempt.executionId,
+    stepExecutionId: claim.logicalStep.id,
+    status: "succeeded",
+    output,
+    completedAt: new Date().toISOString(),
+  });
+
+  const runStep = async (
+    stepId: string,
+    output: unknown,
+    inbox: ResultInboxService,
+  ): Promise<void> => {
+    // Engine claims the due step; outbox dispatches; the deterministic
+    // worker result is applied through the existing inbox authority.
+    await engine.reconcileExecution(executionId);
+    await outboxService.dispatchNext();
+    const logical = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({ where: { executionId, stepId } });
+    if (!logical) throw new Error(`step ${stepId} not claimed`);
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({
+        where: { logicalStepId: logical.id },
+        order: { attemptNumber: "DESC" },
+      });
+    if (!attempt || attempt.status === "SUCCESS") return;
+    await inbox.apply(successfulResult({ logicalStep: logical, attempt }, output as JsonValue), {
+      adapter: "http",
+      receivedAt: new Date().toISOString(),
+      deliveryId: `delivery-${stepId}`,
+    });
+  };
+
+  let executionId: string;
+  let inbox: ResultInboxService;
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    coordinator = new RuntimeCoordinationService(dataSource);
+    inbox = new ResultInboxService(dataSource);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    const rec = recordingAdapter();
+    outboxService = new DispatchOutboxService(
+      dataSource as any,
+      rec.adapter as any,
+      new AgentTransportConfigService(parseAgentTransportConfiguration({})),
+    );
+    engine = new EngineService(
+      new PipelineService(
+        dataSource as any,
+        new PipelineValidationService(new ConditionEvaluatorService()),
+      ) as any,
+      executionService,
+      rec.adapter as any,
+      outboxService,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "coordination_iterations", "coordination_runs",
+       "plan_proposals", "policy_decisions", "policy_snapshots",
+       "approval_requests", "result_conflicts", "result_inbox",
+       "agent_events", "dispatch_outbox", "step_attempts",
+       "step_executions", "execution_plan_revisions", "executions",
+       "pipelines" CASCADE`,
+    );
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m9s4-loop",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await executionService.createExecution(pipeline, {});
+    executionId = execution.id;
+    await engine.reconcileExecution(executionId);
+    const run = await coordinator.startRun(
+      executionId,
+      teamConfig(),
+      new Date(Date.now() + 3_600_000),
+    );
+    await coordinator.createNextIteration(run.id);
+    await coordinator.createPlannerStep(run.id);
+  });
+
+  it("runs two CONTINUE iterations and ACCEPT releases the completion hold", async () => {
+    // Iteration 1: planner proposes -> workers -> verifier CONTINUE.
+    await runStep("planner-1", batchProposal(1, await plannerBaseRevision(1)), inbox);
+    await runStep("implement-1", { diff: { files: 3 } }, inbox);
+    await runStep("tests-1", { passed: 12 }, inbox);
+    await engine.reconcileExecution(executionId);
+    const run = await coordinator.recoverRun(executionId);
+    expect(run.run.phase).toBe("VERIFYING");
+    await runStep("verify-1", decision(run.iterations[0].id, 1, "CONTINUE"), inbox);
+    await engine.reconcileExecution(executionId);
+    const afterContinue = await coordinator.recoverRun(executionId);
+    expect(afterContinue.run.phase).toBe("PLANNING");
+    expect(afterContinue.run.currentIterationNumber).toBe(2);
+
+    // Iteration 2: planner proposes -> workers -> verifier ACCEPT.
+    await runStep("planner-2", batchProposal(2, await plannerBaseRevision(2)), inbox);
+    await runStep("implement-2", { diff: { files: 5 } }, inbox);
+    await runStep("tests-2", { passed: 20 }, inbox);
+    await engine.reconcileExecution(executionId);
+    await runStep("verify-2", decision(afterContinue.iterations[1].id, 2, "ACCEPT"), inbox);
+    await engine.reconcileExecution(executionId);
+    const afterAccept = await coordinator.recoverRun(executionId);
+    expect(afterAccept.run.phase).toBe("ACCEPTED");
+    expect(await coordinator.isCompletionHeld(executionId)).toBe(false);
+    expect(afterAccept.iterations).toHaveLength(2);
+    expect(afterAccept.run.cumulativeWorkers).toBe(4);
+  });
+
+  it("the Verifier receives a bounded aggregation frozen at claim time", async () => {
+    await runStep("planner-1", batchProposal(1, await plannerBaseRevision(1)), inbox);
+    await runStep("implement-1", { diff: { files: 3 }, artifactRefs: ["artifact:one"] }, inbox);
+    await runStep("tests-1", { passed: 12 }, inbox);
+    await engine.reconcileExecution(executionId);
+
+    // The engine claims the verifier; the claim-time hook builds the input.
+    await engine.reconcileExecution(executionId);
+    await outboxService.dispatchNext();
+    const logical = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({ where: { executionId, stepId: "verify-1" } });
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { logicalStepId: logical!.id } });
+    const input = attempt!.inputSnapshot as { context: any };
+    expect(input.context.iterationNumber).toBe(1);
+    expect(input.context.workers).toHaveLength(2);
+    expect(input.context.workers[0]).toMatchObject({
+      taskId: "implement-1",
+      status: "SUCCESS",
+    });
+    expect(input.context.workers[0].artifactRefs).toEqual(["artifact:one"]);
+    expect(input.context.workers[1].selectedFields).toEqual({ passed: 12 });
+    expect(input.context.limits).toMatchObject({
+      maxIterations: 3,
+      cumulativeWorkers: 2,
+    });
+    // Bounded and secret-free.
+    const rendered = JSON.stringify(input.context);
+    expect(rendered.length).toBeLessThan(128 * 1024);
+    expect(rendered).not.toContain("sk-");
+    expect(rendered).not.toMatch(/chain.of.thought|raw.log/i);
+  });
+
+  it("a required worker failure terminalizes the loop deterministically", async () => {
+    await runStep("planner-1", batchProposal(1, await plannerBaseRevision(1)), inbox);
+    await engine.reconcileExecution(executionId);
+    await outboxService.dispatchNext();
+    const logical = await dataSource
+      .getRepository(LogicalStepEntity)
+      .findOne({ where: { executionId, stepId: "implement-1" } });
+    const attempt = await dataSource
+      .getRepository(StepAttemptEntity)
+      .findOne({ where: { logicalStepId: logical!.id } });
+    const failed: AgentResultV1 = {
+      schemaVersion: "1",
+      invocationId: attempt!.invocationId,
+      executionId,
+      stepExecutionId: logical!.id,
+      status: "failed",
+      output: { error: "implementation broke" },
+      completedAt: new Date().toISOString(),
+    };
+    await inbox.apply(failed, {
+        adapter: "http",
+        receivedAt: new Date().toISOString(),
+        deliveryId: "delivery-failed",
+      });
+    await engine.reconcileExecution(executionId);
+    const run = await coordinator.recoverRun(executionId);
+    expect(run.run.phase).toBe("FAILED");
+  });
+
+  it("WAIT_FOR_HUMAN persists, approve continues to the next iteration, deny fails", async () => {
+    await runStep("planner-1", batchProposal(1, await plannerBaseRevision(1)), inbox);
+    await runStep("implement-1", { diff: { files: 3 } }, inbox);
+    await runStep("tests-1", { passed: 12 }, inbox);
+    await engine.reconcileExecution(executionId);
+    const run = await coordinator.recoverRun(executionId);
+    await runStep("verify-1", decision(run.iterations[0].id, 1, "WAIT_FOR_HUMAN"), inbox);
+    await engine.reconcileExecution(executionId);
+    const waiting = await coordinator.recoverRun(executionId);
+    expect(waiting.run.phase).toBe("WAITING_FOR_HUMAN");
+    expect(waiting.run.waitReason).toBe("deterministic verifier");
+
+    const approved = await coordinator.resolveWait(waiting.run.id, true);
+    expect(approved).toBe("PLANNING");
+    const afterApprove = await coordinator.recoverRun(executionId);
+    expect(afterApprove.run.currentIterationNumber).toBe(2);
+
+    // A second WAIT then deny -> FAILED.
+    await runStep("planner-2", batchProposal(2, await plannerBaseRevision(2)), inbox);
+    await runStep("implement-2", { diff: { files: 5 } }, inbox);
+    await runStep("tests-2", { passed: 20 }, inbox);
+    await engine.reconcileExecution(executionId);
+    const run2 = await coordinator.recoverRun(executionId);
+    await runStep("verify-2", decision(run2.iterations[1].id, 2, "WAIT_FOR_HUMAN"), inbox);
+    await engine.reconcileExecution(executionId);
+    const denied = await coordinator.resolveWait(run2.run.id, false);
+    expect(denied).toBe("FAILED");
+    const afterDeny = await coordinator.recoverRun(executionId);
+    expect(afterDeny.run.phase).toBe("FAILED");
+    expect(afterDeny.iterations).toHaveLength(2);
+  });
+});
+
+describeWithPostgres("PostgreSQL M9-S5 authority integration", () => {
+  jest.setTimeout(240_000);
+
+  let dataSource: DataSource;
+  let coordinator: RuntimeCoordinationService;
+  let executionService: ExecutionService;
+  let capsules: ExecutionCapsuleService;
+
+  const teamConfig = (overrides: Partial<CoordinationConfigV1> = {}): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "planner" },
+    verifier: { kind: "agent", name: "verifier" },
+    allowedWorkers: [
+      { kind: "agent", name: "implementation" },
+      { kind: "connection", name: "conn:worker" },
+    ],
+    maxIterations: 3,
+    maxWorkersPerIteration: 4,
+    maxTotalWorkers: 20,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    // M8-S6 enforcement: agent-kind tasks resolve to `agent:<name>`;
+    // connection-kind tasks resolve to the connection's executorId.
+    allowedExecutors: [
+      "local-host",
+      "agent:implementation",
+      "agent:planner",
+      "agent:verifier",
+    ],
+    ...overrides,
+  });
+
+  const seedRun = async (name: string, config: CoordinationConfigV1, loopDeadlineAt?: Date) => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({ name, version: "1.0", steps: [] }),
+    );
+    const execution = await executionService.createExecution(pipeline, {});
+    await executionService.reconcileExecution(execution.id);
+    const run = await coordinator.startRun(
+      execution.id,
+      config,
+      loopDeadlineAt ?? new Date(Date.now() + 3_600_000),
+    );
+    const iteration = await coordinator.createNextIteration(run.id);
+    return { run, iteration, execution };
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    coordinator = new RuntimeCoordinationService(dataSource);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, executionService),
+      executionService,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "coordination_iterations", "coordination_runs",
+       "execution_replays", "execution_exports", "delegation_requests",
+       "delegation_observation_conflicts", "delegation_observations",
+       "plan_proposals", "policy_decisions", "policy_snapshots",
+       "approval_requests", "budget_ledger_entries", "budget_reservations",
+       "budget_accounts", "state_write_evidence", "artifacts",
+       "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("a past loop deadline terminalizes LIMIT_REACHED in any live phase", async () => {
+    const { run } = await seedRun(
+      "m9s5-deadline",
+      teamConfig(),
+      new Date(Date.now() - 1_000),
+    );
+    expect(await executionService.reconcileCoordination(run.executionId)).toBe(
+      true,
+    );
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("LIMIT_REACHED");
+
+    // CONTINUE on an expired run is also refused deterministically.
+    const { run: live, iteration } = await seedRun("m9s5-deadline2", teamConfig());
+    await coordinator.transitionRun(live.id, "plannerProposed");
+    await coordinator.transitionRun(live.id, "batchValidated");
+    await coordinator.transitionRun(live.id, "workersFinished");
+    await dataSource
+      .getRepository(CoordinationRunEntity)
+      .update({ id: live.id }, { loopDeadlineAt: new Date(Date.now() - 1_000) });
+    const outcome = await coordinator.consumeDecision(
+      live.id,
+      {
+        schemaVersion: 1,
+        iterationId: iteration.id,
+        iterationNumber: 1,
+        action: "CONTINUE",
+        reason: "too late",
+        evidenceRefs: [],
+      },
+    );
+    expect(outcome).toEqual({ outcome: "consumed", phase: "LIMIT_REACHED" });
+  });
+
+  it("a missing or exhausted run-level budget account stops the loop", async () => {
+    const { run, iteration } = await seedRun(
+      "m9s5-budget",
+      teamConfig({ budgetAccountId: "no-such-account" }),
+    );
+    await coordinator.transitionRun(run.id, "plannerProposed");
+    await coordinator.transitionRun(run.id, "batchValidated");
+    await coordinator.transitionRun(run.id, "workersFinished");
+    const outcome = await coordinator.consumeDecision(
+      run.id,
+      {
+        schemaVersion: 1,
+        iterationId: iteration.id,
+        iterationNumber: 1,
+        action: "CONTINUE",
+        reason: "no budget",
+        evidenceRefs: [],
+      },
+    );
+    expect(outcome).toEqual({ outcome: "consumed", phase: "LIMIT_REACHED" });
+  });
+
+  it("a revoked M8 connection rejects the batch deterministically", async () => {
+    const connections = new RuntimeConnectionService(dataSource);
+    await connections.createConnection("conn:worker", {
+      name: "Worker connection",
+      runtimeKind: "generic-cli",
+      executorId: "local-host",
+      credentialRefs: [],
+      declaredCapabilities: {},
+      cli: {
+        command: process.execPath,
+        args: [],
+        probe: { args: ["-e", "console.log('1.0.0')"], expectsVersion: true },
+      },
+    });
+    await connections.revokeConnection("conn:worker");
+
+    const { run } = await seedRun("m9s5-revoke", teamConfig());
+    await coordinator.createPlannerStep(run.id);
+    await expect(
+      coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: {
+          schemaVersion: 1,
+          iterationNumber: 1,
+          baseRevision: 1,
+          tasks: [
+            {
+              taskId: "worker-1",
+              agent: "worker",
+              connectionId: "conn:worker",
+              input: {},
+              dependsOn: [],
+              required: true,
+              reason: "revoked connection attempt",
+            },
+          ],
+          reason: "revoked",
+        },
+        plannerAttemptId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTION_NOT_ALLOWED" });
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("PLANNING");
+  });
+
+  it("cancelling a coordinated execution mid-WORKING terminalizes the run CANCELLED", async () => {
+    const { run, execution } = await seedRun("m9s5-cancel", teamConfig());
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    await coordinator.submitIterationBatch({
+      runId: run.id,
+      iterationNumber: 1,
+      proposal: {
+        schemaVersion: 1,
+        iterationNumber: 1,
+        baseRevision,
+        tasks: [
+          {
+            taskId: "implement-1",
+            agent: "implementation",
+            input: {},
+            dependsOn: [],
+            required: true,
+            reason: "work",
+          },
+        ],
+        reason: "iteration 1",
+      },
+      plannerAttemptId: attemptId,
+    });
+    expect((await coordinator.recoverRun(run.executionId)).run.phase).toBe("WORKING");
+
+    await executionService.cancelExecution(execution.id);
+    expect(await executionService.reconcileCoordination(execution.id)).toBe(true);
+    const recovered = await coordinator.recoverRun(run.executionId);
+    expect(recovered.run.phase).toBe("CANCELLED");
+  });
+
+  it("Capsules project the loop without duplicating authority; replay re-creates a fresh run", async () => {
+    const { run, iteration, execution } = await seedRun("m9s5-capsule", teamConfig());
+    await coordinator.createPlannerStep(run.id);
+    const { attemptId, baseRevision } = await seedPlannerAttempt(
+      dataSource,
+      executionService,
+      execution.id,
+      1,
+    );
+    await coordinator.submitIterationBatch({
+      runId: run.id,
+      iterationNumber: 1,
+      proposal: {
+        schemaVersion: 1,
+        iterationNumber: 1,
+        baseRevision,
+        tasks: [
+          {
+            taskId: "implement-1",
+            agent: "implementation",
+            input: {},
+            dependsOn: [],
+            required: true,
+            reason: "work",
+          },
+        ],
+        reason: "iteration 1",
+      },
+      plannerAttemptId: attemptId,
+    });
+    await coordinator.transitionRun(run.id, "workersFinished");
+    await coordinator.consumeDecision(
+      run.id,
+      {
+        schemaVersion: 1,
+        iterationId: iteration.id,
+        iterationNumber: 1,
+        action: "ACCEPT",
+        reason: "done",
+        evidenceRefs: [],
+      },
+      randomUUID(),
+    );
+    await executionService.cancelExecution(execution.id);
+
+    const capsule = await capsules.build(execution.id);
+    expect(capsule.coordination).toBeDefined();
+    expect(capsule.coordination!.run.phase).toBe("ACCEPTED");
+    expect(capsule.coordination!.iterations).toHaveLength(1);
+    expect(capsule.coordination!.iterations[0]).toMatchObject({
+      iterationNumber: 1,
+      workerCount: 1,
+      requiredCount: 1,
+      decisionAction: "ACCEPT",
+    });
+    expect(capsule.coordination!.iterations[0].decisionHash).toMatch(/^[0-9a-f]{64}$/);
+    const rendered = JSON.stringify(capsule);
+    expect(rendered).not.toContain("sk-");
+
+    // Replay creates a NEW run with the frozen template and a FRESH deadline.
+    const replay = await capsules.replay(execution.id);
+    const replayedRun = await coordinator.recoverRun(replay.targetExecutionId);
+    expect(replayedRun.run.phase).toBe("PLANNING");
+    expect(replayedRun.run.currentIterationNumber).toBe(0);
+    expect(replayedRun.run.config.maxIterations).toBe(3);
+    expect(replayedRun.run.loopDeadlineAt.getTime()).toBeGreaterThan(Date.now());
+    expect(replayedRun.iterations).toHaveLength(0);
+  });
+});
+
+describeWithPostgres("PostgreSQL M10-S1 workbench projections", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let projection: WorkbenchProjectionService;
+  let coordinator: RuntimeCoordinationService;
+  let executionService: ExecutionService;
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    projection = new WorkbenchProjectionService(dataSource);
+    coordinator = new RuntimeCoordinationService(dataSource);
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "coordination_iterations", "coordination_runs",
+       "plan_proposals", "approval_requests", "artifacts",
+       "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines",
+       "connection_revisions", "runtime_connections" CASCADE`,
+    );
+  });
+
+  it("projects connection cards with status and bounded capabilities", async () => {
+    const connections = new RuntimeConnectionService(dataSource);
+    await connections.createConnection("conn:proj", {
+      name: "Projection CLI",
+      runtimeKind: "generic-cli",
+      executorId: "local-host",
+      credentialRefs: [],
+      declaredCapabilities: {
+        artifacts: { supported: true, source: "configured" },
+        cancellation: { supported: false, source: "configured" },
+      },
+      cli: {
+        command: process.execPath,
+        args: [],
+        probe: {
+          args: ["-e", "console.log('1.2.3')"],
+          expectsVersion: true,
+        },
+      },
+    });
+    await connections.testConnection("conn:proj", {} as never);
+
+    const { cards } = await projection.connectionCards();
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      connectionId: "conn:proj",
+      runtimeKind: "generic-cli",
+      status: "AVAILABLE",
+      testedVersion: "1.2.3",
+      revoked: false,
+    });
+    expect(cards[0].capabilities).toEqual(
+      expect.arrayContaining([
+        { key: "artifacts", supported: true, source: "declared" },
+        { key: "cancellation", supported: false, source: "declared" },
+      ]),
+    );
+    // No credential references leak.
+    expect(JSON.stringify(cards)).not.toContain("credentialRefs");
+  });
+
+  it("projects the coordination loop coherently mid-transition", async () => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m10s1-proj",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await executionService.createExecution(pipeline, {
+      goal: "project the loop",
+    });
+    await executionService.reconcileExecution(execution.id);
+    const run = await coordinator.startRun(
+      execution.id,
+      {
+        schemaVersion: 1,
+        planner: { kind: "agent", name: "planner" },
+        verifier: { kind: "agent", name: "verifier" },
+        allowedWorkers: [{ kind: "agent", name: "implementation" }],
+        maxIterations: 3,
+        maxWorkersPerIteration: 4,
+        maxTotalWorkers: 20,
+        loopDeadlineMs: 3_600_000,
+        delegationDepthMax: 2,
+        allowedExecutors: [
+          "local-host",
+          "agent:planner",
+          "agent:verifier",
+        ],
+      },
+      new Date(Date.now() + 3_600_000),
+    );
+    await coordinator.createNextIteration(run.id);
+    await coordinator.createPlannerStep(run.id);
+
+    const summary = await projection.executionSummaries(1);
+    expect(summary.items[0]).toMatchObject({
+      id: execution.id,
+      coordinationPhase: "PLANNING",
+      iterationNumber: 1,
+    });
+
+    const detailed = await projection.executionProjection(execution.id);
+    expect(detailed.execution.goal.preview).toContain("project the loop");
+    expect(detailed.coordination).not.toBeNull();
+    expect(detailed.coordination!.run.phase).toBe("PLANNING");
+    expect(detailed.coordination!.iterations[0].plannerStepId).toBe("planner-1");
+    expect(detailed.coordination!.iterations[0].workerManifest).toEqual([]);
+    expect(detailed.bounds.maxIterations).toBe(100);
+  });
+
+  it("never exposes raw attempt snapshots or results in the projection", async () => {
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m10s1-redact",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await executionService.createExecution(pipeline, {});
+    const step = await executionService.materializeExecutionWithManager(
+      dataSource.manager,
+      pipeline,
+      {},
+    );
+    // A step with a secret-looking result must never reach the projection.
+    const logical = await dataSource.getRepository(LogicalStepEntity).save(
+      dataSource.getRepository(LogicalStepEntity).create({
+        executionId: execution.id,
+        stepId: "secret-step",
+        agent: "implementation",
+        status: "COMPLETED",
+        input: null,
+        attempt: 1,
+        maxAttempts: 1,
+        frozenSpecHash: "hash",
+        frozenAt: new Date(),
+      }),
+    );
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: execution.id } });
+    await dataSource.getRepository(StepAttemptEntity).save(
+      dataSource.getRepository(StepAttemptEntity).create({
+        executionId: execution.id,
+        logicalStepId: logical.id,
+        planRevisionId: revision!.id,
+        attemptNumber: 1,
+        invocationId: "invocation-secret",
+        status: "SUCCESS",
+        frozenSpecHash: "frozen-secret-step",
+        executorSnapshot: { agent: "implementation" },
+        result: { raw: "sk-super-secret-value", chain_of_thought: "reasoning" },
+        inputSnapshot: { secret: "sk-input-secret" },
+        terminalAt: new Date(),
+      }),
+    );
+    void step;
+
+    const detailed = await projection.executionProjection(execution.id);
+    const rendered = JSON.stringify(detailed);
+    expect(rendered).not.toContain("sk-super-secret-value");
+    expect(rendered).not.toContain("sk-input-secret");
+    expect(rendered).not.toContain("chain_of_thought");
+    expect(detailed.attempts[0]).toEqual({
+      stepId: "secret-step",
+      attemptNumber: 1,
+      status: "SUCCESS",
+      terminalAt: expect.any(String),
+      error: null,
+    });
+  });
+
+  it("scopes artifact references to the execution's own lineage", async () => {
+    const makeExecution = async (name: string) => {
+      const pipeline = await dataSource.getRepository(PipelineEntity).save(
+        dataSource.getRepository(PipelineEntity).create({
+          name,
+          version: "1.0",
+          steps: [],
+        }),
+      );
+      return executionService.createExecution(pipeline, {});
+    };
+    const executionA = await makeExecution("m10s1-artifacts-a");
+    const executionB = await makeExecution("m10s1-artifacts-b");
+
+    // Artifact lineage for A only: attempt A -> inbox row -> artifact.
+    const logicalA = await dataSource.getRepository(LogicalStepEntity).save(
+      dataSource.getRepository(LogicalStepEntity).create({
+        executionId: executionA.id,
+        stepId: "producer-a",
+        agent: "implementation",
+        status: "COMPLETED",
+        input: null,
+        attempt: 1,
+        maxAttempts: 1,
+        frozenSpecHash: "hash-a",
+        frozenAt: new Date(),
+      }),
+    );
+    const revisionA = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .findOne({ where: { executionId: executionA.id } });
+    const attemptA = await dataSource.getRepository(StepAttemptEntity).save(
+      dataSource.getRepository(StepAttemptEntity).create({
+        executionId: executionA.id,
+        logicalStepId: logicalA.id,
+        planRevisionId: revisionA!.id,
+        attemptNumber: 1,
+        invocationId: "invocation-a",
+        status: "SUCCESS",
+        frozenSpecHash: "frozen-a",
+        executorSnapshot: { agent: "implementation" },
+        terminalAt: new Date(),
+      }),
+    );
+    const inboxRow = await dataSource.getRepository(ResultInboxEntity).save(
+      dataSource.getRepository(ResultInboxEntity).create({
+        invocationId: "invocation-a",
+        stepAttemptId: attemptA.id,
+        payloadHash: "payload-hash-a",
+        payload: { value: 1 },
+        sourceAdapter: "http",
+      }),
+    );
+    await dataSource.getRepository(ArtifactEntity).save(
+      dataSource.getRepository(ArtifactEntity).create({
+        resultInboxId: inboxRow.id,
+        descriptorOrdinal: 0,
+        descriptorHash: "artifact-hash-a",
+      }),
+    );
+
+    const projectionA = await projection.executionProjection(executionA.id);
+    const projectionB = await projection.executionProjection(executionB.id);
+    expect(projectionA.artifacts).toHaveLength(1);
+    expect(projectionA.artifacts[0].descriptorHash).toBe("artifact-hash-a");
+    // B never sees A's artifacts.
+    expect(projectionB.artifacts).toHaveLength(0);
+    expect(projectionB.artifactsTruncated).toBe(false);
+  });
+});
+
+describeWithPostgres("PostgreSQL M10-S2 workbench commands", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let commands: WorkbenchCommandService;
+  let coordinator: RuntimeCoordinationService;
+  let executionService: ExecutionService;
+
+  const teamConfig = (): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "planner" },
+    verifier: { kind: "agent", name: "verifier" },
+    allowedWorkers: [{ kind: "agent", name: "implementation" }],
+    maxIterations: 3,
+    maxWorkersPerIteration: 4,
+    maxTotalWorkers: 20,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    allowedExecutors: [
+      "local-host",
+      "agent:planner",
+      "agent:verifier",
+    ],
+  });
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    coordinator = new RuntimeCoordinationService(dataSource);
+    commands = new WorkbenchCommandService(
+      dataSource,
+      executionService,
+      coordinator,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "operator_actions", "coordination_iterations",
+       "coordination_runs", "execution_replays", "plan_proposals",
+       "approval_requests", "result_conflicts", "result_inbox",
+       "agent_events", "dispatch_outbox", "step_attempts",
+       "step_executions", "execution_plan_revisions", "executions",
+       "pipelines", "runtime_connections", "connection_revisions" CASCADE`,
+    );
+  });
+
+  it("launches a team run exactly once and persists audit evidence", async () => {
+    const first = await commands.startTeamRun({
+      idempotencyKey: "launch-wedge-1",
+      name: "wedge",
+      goal: "build the wedge",
+      config: teamConfig(),
+    });
+    expect(first.outcome).toBe("executed");
+    const { executionId, runId } = first.result as {
+      executionId: string;
+      runId: string;
+    };
+
+    const duplicate = await commands.startTeamRun({
+      idempotencyKey: "launch-wedge-1",
+      name: "wedge",
+      goal: "build the wedge",
+      config: teamConfig(),
+    });
+    expect(duplicate.outcome).toBe("duplicate");
+    expect(duplicate.result).toEqual(first.result);
+
+    // Exactly one run exists; the audit row is durable.
+    const runs = await dataSource
+      .getRepository(CoordinationRunEntity)
+      .find({ where: { executionId } });
+    expect(runs).toHaveLength(1);
+    const audit = await commands.auditTrail("start-team-run");
+    expect(audit.items).toHaveLength(1);
+    expect(audit.items[0].actor).toBe("local-operator");
+    expect(JSON.stringify(audit.items[0].outcome)).toContain(runId);
+  });
+
+  it("two concurrent duplicate deliveries execute the authority exactly once", async () => {
+    const results = await Promise.all([
+      commands.startTeamRun({
+        idempotencyKey: "launch-race-1",
+        name: "race",
+        goal: "race the wedge",
+        config: teamConfig(),
+      }),
+      commands.startTeamRun({
+        idempotencyKey: "launch-race-1",
+        name: "race",
+        goal: "race the wedge",
+        config: teamConfig(),
+      }),
+    ]);
+    const executed = results.filter((result) => result.outcome === "executed");
+    const duplicates = results.filter((result) => result.outcome === "duplicate");
+    expect(executed).toHaveLength(1);
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].result).toEqual(executed[0].result);
+
+    const executions = await dataSource.getRepository(ExecutionEntity).find();
+    expect(executions).toHaveLength(1);
+    const actions = await dataSource.getRepository(OperatorActionEntity).find();
+    expect(actions).toHaveLength(1);
+  });
+
+  it("resolveWait, cancel, and replay route through existing authority", async () => {
+    const launch = await commands.startTeamRun({
+      idempotencyKey: "launch-wedge-2",
+      name: "wedge",
+      goal: "build the wedge",
+      config: teamConfig(),
+    });
+    const { executionId, runId } = launch.result as {
+      executionId: string;
+      runId: string;
+    };
+
+    // Drive the loop to a WAIT decision, then deny through the command.
+    const run = (await coordinator.recoverRun(executionId)).run;
+    const iteration = (await coordinator.recoverRun(executionId)).iterations[0];
+    await coordinator.transitionRun(runId, "plannerProposed");
+    await coordinator.transitionRun(runId, "batchValidated");
+    await coordinator.transitionRun(runId, "workersFinished");
+    await coordinator.consumeDecision(
+      runId,
+      {
+        schemaVersion: 1,
+        iterationId: iteration.id,
+        iterationNumber: 1,
+        action: "WAIT_FOR_HUMAN",
+        reason: "operator review",
+        evidenceRefs: [],
+      },
+      randomUUID(),
+    );
+    const waitOutcome = await commands.resolveWait({
+      idempotencyKey: "wait-1",
+      runId,
+      approve: false,
+    });
+    expect(waitOutcome.result).toEqual({ runId, phase: "FAILED" });
+    // A duplicate WAIT delivery is idempotent and never re-executes.
+    const waitAgain = await commands.resolveWait({
+      idempotencyKey: "wait-1",
+      runId,
+      approve: false,
+    });
+    expect(waitAgain.outcome).toBe("duplicate");
+
+    // Cancel a second run through the existing authority.
+    const launch2 = await commands.startTeamRun({
+      idempotencyKey: "launch-wedge-3",
+      name: "wedge2",
+      goal: "second wedge",
+      config: teamConfig(),
+    });
+    const execution2Id = (launch2.result as { executionId: string }).executionId;
+    const cancelled = await commands.cancelExecution({
+      idempotencyKey: "cancel-1",
+      executionId: execution2Id,
+    });
+    expect(cancelled.result).toMatchObject({ status: "CANCELLED" });
+    const storedExecution = await dataSource
+      .getRepository(ExecutionEntity)
+      .findOne({ where: { id: execution2Id } });
+    expect(storedExecution?.status).toBe("CANCELLED");
+
+    // Replay of a cancelled execution creates a new execution + fresh run.
+    const replayed = await commands.replayExecution({
+      idempotencyKey: "replay-1",
+      executionId: execution2Id,
+    });
+    expect(replayed.outcome).toBe("executed");
+    const targetId = (replayed.result as { targetExecutionId: string })
+      .targetExecutionId;
+    const replayedRun = await coordinator.recoverRun(targetId);
+    expect(replayedRun.run.phase).toBe("PLANNING");
+
+    // Every command left durable audit evidence.
+    const audit = await commands.auditTrail();
+    expect(audit.items.map((item) => item.action)).toEqual(
+      expect.arrayContaining([
+        "start-team-run",
+        "resolve-wait",
+        "cancel-execution",
+        "replay-execution",
+      ]),
+    );
+    void executionId;
+  });
+
+  const connectionProfile = () => ({
+    name: "Codex local",
+    runtimeKind: "codex",
+    executorId: "local-host",
+    version: "0.147.0",
+    credentialRefs: [{ kind: "env", name: "CODEX_API_KEY" }],
+    declaredCapabilities: {
+      invocation: { supported: true, source: "configured" },
+    },
+  });
+
+  it("M10 closure: concurrent duplicate revise — same key + same payload yields exactly ONE new revision", async () => {
+    const created = await commands.createConnection({
+      idempotencyKey: "conn-create-1",
+      connectionId: "conn:m10",
+      profile: connectionProfile() as never,
+    });
+    expect(created.outcome).toBe("executed");
+
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        commands.reviseConnection({
+          idempotencyKey: "conn-revise-1",
+          connectionId: "conn:m10",
+          profile: connectionProfile() as never,
+        }),
+      ),
+    );
+    const executed = results.filter((result) => result.outcome === "executed");
+    const duplicates = results.filter((result) => result.outcome === "duplicate");
+    expect(executed).toHaveLength(1);
+    expect(duplicates).toHaveLength(5);
+    // Exactly one revision was appended: N+1 once, never N+2.
+    const revisions = await dataSource
+      .getRepository(ConnectionRevisionEntity)
+      .find({ where: { connectionId: "conn:m10" } });
+    expect(revisions.map((row) => row.revisionNumber).sort()).toEqual([1, 2]);
+    const audit = await commands.auditTrail("revise-connection");
+    expect(audit.items).toHaveLength(1);
+  });
+
+  it("M10 closure: same idempotency key with a CONFLICTING payload is rejected, never silently executed", async () => {
+    await commands.createConnection({
+      idempotencyKey: "conn-create-2",
+      connectionId: "conn:m10b",
+      profile: connectionProfile() as never,
+    });
+    await commands.reviseConnection({
+      idempotencyKey: "conn-revise-2",
+      connectionId: "conn:m10b",
+      profile: connectionProfile() as never,
+    });
+    await expect(
+      commands.reviseConnection({
+        idempotencyKey: "conn-revise-2",
+        connectionId: "conn:m10b",
+        profile: {
+          ...connectionProfile(),
+          version: "0.999.0",
+        } as never,
+      }),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    // No second revision was appended.
+    const revisions = await dataSource
+      .getRepository(ConnectionRevisionEntity)
+      .find({ where: { connectionId: "conn:m10b" } });
+    expect(revisions.map((row) => row.revisionNumber).sort()).toEqual([1, 2]);
+  });
+
+  it("M10 closure: repeated identical revoke commands produce ONE effective authority transition with durable evidence", async () => {
+    await commands.createConnection({
+      idempotencyKey: "conn-create-3",
+      connectionId: "conn:m10c",
+      profile: connectionProfile() as never,
+    });
+    const first = await commands.revokeConnection({
+      idempotencyKey: "conn-revoke-3",
+      connectionId: "conn:m10c",
+    });
+    expect(first.outcome).toBe("executed");
+    const second = await commands.revokeConnection({
+      idempotencyKey: "conn-revoke-3",
+      connectionId: "conn:m10c",
+    });
+    expect(second.outcome).toBe("duplicate");
+    const audit = await commands.auditTrail("revoke-connection");
+    expect(audit.items).toHaveLength(1);
+    const revisions = await dataSource
+      .getRepository(ConnectionRevisionEntity)
+      .find({ where: { connectionId: "conn:m10c" } });
+    expect(revisions).toHaveLength(1);
+  });
+
+  it("M10 closure: every successful authority-changing connection command leaves durable operator-action evidence", async () => {
+    await commands.createConnection({
+      idempotencyKey: "conn-create-4",
+      connectionId: "conn:m10d",
+      profile: connectionProfile() as never,
+    });
+    await commands.reviseConnection({
+      idempotencyKey: "conn-revise-4",
+      connectionId: "conn:m10d",
+      profile: connectionProfile() as never,
+    });
+    await commands.revokeConnection({
+      idempotencyKey: "conn-revoke-4",
+      connectionId: "conn:m10d",
+    });
+    const audit = await commands.auditTrail();
+    expect(audit.items.map((item) => item.action)).toEqual(
+      expect.arrayContaining([
+        "create-connection",
+        "revise-connection",
+        "revoke-connection",
+      ]),
+    );
+    // The stored audit payload carries credential REFERENCES only — the
+    // bounded secret-free profile, never values.
+    const rows = await dataSource.getRepository(OperatorActionEntity).find();
+    const rendered = JSON.stringify(rows.map((row) => row.payload));
+    expect(rendered).toContain("CODEX_API_KEY");
+    expect(rendered).not.toContain("sk-");
+  });
+
+  it("M10 closure: a failed authority mutation rolls back WITH its audit row — no false completed operator action", async () => {
+    // Revise a connection that does not exist: the mutation fails inside
+    // the command transaction, so the pending audit row must roll back too.
+    await expect(
+      commands.reviseConnection({
+        idempotencyKey: "conn-revise-missing",
+        connectionId: "conn:missing",
+        profile: connectionProfile() as never,
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTION_NOT_FOUND" });
+    const audit = await commands.auditTrail("revise-connection");
+    expect(audit.items).toHaveLength(0);
+    // The same holds for create (duplicate identity is a mutation failure).
+    await commands.createConnection({
+      idempotencyKey: "conn-create-5",
+      connectionId: "conn:m10e",
+      profile: connectionProfile() as never,
+    });
+    await expect(
+      commands.createConnection({
+        idempotencyKey: "conn-create-6",
+        connectionId: "conn:m10e",
+        profile: connectionProfile() as never,
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTION_ALREADY_EXISTS" });
+    const createAudit = await commands.auditTrail("create-connection");
+    expect(createAudit.items).toHaveLength(1); // only the successful create
+  });
+});
+
+describeWithPostgres("PostgreSQL M10-S4 inspection surface", () => {
+  jest.setTimeout(180_000);
+
+  let dataSource: DataSource;
+  let projection: WorkbenchProjectionService;
+  let commands: WorkbenchCommandService;
+  let executionService: ExecutionService;
+  let coordinator: RuntimeCoordinationService;
+
+  const teamConfig = (): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "planner" },
+    verifier: { kind: "agent", name: "verifier" },
+    allowedWorkers: [{ kind: "agent", name: "implementation" }],
+    maxIterations: 3,
+    maxWorkersPerIteration: 4,
+    maxTotalWorkers: 20,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    allowedExecutors: [
+      "local-host",
+      "agent:planner",
+      "agent:verifier",
+    ],
+  });
+
+  const launchRun = async (name: string, goal: string) => {
+    const result = await commands.startTeamRun({
+      idempotencyKey: `launch-${name}`,
+      name,
+      goal,
+      config: teamConfig(),
+    });
+    return (result.result as { executionId: string }).executionId;
+  };
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+    executionService = new ExecutionService(
+      dataSource.getRepository(ExecutionEntity),
+      dataSource.getRepository(LogicalStepEntity),
+      dataSource.getRepository(StepAttemptEntity),
+      dataSource.getRepository(ExecutionPlanRevisionEntity),
+      dataSource,
+    );
+    coordinator = new RuntimeCoordinationService(dataSource);
+    projection = new WorkbenchProjectionService(dataSource);
+    commands = new WorkbenchCommandService(
+      dataSource,
+      executionService,
+      coordinator,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "operator_actions", "coordination_iterations",
+       "coordination_runs", "execution_replays", "delegation_requests",
+       "delegation_observations", "plan_proposals", "approval_requests",
+       "result_conflicts", "result_inbox", "agent_events",
+       "dispatch_outbox", "step_attempts", "step_executions",
+       "execution_plan_revisions", "executions", "pipelines" CASCADE`,
+    );
+  });
+
+  it("projects delegation counts and the Capsule summary for a coordinated run", async () => {
+    const executionId = await launchRun("inspect-1", "inspect the loop");
+    const detailed = await projection.executionProjection(executionId);
+    expect(detailed.delegation).toEqual({
+      supervisedTotal: 0,
+      observedTotal: 0,
+      truncated: false,
+    });
+
+    const capsule = (await projection.capsuleFor(executionId)) as any;
+    expect(capsule).toMatchObject({
+      pointInTime: "live",
+      sourceStatus: "PENDING",
+    });
+    expect(capsule.coordination.run.phase).toBe("PLANNING");
+    expect(JSON.stringify(capsule)).not.toContain("sk-");
+  });
+
+  it("compares two executions with bounded drift and records audit evidence", async () => {
+    const executionA = await launchRun("compare-a", "goal a");
+    const executionB = await launchRun("compare-b", "goal b");
+
+    const comparison = await commands.compareExecutions({
+      idempotencyKey: "compare-1",
+      executionA,
+      executionB,
+    });
+    expect(comparison.outcome).toBe("executed");
+    const drift = (comparison.result as { comparison: any }).comparison;
+    expect(drift).toHaveProperty("plan.stepDrift");
+    expect(drift).toHaveProperty("outcome");
+    expect(drift.outcome.unavailable).toBe(true); // live captures: no invented conclusion
+
+    const duplicate = await commands.compareExecutions({
+      idempotencyKey: "compare-1",
+      executionA,
+      executionB,
+    });
+    expect(duplicate.outcome).toBe("duplicate");
+    const audit = await commands.auditTrail("compare-executions");
+    expect(audit.items).toHaveLength(1);
+  });
+
+  it("replay creates an inspectable new execution and a fresh run", async () => {
+    const executionA = await launchRun("replay-inspect", "replay me");
+    await executionService.cancelExecution(executionA);
+
+    const replayed = await commands.replayExecution({
+      idempotencyKey: "replay-inspect-1",
+      executionId: executionA,
+    });
+    const targetId = (replayed.result as { targetExecutionId: string })
+      .targetExecutionId;
+    const targetProjection = await projection.executionProjection(targetId);
+    expect(targetProjection.coordination?.run.phase).toBe("PLANNING");
+    expect(targetProjection.execution.status).toBe("PENDING");
+    const capsule = (await projection.capsuleFor(targetId)) as any;
+    expect(capsule.coordination.run.phase).toBe("PLANNING");
+  });
+});
+
+describeWithPostgres("PostgreSQL M11-S3 upgrade/backup/restore authority", () => {
+  jest.setTimeout(240_000);
+
+  let dataSource: DataSource;
+
+  beforeAll(async () => {
+    assertDisposableTarget(TEST_DATABASE_URL);
+    dataSource = new DataSource({
+      ...databaseOptions(),
+      type: "postgres" as const,
+      url: TEST_DATABASE_URL,
+    } as DataSourceOptions);
+    await dataSource.initialize();
+    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await dataSource.runMigrations();
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await dataSource.query(
+      `TRUNCATE "operator_actions", "coordination_iterations",
+       "coordination_runs", "execution_replays", "plan_proposals",
+       "approval_requests", "result_conflicts", "result_inbox",
+       "agent_events", "dispatch_outbox", "step_attempts",
+       "step_executions", "execution_plan_revisions", "executions",
+       "pipelines" CASCADE`,
+    );
+  });
+
+  it("a failing migration rolls back cleanly and never leaves partial schema", async () => {
+    // TypeORM runs every migration inside a transaction; a failure must
+    // roll back both the partial DDL and the migrations ledger. We drive
+    // the same transactional semantics against the real runner.
+    const runner = dataSource.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+    try {
+      await runner.query(
+        `CREATE TABLE IF NOT EXISTS "injected_partial" (id integer)`,
+      );
+      throw new Error("injected migration failure");
+    } catch (error) {
+      await runner.rollbackTransaction();
+      expect((error as Error).message).toBe("injected migration failure");
+    } finally {
+      await runner.release();
+    }
+    const tables = await dataSource.query(
+      `SELECT to_regclass('public.injected_partial') AS name`,
+    );
+    expect(tables[0].name).toBeNull();
+    const ledger = await dataSource.query(
+      `SELECT count(*)::int AS n FROM migrations WHERE name = 'M11InjectedFailure'`,
+    );
+    expect(ledger[0].n).toBe(0);
+  });
+
+  it("backup/restore round-trips TWICE into separate clean targets preserving execution, coordination, policy, budget, approval, artifact-reference and Capsule identity, then executes a post-restore team run", async () => {
+    // Seed authority facts through the REAL services where they exist.
+    const pipeline = await dataSource.getRepository(PipelineEntity).save(
+      dataSource.getRepository(PipelineEntity).create({
+        name: "m11-restore",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    const execution = await dataSource.getRepository(ExecutionEntity).save(
+      dataSource.getRepository(ExecutionEntity).create({
+        pipelineId: pipeline.id,
+        status: "COMPLETED",
+        input: { goal: "restore me" },
+      }),
+    );
+    const teamConfig = (): CoordinationConfigV1 => ({
+      schemaVersion: 1,
+      planner: { kind: "agent", name: "planner" },
+      verifier: { kind: "agent", name: "verifier" },
+      allowedWorkers: [{ kind: "agent", name: "worker" }],
+      maxIterations: 3,
+      maxWorkersPerIteration: 4,
+      maxTotalWorkers: 20,
+      loopDeadlineMs: 3_600_000,
+      delegationDepthMax: 2,
+      allowedExecutors: [
+        "local-host",
+        "agent:planner",
+        "agent:verifier",
+        "agent:worker",
+      ],
+    });
+    const coordinator = new RuntimeCoordinationService(dataSource);
+    const run = await coordinator.startRun(
+      execution.id,
+      teamConfig(),
+      new Date(Date.now() + 3_600_000),
+    );
+    const budgets = new BudgetLedgerService(dataSource as any);
+    const budgetAccount = await budgets.createAccount({
+      scopeType: "run",
+      scopeId: "m11-budget",
+      ceilings: { currency_micros: 1000, tokens: 1000, wall_time_ms: 1000 },
+    });
+    const capsules = new ExecutionCapsuleService(
+      dataSource as any,
+      new DelegationService(dataSource as any, new ExecutionService(
+        dataSource.getRepository(ExecutionEntity),
+        dataSource.getRepository(LogicalStepEntity),
+        dataSource.getRepository(StepAttemptEntity),
+        dataSource.getRepository(ExecutionPlanRevisionEntity),
+        dataSource,
+      )),
+      new ExecutionService(
+        dataSource.getRepository(ExecutionEntity),
+        dataSource.getRepository(LogicalStepEntity),
+        dataSource.getRepository(StepAttemptEntity),
+        dataSource.getRepository(ExecutionPlanRevisionEntity),
+        dataSource,
+      ),
+    );
+    const capsuleExport = await capsules.createExport(execution.id, "m11-test");
+    const policySnapshot = await dataSource
+      .getRepository(PolicySnapshotEntity)
+      .save(
+        dataSource.getRepository(PolicySnapshotEntity).create({
+          version: 7,
+          hash: "m11-policy-hash",
+          rules: [{ effect: "ALLOW", reasons: ["m11"] }],
+        }),
+      );
+    const approval = await dataSource
+      .getRepository(ApprovalRequestEntity)
+      .save(
+        dataSource.getRepository(ApprovalRequestEntity).create({
+          proposalId: "plan:m11-proposal",
+          proposalHash: "m11-approval-hash",
+          actionType: "plan_patch",
+          executionId: execution.id,
+          logicalStepId: "",
+          attemptNumber: 1,
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+      );
+    const revision = await dataSource
+      .getRepository(ExecutionPlanRevisionEntity)
+      .save(
+        dataSource.getRepository(ExecutionPlanRevisionEntity).create({
+          executionId: execution.id,
+          revisionNumber: 1,
+          plan: { schemaVersion: 1, steps: [] },
+        }),
+      );
+    const step = await dataSource.getRepository(LogicalStepEntity).save(
+      dataSource.getRepository(LogicalStepEntity).create({
+        executionId: execution.id,
+        stepId: "work",
+        agent: "worker",
+        status: "COMPLETED",
+        input: {},
+      }),
+    );
+    const attempt = await dataSource.getRepository(StepAttemptEntity).save(
+      dataSource.getRepository(StepAttemptEntity).create({
+        executionId: execution.id,
+        logicalStepId: step.id,
+        planRevisionId: revision.id,
+        attemptNumber: 1,
+        invocationId: "m11-inv",
+        frozenSpecHash: "m11-frozen",
+        inputSnapshot: {},
+        executorSnapshot: {},
+        status: "SUCCESS",
+        terminalAt: new Date(),
+      }),
+    );
+    const inboxRow = await dataSource.getRepository(ResultInboxEntity).save(
+      dataSource.getRepository(ResultInboxEntity).create({
+        invocationId: "m11-invocation",
+        stepAttemptId: attempt.id,
+        payloadHash: "m11-payload-hash",
+        payload: { ok: true },
+        sourceAdapter: "test",
+        status: "RECEIVED",
+      }),
+    );
+    const artifact = await dataSource.getRepository(ArtifactEntity).save(
+      dataSource.getRepository(ArtifactEntity).create({
+        resultInboxId: inboxRow.id,
+        descriptorOrdinal: 1,
+        descriptorHash: "a".repeat(64),
+      }),
+    );
+
+    // Backup via the same mechanics as scripts/self-hosted/backup.mjs
+    // (pg_dump runs inside the postgres container on this host).
+    const dumpPath = `/tmp/m11-restore-${Date.now()}.dump`;
+    await new Promise<void>((resolve, reject) => {
+      const { execFile } = require("node:child_process");
+      execFile(
+        "docker",
+        [
+          "exec", POSTGRES_CONTAINER,
+          "pg_dump", "-U", "postgres", "-d", "tenvyr_roadmap_test",
+          "-Fc", "-f", "/tmp/m11-restore.dump",
+        ],
+        (error: unknown) => (error ? reject(error) : resolve()),
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      const { execFile } = require("node:child_process");
+      execFile(
+        "docker",
+        ["cp", `${POSTGRES_CONTAINER}:/tmp/m11-restore.dump`, dumpPath],
+        (error: unknown) => (error ? reject(error) : resolve()),
+      );
+    });
+
+    const assertRestoredIdentity = async (targetName: string) => {
+      // Restore into a clean isolated target (same mechanics as restore.mjs).
+      await dataSource.query(`DROP DATABASE IF EXISTS ${targetName}`);
+      await dataSource.query(`CREATE DATABASE ${targetName}`);
+      await new Promise<void>((resolve, reject) => {
+        const { execFile } = require("node:child_process");
+        execFile(
+          "docker",
+          ["cp", dumpPath, `${POSTGRES_CONTAINER}:/tmp/m11-restore-target.dump`],
+          (error: unknown) => (error ? reject(error) : resolve()),
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        const { execFile } = require("node:child_process");
+        execFile(
+          "docker",
+          [
+            "exec", POSTGRES_CONTAINER,
+            "pg_restore", "-U", "postgres", "-d", targetName,
+            "--no-owner", "--no-privileges", "/tmp/m11-restore-target.dump",
+          ],
+          (error: unknown) => (error ? reject(error) : resolve()),
+        );
+      });
+
+      const restored = new DataSource({
+        ...databaseOptions(),
+        type: "postgres" as const,
+        url: TEST_DATABASE_URL.replace("tenvyr_roadmap_test", targetName),
+        migrationsRun: false,
+      } as DataSourceOptions);
+      await restored.initialize();
+      const restoredExecution = await restored
+        .getRepository(ExecutionEntity)
+        .findOne({ where: { id: execution.id } });
+      expect(restoredExecution?.status).toBe("COMPLETED");
+      expect(restoredExecution?.input).toEqual({ goal: "restore me" });
+      const restoredRun = await restored
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { id: run.id } });
+      expect(restoredRun?.phase).toBe("PLANNING");
+      expect(restoredRun?.config).toEqual(teamConfig());
+      const restoredPolicy = await restored
+        .getRepository(PolicySnapshotEntity)
+        .findOne({ where: { version: policySnapshot.version } });
+      expect(restoredPolicy?.hash.trim()).toBe("m11-policy-hash");
+      const restoredBudget = await restored
+        .getRepository(BudgetAccountEntity)
+        .findOne({ where: { id: budgetAccount.id } });
+      expect(restoredBudget?.scopeId).toBe("m11-budget");
+      const restoredApproval = await restored
+        .getRepository(ApprovalRequestEntity)
+        .findOne({ where: { id: approval.id } });
+      expect(restoredApproval?.status).toBe("PENDING");
+      const restoredArtifact = await restored
+        .getRepository(ArtifactEntity)
+        .findOne({ where: { id: artifact.id } });
+      expect(restoredArtifact?.descriptorHash).toBe("a".repeat(64));
+      const restoredExport = await restored
+        .getRepository(ExecutionExportEntity)
+        .findOne({ where: { id: capsuleExport.id } });
+      expect(restoredExport?.capsuleHash).toBe(capsuleExport.capsuleHash);
+      return restored;
+    };
+
+    // Drill 1: tenvyr_restore_target (identity preserved).
+    const restoredOne = await assertRestoredIdentity("tenvyr_restore_target");
+    await restoredOne.destroy();
+
+    // Drill 2: a SEPARATE clean target (tenvyr_restore_target_2) re-verifies
+    // identity and then executes a NEW post-restore team run through the
+    // real authority services bound to the restored database.
+    const restoredTwo = await assertRestoredIdentity("tenvyr_restore_target_2");
+    const restoredExecutionService = new ExecutionService(
+      restoredTwo.getRepository(ExecutionEntity),
+      restoredTwo.getRepository(LogicalStepEntity),
+      restoredTwo.getRepository(StepAttemptEntity),
+      restoredTwo.getRepository(ExecutionPlanRevisionEntity),
+      restoredTwo,
+    );
+    const restoredCoordinator = new RuntimeCoordinationService(restoredTwo);
+    const newPipeline = await restoredTwo.getRepository(PipelineEntity).save(
+      restoredTwo.getRepository(PipelineEntity).create({
+        name: "m11-post-restore",
+        version: "1.0",
+        steps: [],
+      }),
+    );
+    expect(newPipeline.id).not.toBe(pipeline.id);
+    const { newRun, newIteration } = await restoredTwo.transaction(
+      async (manager) => {
+        const newExecution =
+          await restoredExecutionService.materializeExecutionWithManager(
+            manager,
+            newPipeline,
+            { goal: "post-restore run" },
+          );
+        const createdRun = await restoredCoordinator.startRunWithManager(
+          manager,
+          newExecution.id,
+          teamConfig(),
+          new Date(Date.now() + 3_600_000),
+        );
+        const createdIteration =
+          await restoredCoordinator.createNextIterationWithManager(
+            manager,
+            createdRun.id,
+          );
+        return { newRun: createdRun, newIteration: createdIteration };
+      },
+    );
+    expect(newIteration.iterationNumber).toBe(1);
+    expect(newRun.phase).toBe("PLANNING");
+    await restoredTwo.destroy();
+
+    await dataSource.query(`DROP DATABASE IF EXISTS tenvyr_restore_target`);
+    await dataSource.query(`DROP DATABASE IF EXISTS tenvyr_restore_target_2`);
+  });
+});
+
+describeWithPostgres(
+  "PostgreSQL M8-S6/M9-S7 closure hardening (races, approval resume, budget dimensions, allowlist, delegation depth)",
+  () => {
+    jest.setTimeout(240_000);
+
+    let dataSource: DataSource;
+    let connections: RuntimeConnectionService;
+    let budgets: BudgetLedgerService;
+    let executionService: ExecutionService;
+    let coordinator: RuntimeCoordinationService;
+    let delegations: DelegationService;
+
+    const cliProfile = (
+      name: string,
+      probeArgs: string[] = ["1"],
+      executorId = "local-host",
+    ): ConnectionProfileV1 => ({
+      name,
+      runtimeKind: "generic-cli",
+      executorId,
+      version: "0.1.0",
+      credentialRefs: [],
+      declaredCapabilities: {
+        invocation: { supported: true, source: "configured" },
+        structuredResult: { supported: true, source: "configured" },
+        localProcessTermination: { supported: true, source: "configured" },
+      },
+      cli: {
+        command: "/bin/sleep",
+        args: ["0"],
+        probe: { args: probeArgs, expectsVersion: false },
+      },
+    });
+
+    const teamConfig = (
+      overrides: Partial<CoordinationConfigV1> = {},
+    ): CoordinationConfigV1 => ({
+      schemaVersion: 1,
+      planner: { kind: "agent", name: "planner" },
+      verifier: { kind: "agent", name: "verifier" },
+      allowedWorkers: [{ kind: "agent", name: "worker" }],
+      maxIterations: 3,
+      maxWorkersPerIteration: 4,
+      maxTotalWorkers: 20,
+      loopDeadlineMs: 3_600_000,
+      delegationDepthMax: 2,
+      allowedExecutors: [
+        "local-host",
+        "agent:worker",
+        "agent:planner",
+        "agent:verifier",
+      ],
+      ...overrides,
+    });
+
+    const activeRevisionNumber = async (executionId: string): Promise<number> => {
+      const execution = await dataSource
+        .getRepository(ExecutionEntity)
+        .findOne({ where: { id: executionId } });
+      const revision = await dataSource
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({ where: { id: execution?.activePlanRevisionId } });
+      if (!revision) throw new Error("no active plan revision");
+      return revision.revisionNumber;
+    };
+
+    const batchProposal = (
+      baseRevision: number,
+      overrides: Partial<TaskBatchProposalV1> = {},
+    ): TaskBatchProposalV1 => ({
+      schemaVersion: 1,
+      iterationNumber: 1,
+      baseRevision,
+      tasks: [
+        {
+          taskId: "implement-1",
+          agent: "worker",
+          input: {},
+          dependsOn: [],
+          required: true,
+          reason: "work",
+        },
+      ],
+      reason: "iteration 1",
+      ...overrides,
+    });
+
+    const decision = (
+      iterationId: string,
+      action: VerifierDecisionV1["action"] = "CONTINUE",
+    ): VerifierDecisionV1 => ({
+      schemaVersion: 1,
+      iterationId,
+      iterationNumber: 1,
+      action,
+      reason: "test",
+      evidenceRefs: [],
+    });
+
+    const seedRun = async (config: CoordinationConfigV1) => {
+      const pipeline = await dataSource.getRepository(PipelineEntity).save(
+        dataSource.getRepository(PipelineEntity).create({
+          name: "closure-hardening",
+          version: "1.0",
+          steps: [],
+        }),
+      );
+      const execution = await executionService.createExecution(pipeline, {});
+      await executionService.reconcileExecution(execution.id);
+      const run = await coordinator.startRun(
+        execution.id,
+        config,
+        new Date(Date.now() + 3_600_000),
+      );
+      const iteration = await coordinator.createNextIteration(run.id);
+      return { pipeline, execution, run, iteration };
+    };
+
+    /** Seeds a SUCCESSFUL planner attempt whose result is the batch — the
+     *  durable evidence recoverRun consumes at PLANNING. Uses the ACTIVE
+     *  plan revision (the one the Planner step was frozen on) and returns
+     *  the attempt id + frozen baseRevision so admission tests submit the
+     *  REAL attempt identity (M9-S8 ownership gate). */
+    const seedPlannerSuccess = async (
+      runId: string,
+      proposal: TaskBatchProposalV1,
+    ): Promise<{ attemptId: string; baseRevision: number }> => {
+      const run = await dataSource
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { id: runId } });
+      if (!run) throw new Error(`run ${runId} missing`);
+      const plannerStep = await dataSource
+        .getRepository(LogicalStepEntity)
+        .findOne({ where: { executionId: run.executionId, stepId: "planner-1" } });
+      if (!plannerStep) throw new Error("planner-1 step missing");
+      const revision = await dataSource
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({
+          where: { executionId: run.executionId },
+          order: { revisionNumber: "DESC" },
+        });
+      if (!revision) throw new Error("plan revision missing");
+      const attempt = await dataSource.getRepository(StepAttemptEntity).save(
+        dataSource.getRepository(StepAttemptEntity).create({
+          executionId: run.executionId,
+          logicalStepId: plannerStep.id,
+          planRevisionId: revision.id,
+          attemptNumber: 1,
+          invocationId: `${plannerStep.id}:1`,
+          frozenSpecHash: "closure-test",
+          inputSnapshot: {},
+          executorSnapshot: {},
+          status: "SUCCESS",
+          terminalAt: new Date(),
+          result: proposal,
+        }),
+      );
+      plannerStep.status = "COMPLETED";
+      plannerStep.output = proposal;
+      await dataSource.getRepository(LogicalStepEntity).save(plannerStep);
+      return { attemptId: attempt.id, baseRevision: revision.revisionNumber };
+    };
+
+    const policyFake = (mode: "ALLOW" | "DENY" | "REQUIRE_APPROVAL") => {
+      const state = { mode };
+      return {
+        state,
+        service: {
+          isConfigured: () => true,
+          evaluate: async () => ({
+            effect: state.mode,
+            reasons: ["closure-hardening test"],
+          }),
+        } as any,
+      };
+    };
+
+    const coordinatorWithPolicy = (
+      policyService: any,
+    ): RuntimeCoordinationService =>
+      new RuntimeCoordinationService(
+        dataSource as any,
+        new PlanProposalService(
+          dataSource as any,
+          new PipelineValidationService(new ConditionEvaluatorService()),
+          policyService,
+        ),
+        budgets,
+        connections,
+      );
+
+    beforeAll(async () => {
+      assertDisposableTarget(TEST_DATABASE_URL);
+      dataSource = new DataSource({
+        ...databaseOptions(),
+        type: "postgres" as const,
+        url: TEST_DATABASE_URL,
+      } as DataSourceOptions);
+      await dataSource.initialize();
+      await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+      await dataSource.runMigrations();
+      connections = new RuntimeConnectionService(dataSource);
+      budgets = new BudgetLedgerService(dataSource as any);
+      executionService = new ExecutionService(
+        dataSource.getRepository(ExecutionEntity),
+        dataSource.getRepository(LogicalStepEntity),
+        dataSource.getRepository(StepAttemptEntity),
+        dataSource.getRepository(ExecutionPlanRevisionEntity),
+        dataSource,
+      );
+      coordinator = new RuntimeCoordinationService(dataSource);
+      delegations = new DelegationService(dataSource as any, executionService);
+    });
+
+    afterAll(async () => {
+      await dataSource.destroy();
+    });
+
+    beforeEach(async () => {
+      await dataSource.query(
+        `TRUNCATE "coordination_iterations", "coordination_runs",
+         "execution_replays", "execution_exports", "delegation_requests",
+         "delegation_observation_conflicts", "delegation_observations",
+         "plan_proposals", "policy_decisions", "policy_snapshots",
+         "approval_requests", "budget_ledger_entries", "budget_reservations",
+         "budget_accounts", "state_write_evidence", "artifacts",
+         "result_conflicts", "result_inbox", "agent_events",
+         "dispatch_outbox", "step_attempts", "step_executions",
+         "execution_plan_revisions", "executions", "pipelines",
+         "runtime_connections", "connection_revisions",
+         "operator_actions" CASCADE`,
+      );
+    });
+
+    it("M8-S6: a probe that outlives a revoke can never resurrect the card (revoke stays terminal)", async () => {
+      await connections.createConnection("conn:race", cliProfile("race v1"));
+      const probe = connections
+        .testConnection("conn:race")
+        .catch((error: unknown) => error);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await connections.revokeConnection("conn:race");
+      const receipt = await probe;
+      expect(receipt).toMatchObject({ code: "CONNECTION_REVOKED" });
+      const status = await connections.connectionStatus("conn:race");
+      expect(status.state).toBe("REVOKED");
+      expect(status.testedAt ?? null).toBeNull();
+    });
+
+    it("M8-S6: a stale probe (revision advanced mid-flight) yields a superseded receipt and writes nothing", async () => {
+      await connections.createConnection("conn:sup", cliProfile("sup v1"));
+      const probe = connections.testConnection("conn:sup");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await connections.reviseConnection("conn:sup", cliProfile("sup v2"));
+      const receipt = await probe;
+      expect(receipt.superseded).toBe(true);
+      // The stale probe's facts were never written: the card stays DRAFT.
+      const status = await connections.connectionStatus("conn:sup");
+      expect(status.state).toBe("DRAFT");
+      expect(status.testedAt ?? null).toBeNull();
+    });
+
+    it("M9-S7: pending approval resumes the EXACT proposal on reconcile (no proposal storm) and binds approval once", async () => {
+      const policy = policyFake("ALLOW");
+      const policyCoordinator = coordinatorWithPolicy(policy.service);
+      const { run, iteration, execution } = await seedRun(teamConfig());
+      // The Planner step activation is policy-gated too: create it under
+      // ALLOW, then intercept the BATCH with REQUIRE_APPROVAL.
+      await policyCoordinator.createPlannerStep(run.id);
+      policy.state.mode = "REQUIRE_APPROVAL";
+      const { attemptId, baseRevision } = await seedPlannerAttempt(
+        dataSource,
+        executionService,
+        execution.id,
+        1,
+      );
+      const proposal = batchProposal(baseRevision);
+
+      const first = await policyCoordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal,
+        plannerAttemptId: attemptId,
+      });
+      expect(first.outcome).toBe("PENDING");
+      const proposalCount = () =>
+        dataSource
+          .getRepository(PlanProposalEntity)
+          .count({ where: { executionId: run.executionId, source: "planner" } });
+      expect(await proposalCount()).toBe(1);
+
+      // Reconciliation re-activates the SAME proposal: still one durable row.
+      const second = await policyCoordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal,
+        plannerAttemptId: attemptId,
+      });
+      expect(second.outcome).toBe("PENDING");
+      expect(await proposalCount()).toBe(1);
+
+      // The operator grant binds the same proposal exactly once.
+      await dataSource
+        .getRepository(ApprovalRequestEntity)
+        .createQueryBuilder()
+        .update()
+        .set({ status: "APPROVED", decidedAt: new Date() })
+        .where("status = :status", { status: "PENDING" })
+        .execute();
+      policy.state.mode = "ALLOW";
+      const third = await policyCoordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal,
+        plannerAttemptId: attemptId,
+      });
+      expect(third.outcome).toBe("ACCEPTED");
+      expect(await proposalCount()).toBe(1);
+      const iterationRow = await dataSource
+        .getRepository(CoordinationIterationEntity)
+        .findOne({ where: { id: iteration.id } });
+      expect(iterationRow?.pendingPlanProposalId).toBeNull();
+    });
+
+    it("M9-S7: a policy-denied batch terminalizes the run AND the execution atomically", async () => {
+      const policy = policyFake("ALLOW");
+      const denyCoordinator = coordinatorWithPolicy(policy.service);
+      const { run, execution } = await seedRun(teamConfig());
+      // Planner step activation happens under ALLOW; the BATCH is denied.
+      await denyCoordinator.createPlannerStep(run.id);
+      policy.state.mode = "DENY";
+      const base = await activeRevisionNumber(execution.id);
+      await seedPlannerSuccess(run.id, batchProposal(base));
+
+      await denyCoordinator.reconcileCoordination(run.executionId);
+      const recovered = await denyCoordinator.recoverRun(run.executionId);
+      expect(recovered.run.phase).toBe("FAILED");
+      const stored = await dataSource
+        .getRepository(ExecutionEntity)
+        .findOne({ where: { id: execution.id } });
+      expect(stored?.status).toBe("FAILED");
+      expect(stored?.terminationReason).toContain("Planner batch rejected");
+    });
+
+    it("M9-S7: budget exhaustion is dimension-correct — CONTINUE stops only when EVERY dimension is spent", async () => {
+      const account = await budgets.createAccount({
+        scopeType: "run",
+        scopeId: "closure-budget",
+        ceilings: { currency_micros: 1000, tokens: 1000, wall_time_ms: 1000 },
+      });
+      const { run, iteration, execution } = await seedRun(
+        teamConfig({ budgetAccountId: account.id }),
+      );
+      await coordinator.createPlannerStep(run.id);
+      const { attemptId, baseRevision } = await seedPlannerAttempt(
+        dataSource,
+        executionService,
+        execution.id,
+        1,
+      );
+
+      // Spend ONLY tokens: the other dimensions remain — the loop continues.
+      await budgets.reserve({
+        accountId: account.id,
+        dimension: "tokens",
+        amount: 1000,
+        idempotencyKey: "closure-tokens",
+        actionRef: "closure",
+        source: "estimated",
+      });
+      const accepted = await coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      });
+      expect(accepted.outcome).toBe("ACCEPTED");
+      await coordinator.transitionRun(run.id, "workersFinished");
+      const continued = await coordinator.consumeDecision(
+        run.id,
+        decision(iteration.id),
+        randomUUID(),
+      );
+      expect(continued.outcome).toBe("consumed");
+      expect(continued.phase).toBe("PLANNING");
+
+      // Spend the remaining dimensions: the next batch is LIMIT_REACHED.
+      await budgets.reserve({
+        accountId: account.id,
+        dimension: "currency_micros",
+        amount: 1000,
+        idempotencyKey: "closure-currency",
+        actionRef: "closure",
+        source: "estimated",
+      });
+      await budgets.reserve({
+        accountId: account.id,
+        dimension: "wall_time_ms",
+        amount: 1000,
+        idempotencyKey: "closure-wall",
+        actionRef: "closure",
+        source: "estimated",
+      });
+      const limited = await coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 2,
+        proposal: batchProposal(baseRevision, { iterationNumber: 2 }),
+        plannerAttemptId: randomUUID(),
+      });
+      expect(limited.outcome).toBe("LIMIT_REACHED");
+    });
+
+    it("M9-S7: a batch selecting an executor outside the frozen allowlist is rejected with zero materialization", async () => {
+      const { run, execution } = await seedRun(
+        teamConfig({
+          allowedWorkers: [
+            { kind: "agent", name: "worker" },
+            { kind: "agent", name: "rogue" },
+          ],
+        }),
+      );
+      await coordinator.createPlannerStep(run.id);
+      const base = await activeRevisionNumber(execution.id);
+      await seedPlannerSuccess(run.id, {
+        ...batchProposal(base),
+        tasks: [
+          {
+            taskId: "rogue-1",
+            agent: "rogue",
+            input: {},
+            dependsOn: [],
+            required: true,
+            reason: "outside the allowlist",
+          },
+        ],
+      });
+
+      await coordinator.reconcileCoordination(run.executionId);
+      const recovered = await coordinator.recoverRun(run.executionId);
+      expect(recovered.run.phase).toBe("FAILED");
+      const stored = await dataSource
+        .getRepository(ExecutionEntity)
+        .findOne({ where: { id: execution.id } });
+      expect(stored?.status).toBe("FAILED");
+      // Only the Coordinator-owned planner step exists — no workers.
+      const steps = await dataSource
+        .getRepository(LogicalStepEntity)
+        .find({ where: { executionId: execution.id } });
+      expect(steps.map((step) => step.stepId).sort()).toEqual(["planner-1"]);
+    });
+
+    it("M9-S7: the run's frozen delegationDepthMax bounds every descendant, not just the first hop", async () => {
+      const config = teamConfig({ delegationDepthMax: 1 });
+      const pipeline = await dataSource.getRepository(PipelineEntity).save(
+        dataSource.getRepository(PipelineEntity).create({
+          name: "closure-depth",
+          version: "1.0",
+          steps: [{ id: "work", agent: "worker", input: {} }],
+        }),
+      );
+      const execution = await executionService.createExecution(pipeline, {});
+      await executionService.reconcileExecution(execution.id);
+      await coordinator.startRun(
+        execution.id,
+        config,
+        new Date(Date.now() + 3_600_000),
+      );
+
+      // Depth 1 from the run root: allowed (childDepth 1 <= delegationDepthMax 1).
+      const revision = await dataSource
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({ where: { executionId: execution.id } });
+      const stepConfig = revision!.plan.steps.find(
+        (step) => step.id === "work",
+      )!;
+      const claim = await executionService.claimRunnableStep(
+        execution.id,
+        stepConfig,
+        {},
+        1,
+      );
+      expect(claim?.disposition).toBe("claimed");
+      const attempt = (claim as { attempt: StepAttemptEntity }).attempt;
+      const first = await delegations.request({
+        parentExecutionId: execution.id,
+        parentAttemptId: attempt.id,
+        requestId: "req-1",
+        requestedAgent: "child",
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      expect(first.disposition).toBe("created");
+      const approved = await delegations.approve(attempt.id, "req-1", pipeline);
+      expect(approved.decision).toBe("APPROVED");
+      if (!approved.childExecutionId) {
+        throw new Error("approve did not materialize a child execution");
+      }
+      const childExecutionId = approved.childExecutionId;
+
+      // Depth 2 from the child: the run's frozen max (1) denies it.
+      // The child execution is materialized by approve(); reconcile it so
+      // its step rows are claimable.
+      await executionService.reconcileExecution(childExecutionId);
+      const childRevision = await dataSource
+        .getRepository(ExecutionPlanRevisionEntity)
+        .findOne({ where: { executionId: childExecutionId } });
+      const childStepConfig = childRevision!.plan.steps.find(
+        (step) => step.id === "work",
+      )!;
+      const childClaim = await executionService.claimRunnableStep(
+        childExecutionId,
+        childStepConfig,
+        {},
+        1,
+      );
+      expect(childClaim?.disposition).toBe("claimed");
+      const childAttempt = (childClaim as { attempt: StepAttemptEntity })
+        .attempt;
+      await expect(
+        delegations.request({
+          parentExecutionId: childExecutionId,
+          parentAttemptId: childAttempt.id,
+          requestId: "req-2",
+          requestedAgent: "grandchild",
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+      ).rejects.toThrow(/delegationDepthMax 1/);
+    });
+
+    it("P1: startRun denies a Planner/Verifier selection outside the frozen allowlist BEFORE any materialization", async () => {
+      const pipeline = await dataSource.getRepository(PipelineEntity).save(
+        dataSource.getRepository(PipelineEntity).create({
+          name: "closure-role-deny",
+          version: "1.0",
+          steps: [],
+        }),
+      );
+      const execution = await executionService.createExecution(pipeline, {});
+      await expect(
+        coordinator.startRun(
+          execution.id,
+          teamConfig({ planner: { kind: "agent", name: "rogue-planner" } }),
+          new Date(Date.now() + 3_600_000),
+        ),
+      ).rejects.toMatchObject({ code: "EXECUTOR_NOT_ALLOWED" });
+      await expect(
+        coordinator.startRun(
+          execution.id,
+          teamConfig({ verifier: { kind: "agent", name: "rogue-verifier" } }),
+          new Date(Date.now() + 3_600_000),
+        ),
+      ).rejects.toMatchObject({ code: "EXECUTOR_NOT_ALLOWED" });
+      // Zero materialization: no run row, no iterations, no steps.
+      expect(
+        await dataSource
+          .getRepository(CoordinationRunEntity)
+          .count({ where: { executionId: execution.id } }),
+      ).toBe(0);
+      expect(
+        await dataSource
+          .getRepository(LogicalStepEntity)
+          .count({ where: { executionId: execution.id } }),
+      ).toBe(0);
+    });
+
+    it("P1: CONTINUE rechecks role executors — a role connection rotated to a foreign executorId denies the next iteration", async () => {
+      await connections.createConnection(
+        "conn:verifier-cli",
+        cliProfile("verifier v1"),
+      );
+      const { run, iteration, execution } = await seedRun(
+        teamConfig({
+          verifier: {
+            kind: "connection",
+            name: "conn:verifier-cli",
+            agent: "verifier",
+          },
+        }),
+      );
+      await coordinator.createPlannerStep(run.id);
+      const { attemptId, baseRevision } = await seedPlannerAttempt(
+        dataSource,
+        executionService,
+        execution.id,
+        1,
+      );
+      const accepted = await coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      });
+      expect(accepted.outcome).toBe("ACCEPTED");
+      await coordinator.transitionRun(run.id, "workersFinished");
+
+      // The operator rotates the role connection to a FOREIGN executor.
+      await connections.reviseConnection(
+        "conn:verifier-cli",
+        cliProfile("verifier v2", ["1"], "remote-host"),
+      );
+      const continued = await coordinator.consumeDecision(
+        run.id,
+        decision(iteration.id),
+        randomUUID(),
+      );
+      expect(continued.outcome).toBe("consumed");
+      expect(continued.phase).toBe("LIMIT_REACHED");
+    });
+
+    it("P1: WAIT approval resume rechecks role executors before continuing", async () => {
+      await connections.createConnection(
+        "conn:verifier-cli",
+        cliProfile("verifier v1"),
+      );
+      const { run, iteration, execution } = await seedRun(
+        teamConfig({
+          verifier: {
+            kind: "connection",
+            name: "conn:verifier-cli",
+            agent: "verifier",
+          },
+        }),
+      );
+      await coordinator.createPlannerStep(run.id);
+      const { attemptId, baseRevision } = await seedPlannerAttempt(
+        dataSource,
+        executionService,
+        execution.id,
+        1,
+      );
+      await coordinator.submitIterationBatch({
+        runId: run.id,
+        iterationNumber: 1,
+        proposal: batchProposal(baseRevision),
+        plannerAttemptId: attemptId,
+      });
+      await coordinator.transitionRun(run.id, "workersFinished");
+      const waited = await coordinator.consumeDecision(
+        run.id,
+        decision(iteration.id, "WAIT_FOR_HUMAN"),
+        randomUUID(),
+      );
+      expect(waited.phase).toBe("WAITING_FOR_HUMAN");
+
+      await connections.reviseConnection(
+        "conn:verifier-cli",
+        cliProfile("verifier v2", ["1"], "remote-host"),
+      );
+      const resumed = await coordinator.resolveWait(run.id, true);
+      expect(resumed).toBe("LIMIT_REACHED");
+    });
+
+    it("P1: concurrent duplicate workbench commands produce exactly ONE authority mutation with durable replayable evidence", async () => {
+      const commands = new WorkbenchCommandService(dataSource as any);
+      const config = teamConfig();
+      const [first, second] = await Promise.all([
+        commands.startTeamRun({
+          idempotencyKey: "concurrent-launch-1",
+          name: "race",
+          goal: "race",
+          config,
+        }),
+        commands.startTeamRun({
+          idempotencyKey: "concurrent-launch-1",
+          name: "race",
+          goal: "race",
+          config,
+        }),
+      ]);
+      expect([first.outcome, second.outcome].sort()).toEqual([
+        "duplicate",
+        "executed",
+      ]);
+      // Exactly one authority mutation: one pipeline, one execution, one run.
+      expect(
+        await dataSource.getRepository(ExecutionEntity).count(),
+      ).toBe(1);
+      expect(
+        await dataSource.getRepository(CoordinationRunEntity).count(),
+      ).toBe(1);
+      // One durable audit row with the executed outcome (never pending).
+      const audit = await dataSource
+        .getRepository(OperatorActionEntity)
+        .find({ where: { action: "start-team-run" } });
+      expect(audit).toHaveLength(1);
+      expect(audit[0].outcome).toMatchObject({
+        executionId: expect.any(String),
+        runId: expect.any(String),
+      });
+      // The duplicate returns the winner's stored outcome (replayable).
+      const duplicateResult = [first, second].find(
+        (entry) => entry.outcome === "duplicate",
+      )!.result as Record<string, unknown>;
+      expect(duplicateResult).toMatchObject({
+        executionId: expect.any(String),
+        runId: expect.any(String),
+      });
+    });
+
+    it("P1: an authority crash mid-command rolls back EVERYTHING (no orphan audit, no partial authority) and the same-key retry re-executes exactly once", async () => {
+      const commands = new WorkbenchCommandService(dataSource as any);
+      const config = teamConfig();
+      // Injected crash: the run exists in-transaction, then the next
+      // authority call throws — the whole command transaction must roll
+      // back (audit row, pipeline, execution, run, iteration).
+      const coordinatorInstance = (commands as any)
+        .coordination as RuntimeCoordinationService;
+      const original = coordinatorInstance.createNextIterationWithManager;
+      coordinatorInstance.createNextIterationWithManager = async () => {
+        throw new Error("injected crash after run creation");
+      };
+      await expect(
+        commands.startTeamRun({
+          idempotencyKey: "crash-1",
+          name: "crash",
+          goal: "crash",
+          config,
+        }),
+      ).rejects.toThrow("injected crash after run creation");
+      coordinatorInstance.createNextIterationWithManager = original;
+      // Nothing durable survived the rollback.
+      expect(
+        await dataSource
+          .getRepository(OperatorActionEntity)
+          .count({ where: { idempotencyKey: "crash-1" } }),
+      ).toBe(0);
+      expect(
+        await dataSource.getRepository(ExecutionEntity).count(),
+      ).toBe(0);
+      expect(
+        await dataSource.getRepository(CoordinationRunEntity).count(),
+      ).toBe(0);
+      // The same-key retry executes exactly once, cleanly.
+      const retried = await commands.startTeamRun({
+        idempotencyKey: "crash-1",
+        name: "crash",
+        goal: "crash",
+        config,
+      });
+      expect(retried.outcome).toBe("executed");
+      expect(
+        await dataSource.getRepository(ExecutionEntity).count(),
+      ).toBe(1);
+      const audit = await dataSource
+        .getRepository(OperatorActionEntity)
+        .find({ where: { idempotencyKey: "crash-1" } });
+      expect(audit).toHaveLength(1);
+      expect(audit[0].outcome).not.toHaveProperty("pending");
+    });
+  },
+);

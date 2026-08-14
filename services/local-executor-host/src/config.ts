@@ -46,6 +46,22 @@ export type HostAgentConfig = {
   maxStderrBytes: number;
   port: number;
   bearerTokenEnv: string;
+  /**
+   * M8-S6: the immutable Runtime Connection revision this agent is bound to
+   * serve. Declared together with `configHash` (the revision's frozen
+   * config hash). Every invocation MUST carry a matching connection
+   * reference; anything else fails closed BEFORE spawn. Absent binding =
+   * connection-free legacy agent (an invocation that DOES carry a
+   * connection reference is refused).
+   */
+  connectionId?: string;
+  configHash?: string;
+  /**
+   * M8-S6: when true and the child exits 0, stdout is parsed as one JSON
+   * document and becomes the structured result output. A parse failure is a
+   * deterministic EXECUTOR_HOST_INVALID_STRUCTURED_RESULT failure.
+   */
+  structuredResult?: boolean;
 };
 
 export type HostConfig = {
@@ -207,6 +223,37 @@ function parseAgentConfig(
       "EXECUTOR_HOST_CALLBACK_KEYS must contain at least one key",
     );
   }
+  // M8-S6: the connection binding is declared as a pair — never one side.
+  const connectionId =
+    value.connectionId === undefined
+      ? undefined
+      : boundedString(
+          value.connectionId,
+          `Agent "${agent}" connectionId`,
+          HOST_CONFIG_BOUNDS.commandMaxLength,
+        );
+  const configHash =
+    value.configHash === undefined
+      ? undefined
+      : boundedString(
+          value.configHash,
+          `Agent "${agent}" configHash`,
+          HOST_CONFIG_BOUNDS.commandMaxLength,
+        );
+  if ((connectionId === undefined) !== (configHash === undefined)) {
+    throw configurationError(
+      `Agent "${agent}" must declare connectionId and configHash together (M8-S6 binding)`,
+    );
+  }
+  let structuredResult: boolean | undefined;
+  if (value.structuredResult !== undefined) {
+    if (typeof value.structuredResult !== "boolean") {
+      throw configurationError(
+        `Agent "${agent}" structuredResult must be a boolean`,
+      );
+    }
+    structuredResult = value.structuredResult;
+  }
   return {
     agent,
     command,
@@ -219,6 +266,9 @@ function parseAgentConfig(
     maxStderrBytes,
     port,
     bearerTokenEnv,
+    ...(connectionId !== undefined ? { connectionId } : {}),
+    ...(configHash !== undefined ? { configHash } : {}),
+    ...(structuredResult !== undefined ? { structuredResult } : {}),
   };
 }
 

@@ -11,6 +11,12 @@ Tenvyr owns when work runs, which runtime and transport execute it, and how the
 workflow records success or failure. Agent applications keep ownership of
 prompts, tools, reasoning, frameworks, and model-provider calls.
 
+Runtime Connections (M8) let an operator configure, detect, health-check,
+revoke, and freeze Codex, Claude, OpenCode, Generic CLI, HTTP Worker, and
+Kafka Worker connections. Every claimed attempt freezes a secret-free
+connection revision and conservative capability set; provider selection and
+authentication stay inside the runtime.
+
 ## Why it exists
 
 Agent code is easy to start and hard to operate. A production workflow needs a
@@ -22,9 +28,11 @@ replaceable.
 ## What it is not
 
 Tenvyr is not a universal LLM gateway, model router, agent framework, prompt
-playground, or substitute for a model's native reasoning tools. v0.1.0 does not
-include a provider registry, fallback chain, policy engine, artifact store,
-OpenTelemetry integration, or framework-specific adapters.
+playground, or substitute for a model's native reasoning tools. It is not a
+provider registry, credential vault, or sandbox: local execution is
+trusted-code-only, Runtime Connections store credential references (never
+values), and the External Production Exposure Gate keeps administration
+local/self-hosted.
 
 ## Native subagents vs Tenvyr
 
@@ -58,6 +66,19 @@ callbacks with HMAC signatures. Both paths produce the same versioned
 | Anthropic                          | Configured Java Runner path; no live API call in CI         |
 | Ollama                             | Configured Java Runner path; no live model call in CI       |
 | Arbitrary provider inside a Worker | Provider-neutral application pattern                        |
+
+Local runtime connection profiles (M8, official docs accessed 2026-08-12):
+
+| Runtime connection | Pinned version | Probe (documented, non-billable)                    |
+| ------------------ | -------------- | --------------------------------------------------- |
+| Codex CLI          | 0.147.0        | `codex login status` (auth; version output not documented) |
+| Claude Code        | 2.1.228        | `claude --version` + `claude auth status`           |
+| OpenCode           | 1.18.16        | `opencode --version` (provider auth is runtime-owned) |
+| Generic CLI        | operator-declared | fixed `--version`-style probe per operator profile  |
+
+Live gates are opt-in and non-billable; deterministic fake-CLI conformance
+tests always run. Detected installed versions are evidence — the pin is the
+version the profile was written against.
 
 Gemini, Azure OpenAI, Bedrock, Vertex AI, and other compatible providers can be
 called from Worker application code, but they are not first-class verified
@@ -122,6 +143,11 @@ interview flow.
 - Cancellation is cooperative, and remote cancellation is not implemented.
 - Provider calls are application/runtime responsibilities. Java Runner token
   usage is currently estimated and labeled `usageSource=estimated`.
+- Runtime Connections: connection administration is local/internal behind the
+  open External Production Exposure Gate; probes are operator-initiated,
+  rate-limited, and bounded; probe concurrency is limited per connection;
+  health status is projection, never dispatch authority (only REVOKED denies).
+- Local execution is trusted-code-only, not a sandbox.
 - Protocol v1 retains compatibility identifiers documented in the
   [identity record](docs/product/identity.md).
 - Packages are MIT-licensed but remain private and unpublished.

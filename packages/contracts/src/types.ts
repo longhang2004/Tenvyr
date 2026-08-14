@@ -25,6 +25,17 @@ export type AgentInvocationV1 = {
     correlationId: string;
   };
   metadata?: Record<string, JsonValue>;
+  /**
+   * M8-S6: the frozen immutable connection revision reference the attempt
+   * was claimed against. The executor host validates its fixed operator
+   * configuration against this identity and FAILS CLOSED on mismatch —
+   * the revision, not the pipeline, is authoritative for what runs.
+   */
+  connection?: {
+    connectionId: string;
+    revisionNumber: number;
+    configHash: string;
+  };
 };
 
 export type AgentResultStatus =
