@@ -23,6 +23,7 @@ import { RuntimeConnectionEntity } from "../entities/runtime-connection.entity";
 import { ConnectionRevisionEntity } from "../entities/connection-revision.entity";
 import { CoordinationRunEntity } from "../entities/coordination-run.entity";
 import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
+import { WorkspaceEntity } from "../entities/workspace.entity";
 import { OperatorActionEntity } from "../entities/operator-action.entity";
 import { BudgetAccountEntity } from "../entities/budget-account.entity";
 import { BudgetReservationEntity } from "../entities/budget-reservation.entity";
@@ -47,6 +48,7 @@ import { RoadmapLineageIntegrity1722270013000 } from "./migrations/1722270013000
 import { MilestoneEightConnections1722270014000 } from "./migrations/1722270014000-MilestoneEightConnections";
 import { MilestoneNineCoordination1722270015000 } from "./migrations/1722270015000-MilestoneNineCoordination";
 import { MilestoneTenOperatorActions1722270016000 } from "./migrations/1722270016000-MilestoneTenOperatorActions";
+import { WorkspaceIdentity1722270018000 } from "./migrations/1722270018000-WorkspaceIdentity";
 import { CoordinationApprovalResume1722270017000 } from "./migrations/1722270017000-CoordinationApprovalResume";
 
 export function databaseOptions(
@@ -95,6 +97,7 @@ export function databaseOptions(
       ConnectionRevisionEntity,
       CoordinationRunEntity,
       CoordinationIterationEntity,
+      WorkspaceEntity,
       OperatorActionEntity,
     ],
     migrations: [
@@ -116,6 +119,7 @@ export function databaseOptions(
       MilestoneNineCoordination1722270015000,
       MilestoneTenOperatorActions1722270016000,
       CoordinationApprovalResume1722270017000,
+      WorkspaceIdentity1722270018000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

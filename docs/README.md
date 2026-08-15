@@ -35,7 +35,7 @@ prose. The conflict must still be corrected rather than ignored.
 - [Control plane](architecture/control-plane.md)
 - [Coordinator loop domain](architecture/coordination-loop.md)
 - [Operator Workbench](architecture/workbench.md)
-- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md)
+- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md), [supervised coding team runs](operations/supervised-coding-team.md)
 - [Agents and runners](architecture/agents-and-runners.md)
 - Contracts: [agent protocol v1](architecture/contracts/agent-protocol-v1.md)
   and [JSON interoperability](architecture/contracts/json-interoperability.md)
@@ -84,7 +84,8 @@ Developer tooling is not a Tenvyr production runtime feature.
 
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md),
-  and its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md)
+  its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
+  and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take
   precedence where its assumptions are stale.

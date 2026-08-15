@@ -212,6 +212,11 @@ export type ExecutionCapsuleV1 = {
       currentIterationNumber: number;
       cumulativeWorkers: number;
       config: unknown;
+      /** Frozen workspace snapshot the run executed against (Product
+       *  Phase 1); null for runs without a workspace. */
+      workspace: unknown;
+      /** Operator-declared acceptance evidence (run metadata only). */
+      acceptanceEvidence: unknown;
     };
     iterations: Array<{
       iterationNumber: number;
@@ -905,6 +910,8 @@ export class ExecutionCapsuleService {
             currentIterationNumber: coordinationRun.currentIterationNumber,
             cumulativeWorkers: coordinationRun.cumulativeWorkers,
             config: coordinationRun.config,
+            workspace: coordinationRun.workspace,
+            acceptanceEvidence: coordinationRun.acceptanceEvidence,
           },
           iterations: coordinationIterations.map((iteration) => ({
             iterationNumber: iteration.iterationNumber,

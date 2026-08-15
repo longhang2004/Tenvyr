@@ -109,6 +109,39 @@ export class AppController {
     return this.forwardToOrchestrator("/workbench/connections");
   }
 
+  @Get("api/workbench/onboarding/:runtimeKind")
+  async getWorkbenchOnboarding(@Param("runtimeKind") runtimeKind: string) {
+    return this.forwardToOrchestrator(
+      `/workbench/onboarding/${encodeURIComponent(runtimeKind)}`,
+    );
+  }
+
+  @Get("api/workbench/workspaces")
+  async getWorkbenchWorkspaces() {
+    return this.forwardToOrchestrator("/workbench/workspaces");
+  }
+
+  @Post("api/workbench/commands/onboard-runtime")
+  async onboardRuntime(@Body() body: any) {
+    return this.forwardToOrchestrator("/workbench/commands/onboard-runtime", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Post("api/workbench/commands/create-workspace")
+  async createWorkspace(@Body() body: any) {
+    return this.forwardToOrchestrator("/workbench/commands/create-workspace", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Get("api/workbench/commands/team-templates")
+  async teamTemplates() {
+    return this.forwardToOrchestrator("/workbench/commands/team-templates");
+  }
+
   @Get("api/workbench/executions")
   async getWorkbenchExecutions(@Query("page") page?: string) {
     return this.forwardToOrchestrator(

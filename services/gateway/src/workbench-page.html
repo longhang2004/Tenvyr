@@ -33,6 +33,17 @@
 </p>
 <div aria-live="polite" id="live-region"></div>
 
+<section aria-labelledby="onboarding-heading">
+  <h2 id="onboarding-heading">Runtime onboarding</h2>
+  <p class="notice" role="note">
+    Detection probes the official CLI on PATH (never credentials).
+    Authentication stays owned by the runtime; Tenvyr only reports
+    readiness. [Connect] creates the connection from the documented
+    template and tests it.
+  </p>
+  <div id="onboarding"></div>
+</section>
+
 <section aria-labelledby="connections-heading">
   <h2 id="connections-heading">Runtime connections</h2>
   <details id="connection-onboarding">
@@ -68,6 +79,30 @@
   <form id="launch-form">
     <label>Run name <input name="name" maxlength="255" value="team-run"></label>
     <label>Goal <textarea name="goal" rows="3" maxlength="4096" required></textarea></label>
+    <div id="template-buttons" class="row">
+      <strong>Templates:</strong>
+      <button type="button" class="template-button" data-template="software-engineering">Software Engineering</button>
+      <button type="button" class="template-button" data-template="code-review">Code Review</button>
+    </div>
+    <fieldset>
+      <legend>Workspace (repository the team executes against)</legend>
+      <label>Existing workspace <select name="workspaceId"><option value="">— none (run without a workspace) —</option></select></label>
+      <label>Or workspace path <input name="workspacePath" maxlength="4096" placeholder="/path/to/repository"></label>
+      <p class="notice" role="note">
+        A bounded snapshot (path, git root, branch, HEAD SHA, dirty state)
+        is frozen at launch and injected into worker inputs and the
+        verifier context. Execution runs against the mutable local working
+        tree — no snapshot isolation is claimed.
+      </p>
+    </fieldset>
+    <fieldset>
+      <legend>Acceptance evidence (optional run metadata — never executed by Tenvyr)</legend>
+      <label>Test command <input name="testCommand" maxlength="1024" placeholder="pnpm test"></label>
+      <label>Build command <input name="buildCommand" maxlength="1024" placeholder="pnpm build"></label>
+      <label>Lint command <input name="lintCommand" maxlength="1024"></label>
+      <label>Typecheck command <input name="typecheckCommand" maxlength="1024"></label>
+      <label>Required artifacts (comma separated) <input name="requiredArtifacts" maxlength="1024" placeholder="dist/index.js"></label>
+    </fieldset>
     <div id="role-planner" class="card" data-role="planner">
       <strong>Planner</strong>
       <div class="row">
@@ -193,6 +228,155 @@ const splitList = (value) =>
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
+
+/* Product Phase 1: guided runtime onboarding cards. */
+const ONBOARDING_KINDS = ["codex", "claude", "opencode"];
+
+const renderOnboarding = async () => {
+  const container = document.getElementById("onboarding");
+  container.replaceChildren();
+  for (const kind of ONBOARDING_KINDS) {
+    const card = el("div", { class: "card" });
+    const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+    card.append(el("div", { class: "row" }, [el("strong", { text: `${label} CLI` })]));
+    card.append(el("p", { text: "Probing…" }));
+    container.append(card);
+    let status = null;
+    try {
+      const response = await fetch(`/api/workbench/onboarding/${encodeURIComponent(kind)}`);
+      status = (await response.json()).status ?? null;
+    } catch {
+      // leave status null
+    }
+    card.replaceChildren();
+    const row = el("div", { class: "row" });
+    row.append(el("strong", { text: `${label} CLI` }));
+    if (!status || !status.detected) {
+      row.append(el("span", { text: "Not detected" }));
+      card.append(row);
+      card.append(
+        el("p", {
+          text:
+            status?.guidance?.[0] ??
+            `"${kind}" was not found on PATH — install the official CLI first.`,
+        }),
+      );
+    } else {
+      row.append(
+        el("span", {
+          text: `Installed: ${status.executable}`,
+          title: status.executable,
+        }),
+      );
+      row.append(
+        el("span", {
+          text: `Version: ${status.version ?? status.pinnedVersion}${status.version ? "" : " (operator-declared)"}`,
+        }),
+      );
+      row.append(
+        el("span", {
+          text:
+            status.authReady === null
+              ? "Auth: runtime-owned"
+              : status.authReady
+                ? "Auth: ready"
+                : "Auth: required",
+        }),
+      );
+      card.append(row);
+      for (const line of status.guidance ?? []) {
+        card.append(el("p", { text: line }));
+      }
+      row.append(
+        el("button", {
+          text: "Connect",
+          onclick: async () => {
+            row.append(el("span", { text: "Connecting…" }));
+            try {
+              const response = await fetch("/api/workbench/commands/onboard-runtime", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  idempotencyKey: crypto.randomUUID(),
+                  runtimeKind: kind,
+                }),
+              });
+              const data = await response.json();
+              if (data.outcome === "executed" || data.outcome === "duplicate") {
+                live(`Runtime ${kind} connected (${data.result?.connectionId}).`);
+              } else {
+                live(`Connect failed: ${JSON.stringify(data.error ?? data)}`);
+              }
+            } catch (error) {
+              live(`Connect failed: ${error.message}`);
+            }
+            await refresh();
+          },
+        }),
+        el("button", {
+          text: "Test",
+          onclick: async () => {
+            const connectionId = `conn:${kind}`;
+            const response = await fetch(`/api/connections/${encodeURIComponent(connectionId)}/test`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+            });
+            const data = await response.json();
+            live(
+              `Test ${connectionId}: ${JSON.stringify(data.error ?? data.message ?? (data.data ?? {}))}`.slice(0, 400),
+            );
+            await refresh();
+          },
+        }),
+      );
+    }
+  }
+};
+
+/* Product Phase 1: bounded team templates prefill the launch form. */
+const applyTeamTemplate = async (templateId) => {
+  const response = await fetch("/api/workbench/commands/team-templates");
+  const { templates } = await response.json();
+  const template = (templates ?? []).find((candidate) => candidate.templateId === templateId);
+  if (!template) {
+    live(`Unknown template ${templateId}`);
+    return;
+  }
+  const form = document.getElementById("launch-form");
+  form.elements.maxIterations.value = template.defaultBounds.maxIterations;
+  form.elements.maxWorkersPerIteration.value = template.defaultBounds.maxWorkersPerIteration;
+  form.elements.maxTotalWorkers.value = template.defaultBounds.maxTotalWorkers;
+  form.elements.loopDeadlineMs.value = template.defaultBounds.loopDeadlineMs;
+  const goal = form.elements.goal.value.trim();
+  if (!goal) {
+    form.elements.goal.value = template.goalFraming.trim();
+  }
+  live(`Template "${template.name}" applied — select Planner/Verifier/Worker connections and launch.`);
+};
+
+/* Product Phase 1: workspace identity options. */
+const loadWorkspaces = async () => {
+  const select = document.querySelector('select[name="workspaceId"]');
+  if (!select) return;
+  const current = select.value;
+  select.replaceChildren(el("option", { value: "", text: "— none (run without a workspace) —" }));
+  try {
+    const response = await fetch("/api/workbench/workspaces");
+    const { workspaces } = await response.json();
+    for (const workspace of workspaces ?? []) {
+      select.append(
+        el("option", {
+          value: workspace.workspaceId,
+          text: `${workspace.name} — ${workspace.path}${workspace.snapshot?.headSha ? ` @ ${workspace.snapshot.headSha.slice(0, 8)}` : ""}`,
+        }),
+      );
+    }
+  } catch {
+    // keep the empty select
+  }
+  if (current) select.value = current;
+};
 
 const profileFromForm = (form) => {
   const kind = form.get("runtimeKind").value;
@@ -477,6 +661,52 @@ const renderDetail = async (executionId) => {
       el("h4", { text: "Supervised team loop" }),
       el("p", { text: `Phase: ${statusText(run.phase)} · Iteration ${run.currentIterationNumber} of ${run.maxIterations} · Workers ${run.cumulativeWorkers}/${run.maxTotalWorkers} · Remaining deadline ${Math.floor(run.remainingDeadlineMs / 1000)}s${run.waitReason ? ` · WAIT: ${run.waitReason}` : ""}` }),
     );
+    // Product Phase 1: run summary — workspace + acceptance evidence.
+    if (run.workspace) {
+      const ws = run.workspace;
+      container.append(
+        el("h5", { text: "Workspace (frozen at launch)" }),
+        el("p", { text: `Path: ${ws.path}` }),
+        ws.repoRoot ? el("p", { text: `Git root: ${ws.repoRoot}` }) : null,
+        ws.branch ? el("p", { text: `Branch: ${ws.branch}` }) : null,
+        ws.headSha ? el("p", { text: `HEAD: ${ws.headSha}${ws.dirty ? " (DIRTY working tree)" : ""}` }) : null,
+        ws.note ? el("p", { class: "notice", text: ws.note }) : null,
+      );
+    }
+    if (run.acceptanceEvidence) {
+      const evidence = run.acceptanceEvidence;
+      container.append(
+        el("h5", { text: "Acceptance evidence (declared; never executed by Tenvyr)" }),
+        el("p", {
+          text: [
+            evidence.testCommand ? `test: ${evidence.testCommand}` : null,
+            evidence.buildCommand ? `build: ${evidence.buildCommand}` : null,
+            evidence.lintCommand ? `lint: ${evidence.lintCommand}` : null,
+            evidence.typecheckCommand ? `typecheck: ${evidence.typecheckCommand}` : null,
+            evidence.requiredArtifacts?.length ? `artifacts: ${evidence.requiredArtifacts.join(", ")}` : null,
+          ].filter(Boolean).join(" · ") || "—",
+        }),
+      );
+    }
+    // Product Phase 1: iteration history (all iterations, not only the last).
+    const iterations = data.coordination.iterations ?? [];
+    if (iterations.length > 0) {
+      const historyRows = iterations.map((iteration) =>
+        el("tr", {}, [
+          el("td", { text: String(iteration.iterationNumber) }),
+          el("td", { text: iteration.decisionAction ? statusText(iteration.decisionAction) : "pending" }),
+          el("td", { text: String(iteration.workerManifest.filter((w) => w.status === "SUCCESS").length) + "/" + String(iteration.workerManifest.length) }),
+          el("td", { text: iteration.verifierStepId ?? "pending" }),
+        ]),
+      );
+      container.append(
+        el("h5", { text: "Iteration history" }),
+        el("table", {}, [
+          el("thead", {}, [el("tr", {}, [el("th", { text: "Iteration" }), el("th", { text: "Verifier decision" }), el("th", { text: "Workers succeeded" }), el("th", { text: "Verifier step" })])]),
+          el("tbody", {}, historyRows),
+        ]),
+      );
+    }
     const iteration = data.coordination.iterations.at(-1);
     if (iteration) {
       const rows = iteration.workerManifest.map((worker) =>
@@ -599,6 +829,8 @@ const replayAction = async (executionId) => {
 
 const refresh = async () => {
   await loadConnectionCatalog();
+  await renderOnboarding();
+  await loadWorkspaces();
   await renderConnections();
   await renderExecutions();
   await renderAudit();
@@ -694,25 +926,51 @@ syncRoleFields(document.getElementById("role-verifier"));
 document.getElementById("launch-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.target);
+  const workspaceId = form.get("workspaceId").value.trim();
+  const workspacePath = form.get("workspacePath").value.trim();
+  const testCommand = form.get("testCommand").value.trim();
+  const buildCommand = form.get("buildCommand").value.trim();
+  const lintCommand = form.get("lintCommand").value.trim();
+  const typecheckCommand = form.get("typecheckCommand").value.trim();
+  const requiredArtifacts = splitList(form.get("requiredArtifacts").value);
+  const body = {
+    idempotencyKey: crypto.randomUUID(),
+    name: form.get("name").value,
+    goal: form.get("goal").value,
+    config: teamConfigFromForm(form),
+  };
+  if (workspaceId) {
+    body.workspace = { workspaceId };
+  } else if (workspacePath) {
+    body.workspace = { path: workspacePath };
+  }
+  if (testCommand || buildCommand || lintCommand || typecheckCommand || requiredArtifacts.length > 0) {
+    body.acceptanceEvidence = {
+      ...(testCommand ? { testCommand } : {}),
+      ...(buildCommand ? { buildCommand } : {}),
+      ...(lintCommand ? { lintCommand } : {}),
+      ...(typecheckCommand ? { typecheckCommand } : {}),
+      ...(requiredArtifacts.length > 0 ? { requiredArtifacts } : {}),
+    };
+  }
   const response = await fetch("/api/workbench/commands/start-team-run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      idempotencyKey: crypto.randomUUID(),
-      name: form.get("name").value,
-      goal: form.get("goal").value,
-      config: teamConfigFromForm(form),
-    }),
+    body: JSON.stringify(body),
   });
   const data = await response.json();
   if (data.outcome === "executed" && data.result?.executionId) {
-    live("Team run launched.");
+    live(`Team run launched${data.result?.workspace ? ` against ${data.result.workspace}` : ""}.`);
     await renderDetail(data.result.executionId);
   } else {
     live(`Launch failed: ${JSON.stringify(data.error ?? data)}`);
   }
   await refresh();
 });
+
+for (const button of document.querySelectorAll(".template-button")) {
+  button.addEventListener("click", () => applyTeamTemplate(button.dataset.template));
+}
 
 document.getElementById("compare-form").addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -38,6 +38,8 @@ import { RuntimeConnectionService } from "./services/runtime-connection.service"
 import { RuntimeCoordinationService } from "./services/runtime-coordination.service";
 import { WorkbenchProjectionService } from "./services/workbench-projection.service";
 import { WorkbenchCommandService } from "./services/workbench-command.service";
+import { WorkspaceService } from "./services/workspace.service";
+import { RuntimeOnboardingService } from "./services/runtime-onboarding.service";
 
 @Module({
   imports: [],
@@ -87,6 +89,8 @@ import { WorkbenchCommandService } from "./services/workbench-command.service";
     RuntimeCoordinationService,
     WorkbenchProjectionService,
     WorkbenchCommandService,
+    WorkspaceService,
+    RuntimeOnboardingService,
   ],
   exports: [
     ...databaseProviders,

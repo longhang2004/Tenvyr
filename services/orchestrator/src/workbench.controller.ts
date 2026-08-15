@@ -3,15 +3,55 @@ import {
   WorkbenchProjectionError,
   WorkbenchProjectionService,
 } from "./services/workbench-projection.service";
+import { WorkspaceService } from "./services/workspace.service";
+import {
+  RuntimeOnboardingService,
+  isOnboardingRuntimeKind,
+} from "./services/runtime-onboarding.service";
 
 /**
  * M10-S1: bounded Workbench read projections (loopback/private trusted
  * operator only — the External Production Exposure Gate stays OPEN, so
- * this surface is internal).
+ * this surface is internal). Product Phase 1 adds guided runtime
+ * onboarding status and workspace identity reads.
  */
 @Controller("workbench")
 export class WorkbenchController {
-  constructor(private readonly projection: WorkbenchProjectionService) {}
+  constructor(
+    private readonly projection: WorkbenchProjectionService,
+    private readonly workspaceService: WorkspaceService,
+    private readonly onboarding: RuntimeOnboardingService,
+  ) {}
+
+  /** Product Phase 1: guided onboarding status for a supported runtime
+   *  (Installed / Version / Auth — never credentials). */
+  @Get("onboarding/:runtimeKind")
+  async onboardingStatus(@Param("runtimeKind") runtimeKind: string) {
+    if (!isOnboardingRuntimeKind(runtimeKind)) {
+      return {
+        error: {
+          code: "RUNTIME_NOT_SUPPORTED",
+          message: `onboarding supports ${RuntimeOnboardingService.kinds().join(", ")}`,
+        },
+      };
+    }
+    return { status: await this.onboarding.status(runtimeKind) };
+  }
+
+  /** Product Phase 1: stable workspace identities (bounded). */
+  @Get("workspaces")
+  async workspaces() {
+    const rows = await this.workspaceService.list();
+    return {
+      workspaces: rows.map((row) => ({
+        workspaceId: row.id,
+        name: row.name,
+        path: row.path,
+        snapshot: row.snapshot,
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+    };
+  }
 
   @Get("connections")
   async connectionCards() {

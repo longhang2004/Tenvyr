@@ -84,6 +84,11 @@ export type WorkbenchExecutionProjectionV1 = {
       remainingDeadlineMs: number;
       budgetAccountId: string | null;
       waitReason: string | null;
+      /** Product Phase 1: frozen workspace snapshot (bounded); null when
+       *  the run has no workspace. */
+      workspace: unknown;
+      /** Operator-declared acceptance evidence (run metadata only). */
+      acceptanceEvidence: unknown;
     };
     iterations: Array<{
       iterationNumber: number;
@@ -341,6 +346,8 @@ export class WorkbenchProjectionService {
           ),
           budgetAccountId: run.config.budgetAccountId ?? null,
           waitReason: run.waitReason,
+          workspace: run.workspace,
+          acceptanceEvidence: run.acceptanceEvidence,
         },
         iterations: boundedIterations.map((iteration) => ({
           iterationNumber: iteration.iterationNumber,

@@ -1,5 +1,6 @@
 import { sha256Json } from "./canonical-json";
 import { CONNECTION_ID_PATTERN } from "../executors/runtime-connection";
+import type { WorkspaceSnapshotV1 } from "./workspace";
 
 /**
  * M9-S1: pure Coordinator semantics — team configuration, phases, bounded
@@ -190,6 +191,10 @@ export type VerifierContextV1 = {
   executionStateKeys: Record<string, unknown>;
   /** Prior decision summary (bounded). */
   priorDecision?: { action: VerifierAction; reason: string };
+  /** Product Phase 1: the frozen workspace snapshot the run executes
+   *  against (path + best-effort repository identity), when the run has
+   *  one. */
+  workspace?: WorkspaceSnapshotV1;
   limits: {
     maxIterations: number;
     maxTotalWorkers: number;
@@ -690,6 +695,7 @@ export function compileIterationPlanPatch(
   config: CoordinationConfigV1,
   proposal: TaskBatchProposalV1,
   iterationNumber: number,
+  workspace?: WorkspaceSnapshotV1,
 ): { patch: PlanPatchLikeV1; verifierStepId: string } {
   if (config.verifier.kind !== "agent" && config.verifier.kind !== "connection") {
     throw new CoordinationError(
@@ -699,10 +705,25 @@ export function compileIterationPlanPatch(
   }
   const operations: PlanPatchOperationLikeV1[] = [];
   for (const task of proposal.tasks) {
+    // Product Phase 1: the frozen workspace snapshot is injected into every
+    // worker step's input envelope (bounded block, deterministic for the
+    // run) so the worker knows the repository path + frozen revision it
+    // executes against. The planner-authored input is preserved verbatim.
+    const isPlainObjectInput =
+      typeof task.input === "object" &&
+      task.input !== null &&
+      !Array.isArray(task.input);
+    const stepInput: unknown =
+      workspace === undefined
+        ? task.input
+        : {
+            ...(isPlainObjectInput ? (task.input as object) : { value: task.input }),
+            workspace,
+          };
     const step: Record<string, unknown> = {
       id: task.taskId,
       agent: task.agent,
-      input: task.input,
+      input: stepInput,
       dependsOn: task.dependsOn,
       onFailure: task.required
         ? task.retry !== undefined && task.retry > 0
@@ -920,6 +941,9 @@ export function buildVerifierContext(input: {
   evidence: string[];
   /** Explicitly selected ExecutionState keys (allowlist). */
   selectedStateKeys: readonly string[];
+  /** Product Phase 1: frozen workspace snapshot (bounded), when the run
+   *  has one. */
+  workspace?: WorkspaceSnapshotV1;
 }): VerifierContextV1 {
   if (input.workers.length > COORDINATION_BOUNDS.maxAggregateWorkers) {
     throw new CoordinationError(
@@ -982,6 +1006,9 @@ export function buildVerifierContext(input: {
       action: input.priorDecision.action,
       reason: truncate(input.priorDecision.reason, COORDINATION_BOUNDS.maxReasonLength).value,
     };
+  }
+  if (input.workspace) {
+    aggregate.workspace = input.workspace;
   }
   if (Buffer.byteLength(JSON.stringify(aggregate), "utf8") > COORDINATION_BOUNDS.maxAggregateBytes) {
     throw new CoordinationError(

@@ -31,6 +31,8 @@ export class WorkbenchCommandsController {
       name?: string;
       goal: unknown;
       config: CoordinationConfigV1;
+      workspace?: { workspaceId: string } | { path: string };
+      acceptanceEvidence?: unknown;
     },
   ) {
     try {
@@ -39,10 +41,64 @@ export class WorkbenchCommandsController {
         name: body.name ?? "team-run",
         goal: body.goal,
         config: body.config,
+        ...(body.workspace ? { workspace: body.workspace } : {}),
+        ...(body.acceptanceEvidence !== undefined
+          ? { acceptanceEvidence: body.acceptanceEvidence }
+          : {}),
       });
     } catch (error) {
       this.mapError(error);
     }
+  }
+
+  /** Product Phase 1: one-click guided runtime onboarding. */
+  @Post("onboard-runtime")
+  async onboardRuntime(
+    @Body()
+    body: {
+      idempotencyKey: string;
+      runtimeKind: string;
+      connectionId?: string;
+      name?: string;
+    },
+  ) {
+    try {
+      return await this.commands.onboardRuntime({
+        idempotencyKey: body.idempotencyKey,
+        runtimeKind: body.runtimeKind,
+        ...(body.connectionId ? { connectionId: body.connectionId } : {}),
+        ...(body.name ? { name: body.name } : {}),
+      });
+    } catch (error) {
+      this.mapError(error);
+    }
+  }
+
+  /** Product Phase 1: create/refresh a stable workspace from a path. */
+  @Post("create-workspace")
+  async createWorkspace(
+    @Body()
+    body: {
+      idempotencyKey: string;
+      name?: string;
+      path: string;
+    },
+  ) {
+    try {
+      return await this.commands.createWorkspace({
+        idempotencyKey: body.idempotencyKey,
+        ...(body.name ? { name: body.name } : {}),
+        path: body.path,
+      });
+    } catch (error) {
+      this.mapError(error);
+    }
+  }
+
+  /** Product Phase 1: bounded team templates. */
+  @Get("team-templates")
+  async teamTemplates() {
+    return { templates: this.commands.teamTemplates() };
   }
 
   @Post("waits/:runId")

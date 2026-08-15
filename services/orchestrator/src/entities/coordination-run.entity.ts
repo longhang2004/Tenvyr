@@ -7,7 +7,14 @@ import {
   Unique,
   UpdateDateColumn,
 } from "typeorm";
-import type { CoordinationConfigV1, CoordinationPhase } from "../domain/coordination";
+import type {
+  CoordinationConfigV1,
+  CoordinationPhase,
+} from "../domain/coordination";
+import type {
+  AcceptanceEvidenceV1,
+  WorkspaceSnapshotV1,
+} from "../domain/workspace";
 
 /**
  * M9-S2: one-to-one authority extension of an Execution. Freezes team
@@ -28,6 +35,18 @@ export class CoordinationRunEntity {
   /** Frozen CoordinationConfigV1 (hard bounds cannot be raised). */
   @Column({ type: "jsonb" })
   config: CoordinationConfigV1;
+
+  /** FROZEN workspace snapshot the run executed against (Product Phase 1);
+   *  null for runs without a workspace. Best-effort repository identity —
+   *  execution runs against the mutable local working tree (no snapshot
+   *  isolation claim). */
+  @Column({ type: "jsonb", nullable: true })
+  workspace: WorkspaceSnapshotV1 | null;
+
+  /** Optional operator-declared acceptance evidence (run metadata only —
+   *  never executed by the orchestrator). */
+  @Column({ type: "jsonb", nullable: true })
+  acceptanceEvidence: AcceptanceEvidenceV1 | null;
 
   @Column({ type: "varchar", length: 50, default: "PLANNING" })
   phase: CoordinationPhase;

@@ -11,9 +11,25 @@ import { RuntimeCoordinationService } from "./runtime-coordination.service";
 import { ExecutionCapsuleService } from "./execution-capsule.service";
 import { DelegationService } from "./delegation.service";
 import { RuntimeConnectionService } from "./runtime-connection.service";
+import { WorkspaceService } from "./workspace.service";
 import type { ConnectionProfileV1 } from "../executors/runtime-connection";
 import { sha256Json } from "../domain/canonical-json";
 import { parseCoordinationConfig, type CoordinationConfigV1 } from "../domain/coordination";
+import {
+  parseAcceptanceEvidence,
+  type AcceptanceEvidenceV1,
+  type WorkspaceSnapshotV1,
+} from "../domain/workspace";
+import {
+  configFromTeamTemplate,
+  TEAM_TEMPLATES,
+} from "../domain/team-templates";
+import {
+  RuntimeOnboardingService,
+  isOnboardingRuntimeKind,
+  type RuntimeOnboardingStatus,
+} from "./runtime-onboarding.service";
+import { buildRuntimeConnectionProfile } from "../executors/runtime-profiles";
 
 /**
  * M10-S2: idempotent local operator commands through EXISTING authority
@@ -56,6 +72,7 @@ export class WorkbenchCommandService {
     coordination?: RuntimeCoordinationService,
     capsules?: ExecutionCapsuleService,
     connections?: RuntimeConnectionService,
+    workspaces?: WorkspaceService,
   ) {
     this.executionService =
       executionService ??
@@ -75,12 +92,15 @@ export class WorkbenchCommandService {
         this.executionService,
       );
     this.connections = connections ?? new RuntimeConnectionService(this.dataSource);
+    this.workspaces =
+      workspaces ?? new WorkspaceService(this.dataSource);
   }
 
   private readonly executionService: ExecutionService;
   private readonly coordination: RuntimeCoordinationService;
   private readonly capsules: ExecutionCapsuleService;
   private readonly connections: RuntimeConnectionService;
+  private readonly workspaces: WorkspaceService;
 
   private boundedKey(idempotencyKey: string): string {
     if (
@@ -203,15 +223,40 @@ export class WorkbenchCommandService {
     name: string;
     goal: unknown;
     config: CoordinationConfigV1;
+    /** Product Phase 1: workspace by existing id or by operator path
+     *  (frozen into a bounded snapshot at start). */
+    workspace?: { workspaceId: string } | { path: string };
+    /** Optional operator-declared acceptance evidence (run metadata). */
+    acceptanceEvidence?: unknown;
   }): Promise<CommandResult> {
     const name = input.name.slice(0, COMMAND_BOUNDS.runNameMax);
     const goal = this.boundedGoal(input.goal);
     const config = parseCoordinationConfig(input.config);
+    const acceptanceEvidence: AcceptanceEvidenceV1 | null = parseAcceptanceEvidence(
+      input.acceptanceEvidence,
+    );
+    // Freeze the workspace snapshot BEFORE the authority transaction: the
+    // snapshot is deterministic run context, never operator-controlled
+    // after this point.
+    let workspace: WorkspaceSnapshotV1 | null = null;
+    if (input.workspace) {
+      if ("workspaceId" in input.workspace) {
+        workspace = await this.workspaces.refreshWorkspace(
+          input.workspace.workspaceId,
+        );
+      } else {
+        const created = await this.workspaces.createWorkspace({
+          name,
+          path: input.workspace.path,
+        });
+        workspace = created.snapshot;
+      }
+    }
     return this.runCommand(
       "start-team-run",
       input.idempotencyKey,
       null,
-      { name, config: summarizeConfig(config) },
+      { name, config: summarizeConfig(config), workspace, acceptanceEvidence },
       async (manager) => {
         const pipeline = await manager
           .getRepository(PipelineEntity)
@@ -233,6 +278,8 @@ export class WorkbenchCommandService {
           execution.id,
           config,
           new Date(Date.now() + config.loopDeadlineMs),
+          workspace,
+          acceptanceEvidence,
         );
         const iteration =
           await this.coordination.createNextIterationWithManager(manager, run.id);
@@ -240,6 +287,7 @@ export class WorkbenchCommandService {
           executionId: execution.id,
           runId: run.id,
           iterationNumber: iteration.iterationNumber,
+          ...(workspace ? { workspace: workspace.path } : {}),
         };
       },
     );
@@ -404,6 +452,113 @@ export class WorkbenchCommandService {
         return { connectionId: input.connectionId, status };
       },
     );
+  }
+
+  /**
+   * Product Phase 1: ONE-CLICK guided runtime onboarding. Detect the
+   * executable on PATH -> probe version/auth -> create the connection from
+   * the documented template -> test it. Never reads credentials.
+   */
+  async onboardRuntime(input: {
+    idempotencyKey: string;
+    runtimeKind: string;
+    /** Optional operator-chosen connection id (default: conn:<kind>). */
+    connectionId?: string;
+    name?: string;
+  }): Promise<CommandResult> {
+    if (!isOnboardingRuntimeKind(input.runtimeKind)) {
+      throw new WorkbenchCommandError(
+        "RUNTIME_NOT_SUPPORTED",
+        `onboarding supports codex/claude/opencode, got "${input.runtimeKind}"`,
+      );
+    }
+    const status = await new RuntimeOnboardingService().status(input.runtimeKind);
+    if (!status.detected || !status.connectPayload) {
+      throw new WorkbenchCommandError(
+        "RUNTIME_NOT_DETECTED",
+        `"${input.runtimeKind}" was not detected on PATH; install the official CLI first`,
+      );
+    }
+    const connectionId = input.connectionId ?? `conn:${input.runtimeKind}`;
+    const created = await this.createConnection({
+      idempotencyKey: `${input.idempotencyKey}:create`,
+      connectionId,
+      profile: buildRuntimeConnectionProfile({
+        runtimeKind: input.runtimeKind,
+        name: input.name ?? `runtime:${input.runtimeKind}`,
+        executorId: "local-host",
+        executable: status.connectPayload.executable,
+        ...(status.connectPayload.version
+          ? { version: status.connectPayload.version }
+          : {}),
+      }),
+    });
+    const tested = await this.testConnection({
+      idempotencyKey: `${input.idempotencyKey}:test`,
+      connectionId,
+    });
+    return {
+      action: "onboard-runtime",
+      idempotencyKey: input.idempotencyKey,
+      outcome: created.outcome === "duplicate" ? "duplicate" : "executed",
+      result: {
+        connectionId,
+        runtimeKind: input.runtimeKind,
+        detected: true,
+        version: status.version ?? null,
+        authReady: status.authReady,
+        guidance: status.guidance,
+        create: created.result,
+        test: tested.result,
+      },
+    };
+  }
+
+  /** Product Phase 1: create/refresh a stable workspace from a local path
+   *  (bounded git identity capture; never reads credentials). */
+  async createWorkspace(input: {
+    idempotencyKey: string;
+    name?: string;
+    path: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "create-workspace",
+      input.idempotencyKey,
+      null,
+      { name: input.name ?? null, path: input.path },
+      async () => {
+        const created = await this.workspaces.createWorkspace({
+          name: input.name ?? "workspace",
+          path: input.path,
+        });
+        return {
+          workspaceId: created.id,
+          snapshot: created.snapshot,
+        };
+      },
+    );
+  }
+
+  /** Product Phase 1: the bounded team templates (roles + useful bounds +
+   *  goal framing; Planner still proposes, Tenvyr still authorizes). */
+  teamTemplates(): {
+    templateId: string;
+    name: string;
+    description: string;
+    goalFraming: string;
+    defaultBounds: Record<string, number>;
+    configSkeleton: CoordinationConfigV1;
+    roleSuggestions: unknown;
+  }[] {
+    return TEAM_TEMPLATES.map((template) => ({
+      templateId: template.templateId,
+      name: template.name,
+      description: template.description,
+      goalFraming: template.goalFraming,
+      defaultBounds: { ...template.defaultBounds },
+      configSkeleton: configFromTeamTemplate(template.templateId),
+      roleSuggestions: template.roleSuggestions,
+    }));
   }
 
   /**

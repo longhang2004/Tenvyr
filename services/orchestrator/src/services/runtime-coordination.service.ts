@@ -37,6 +37,10 @@ import {
   type WorkerOutcomeSummaryV1,
 } from "../domain/coordination";
 import type { WorkerManifestEntryV1 } from "../entities/coordination-iteration.entity";
+import type {
+  AcceptanceEvidenceV1,
+  WorkspaceSnapshotV1,
+} from "../domain/workspace";
 
 const TERMINAL_ATTEMPT_STATUSES: readonly StepAttemptStatus[] = [
   "SUCCESS",
@@ -159,10 +163,19 @@ export class RuntimeCoordinationService {
     executionId: string,
     config: CoordinationConfigV1,
     loopDeadlineAt: Date,
+    workspace?: WorkspaceSnapshotV1 | null,
+    acceptanceEvidence?: AcceptanceEvidenceV1 | null,
   ): Promise<CoordinationRunEntity> {
     const parsed = parseCoordinationConfig(config);
     return this.dataSource.transaction((manager) =>
-      this.startRunWithManager(manager, executionId, parsed, loopDeadlineAt),
+      this.startRunWithManager(
+        manager,
+        executionId,
+        parsed,
+        loopDeadlineAt,
+        workspace,
+        acceptanceEvidence,
+      ),
     );
   }
 
@@ -192,6 +205,8 @@ export class RuntimeCoordinationService {
     executionId: string,
     config: CoordinationConfigV1,
     loopDeadlineAt: Date,
+    workspace?: WorkspaceSnapshotV1 | null,
+    acceptanceEvidence?: AcceptanceEvidenceV1 | null,
   ): Promise<CoordinationRunEntity> {
     const parsed = parseCoordinationConfig(config);
     const runs = manager.getRepository(CoordinationRunEntity);
@@ -220,6 +235,8 @@ export class RuntimeCoordinationService {
         runs.create({
           executionId,
           config: parsed,
+          workspace: workspace ?? null,
+          acceptanceEvidence: acceptanceEvidence ?? null,
           phase: "PLANNING",
           currentIterationNumber: 0,
           cumulativeWorkers: 0,
@@ -696,6 +713,7 @@ export class RuntimeCoordinationService {
         run.config,
         parsed,
         input.iterationNumber,
+        run.workspace ?? undefined,
       );
       // M9-S7: EXACT pending proposal identity. When a previous activation
       // was intercepted (policy REQUIRE_APPROVAL), its durable proposal id
@@ -882,6 +900,7 @@ export class RuntimeCoordinationService {
       },
       evidence: [],
       selectedStateKeys: [],
+      ...(run.workspace ? { workspace: run.workspace } : {}),
     });
   }
 
