@@ -560,8 +560,121 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
     );
     assertServicesReady("after checksum-mismatch promote attempt");
     assert.ok(pipelines().includes("crash-f5-state"), "original authority must be untouched after F5b");
+
+    // F5c: the manifest checksum is REQUIRED — deleting the field fails
+    // closed BEFORE quiescing.
+    const { checksum: _removed, ...withoutChecksum } = manifest;
+    writeFileSync(manifestPath, JSON.stringify(withoutChecksum, null, 2));
+    const missingChecksumResult = promote(dumpPath);
+    assert.notEqual(missingChecksumResult.status, 0, "missing manifest checksum must fail promotion");
+    assert.match(missingChecksumResult.stdout + missingChecksumResult.stderr, /manifest checksum is missing or malformed/);
+    assert.ok(
+      !(missingChecksumResult.stdout + missingChecksumResult.stderr).includes("stopping orchestrator"),
+      "checksum-contract validation must happen BEFORE quiescing",
+    );
+    assertServicesReady("after missing-checksum promote attempt");
+    assert.ok(pipelines().includes("crash-f5-state"), "original authority must be untouched after F5c");
     // Restore the honest manifest.
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  });
+
+  it("F6: malformed journal after the first rename — conservative reconciliation restores the original, never drops safety", () => {
+    const marker = createPipeline("crash-f6-state");
+    assert.ok(marker, "crash-f6 pipeline did not persist");
+    const { dumpPath } = takeBackup();
+    // Produce the interrupted state with a REAL crash, then corrupt the
+    // durable journal evidence (truncated/malformed write).
+    const crashed = promote(dumpPath, "crash-after-first-rename");
+    assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    writeFileSync(journalPath, "{truncated garbage", "utf8");
+    let dbs = databases();
+    assert.ok(!dbs.includes("tenvyr"), "tenvyr must be absent after the first-rename crash");
+    assert.ok(dbs.includes("tenvyr_pre_restore"), "the ORIGINAL authority must be preserved as tenvyr_pre_restore");
+    // The next invocation must NOT proceed destructively: the original
+    // under the safety name is restored (renamed back, NEVER dropped).
+    const next = promote(dumpPath);
+    assert.notEqual(next.status, 0, "a promotion that reconciles an interruption must abort (retry required)");
+    const output = next.stdout + next.stderr;
+    assert.match(output, /interrupted promotion reconciled/);
+    assert.match(output, /restored from the safety copy/);
+    assert.match(output, /never dropped/);
+    dbs = databases();
+    assert.ok(dbs.includes("tenvyr"), "tenvyr must be active again after reconciliation");
+    assert.ok(!dbs.includes("tenvyr_pre_restore"), "the safety copy was consumed by the rename-back, not dropped");
+    assert.ok(pipelines().includes("crash-f6-state"), "the ORIGINAL marker data must be present (never deleted)");
+    assertServicesReady("after malformed-journal reconciliation");
+    const postRecovery = createPipeline("crash-f6-recovery-write");
+    assert.ok(postRecovery, "new write after reconciliation must succeed");
+  });
+
+  it("F7: missing journal after the first rename — no destructive proceed, original restored", () => {
+    const marker = createPipeline("crash-f7-state");
+    assert.ok(marker, "crash-f7 pipeline did not persist");
+    const { dumpPath } = takeBackup();
+    const crashed = promote(dumpPath, "crash-after-first-rename");
+    assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    // Remove the journal entirely (as if the write never landed).
+    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    rmSync(journalPath, { force: true });
+    let dbs = databases();
+    assert.ok(!dbs.includes("tenvyr"), "tenvyr must be absent after the first-rename crash");
+    assert.ok(dbs.includes("tenvyr_pre_restore"), "the ORIGINAL authority must be preserved as tenvyr_pre_restore");
+    const next = promote(dumpPath);
+    assert.notEqual(next.status, 0, "a promotion that reconciles an interruption must abort (retry required)");
+    const output = next.stdout + next.stderr;
+    assert.match(output, /interrupted promotion reconciled/);
+    assert.match(output, /restored from the safety copy/);
+    dbs = databases();
+    assert.ok(dbs.includes("tenvyr"), "tenvyr must be active again after reconciliation");
+    assert.ok(!dbs.includes("tenvyr_pre_restore"), "the safety copy was consumed by the rename-back, not dropped");
+    assert.ok(pipelines().includes("crash-f7-state"), "the ORIGINAL marker data must be present (never deleted)");
+    assertServicesReady("after missing-journal reconciliation");
+    const postRecovery = createPipeline("crash-f7-recovery-write");
+    assert.ok(postRecovery, "new write after reconciliation must succeed");
+  });
+
+  it("F8: malformed journal after candidate promotion — ambiguous state FAILS CLOSED; both copies preserved; printed commands repair", () => {
+    const marker = createPipeline("crash-f8-state");
+    assert.ok(marker, "crash-f8 pipeline did not persist");
+    const { dumpPath } = takeBackup();
+    const crashed = promote(dumpPath, "crash-after-promotion");
+    assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    // Corrupt the journal: the layout (active candidate + original safety)
+    // becomes ambiguous — the next invocation must FAIL CLOSED, never
+    // treat the candidate as committed and never delete the original.
+    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    writeFileSync(journalPath, "{truncated garbage", "utf8");
+    let dbs = databases();
+    assert.ok(dbs.includes("tenvyr"), "the candidate is active after the promotion rename");
+    assert.ok(dbs.includes("tenvyr_pre_restore"), "the ORIGINAL authority must still be preserved");
+    const next = promote(dumpPath);
+    assert.notEqual(next.status, 0, "an ambiguous state must fail closed");
+    const output = next.stdout + next.stderr;
+    assert.match(output, /CRITICAL/);
+    assert.match(output, /no safe automatic reconciliation exists/);
+    assert.match(output, /the active database is the unproven restored candidate; preserve it first/);
+    // Both database copies are preserved — nothing was dropped.
+    dbs = databases();
+    assert.ok(dbs.includes("tenvyr"), "the ambiguous active copy must be preserved");
+    assert.ok(dbs.includes("tenvyr_pre_restore"), "the ORIGINAL safety copy must be preserved");
+    // Execute the EXACT printed recovery commands (preserve the candidate
+    // under the bounded failed name, restore the original) and restart.
+    const preserve = psql("ALTER DATABASE tenvyr RENAME TO tenvyr_failed_promotion", "postgres");
+    assert.equal(preserve.status, 0, `printed preserve command failed: ${preserve.stderr}`);
+    const restoreOriginal = psql("ALTER DATABASE tenvyr_pre_restore RENAME TO tenvyr", "postgres");
+    assert.equal(restoreOriginal.status, 0, `printed restore command failed: ${restoreOriginal.stderr}`);
+    runOk("docker", [...COMPOSE.slice(1), "start", "orchestrator", "gateway"], { timeout: 120_000 });
+    assertServicesReady("after executing the printed recovery commands");
+    assert.ok(pipelines().includes("crash-f8-state"), "the ORIGINAL marker data must be present");
+    assert.ok(dbs.includes("tenvyr_failed_promotion") || databases().includes("tenvyr_failed_promotion"), "the unproven candidate must be preserved");
+    // The malformed journal on the now-clean layout is cleared by
+    // --reconcile.
+    const reconcile = run(process.execPath, ["scripts/self-hosted/restore.mjs", "--reconcile"], {
+      timeout: 120_000,
+    });
+    assert.equal(reconcile.status, 0, `--reconcile must exit clean: ${reconcile.stdout}\n${reconcile.stderr}`);
+    assert.ok(!existsSync(journalPath), "the malformed journal must be cleared on the clean layout");
   });
 
   it("D2: rollback-rename fault — loud failure with exact recovery commands; the printed commands repair the deployment", () => {

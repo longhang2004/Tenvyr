@@ -78,8 +78,9 @@ export const inventoryFingerprintValue = () => TABLES.join(", ");
  * M11 closure: fail-closed manifest contract validation.
  *
  * Enforced BEFORE any quiescing/promotion step:
- *   - checksum triple: computed dump SHA-256 == .sha256 sidecar (when
- *     present) == manifest.checksum (when present); ANY mismatch fails;
+ *   - the manifest checksum is REQUIRED: present, exactly 64 lowercase
+ *     hex, and equal to the computed dump SHA-256; when the .sha256
+ *     sidecar is present it must equal the same value (checksum triple);
  *   - the manifest exists and carries the verified-backup marker;
  *   - version matches the deployment release version;
  *   - checksum algorithm is sha256;
@@ -100,24 +101,30 @@ export const validateManifestContract = ({
   sidecarChecksum,
   TENVYR_VERSION,
 }) => {
-  if (sidecarChecksum && dumpChecksum !== sidecarChecksum) {
+  if (!manifest) {
     throw new Error(
-      "checksum mismatch — refusing to restore (dump does not match the .sha256 sidecar)",
+      "backup manifest is missing — refusing to restore (this artifact predates verified backups)",
     );
   }
-  if (manifest?.checksum && dumpChecksum !== manifest.checksum) {
+  // The manifest checksum is PART OF THE VERIFIED MANIFEST CONTRACT —
+  // missing/null/malformed fails closed (a current verified backup always
+  // records its SHA-256).
+  if (
+    typeof manifest.checksum !== "string" ||
+    !/^[0-9a-f]{64}$/.test(manifest.checksum)
+  ) {
+    throw new Error(
+      "backup manifest checksum is missing or malformed — refusing to restore",
+    );
+  }
+  if (dumpChecksum !== manifest.checksum) {
     throw new Error(
       "checksum mismatch — refusing to restore (dump does not match the manifest checksum)",
     );
   }
-  if (sidecarChecksum && manifest?.checksum && sidecarChecksum !== manifest.checksum) {
+  if (sidecarChecksum && sidecarChecksum !== manifest.checksum) {
     throw new Error(
       "checksum mismatch — refusing to restore (.sha256 sidecar does not match the manifest checksum)",
-    );
-  }
-  if (!manifest) {
-    throw new Error(
-      "backup manifest is missing — refusing to restore (this artifact predates verified backups)",
     );
   }
   if (manifest.verified !== true) {

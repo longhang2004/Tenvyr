@@ -226,10 +226,14 @@ const run = (cmd, args, opts = {}) => {
 export const main = () => {
   // Maintenance serialization: the upgrade owns the exclusive maintenance
   // lock for its whole run; the verified-backup child INHERITS ownership
-  // via TENVYR_MAINTENANCE_OWNED=1 (explicit re-entrancy — never a
-  // self-deadlock). A crashed upgrade releases the lock automatically via
-  // dead-owner-PID stale reclaim.
-  const lock = acquireMaintenanceLock();
+  // with the AUTHENTICATED operation token (TENVYR_MAINTENANCE_TOKEN:
+  // token equality + direct-parent-owner — a forged claim is denied and
+  // can never bypass serialization; the child never releases the
+  // parent's lock). A crashed upgrade releases the lock automatically via
+  // dead-owner-PID stale reclaim. The upgrade itself always acquires as
+  // OWNER (a stray TENVYR_MAINTENANCE_TOKEN in the operator's shell must
+  // never turn the upgrade into an inheritor).
+  const lock = acquireMaintenanceLock({ allowInheritance: false });
   if (!lock.owned) {
     const owner = lock.owner
       ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
@@ -290,7 +294,7 @@ export const main = () => {
   console.log("[upgrade] taking VERIFIED backup before touching the stack...");
   const backupScript = process.env.TENVYR_UPGRADE_BACKUP_CMD ?? "scripts/self-hosted/backup.mjs";
   const backupStatus = run(process.execPath, [backupScript], {
-    env: { ...process.env, TENVYR_MAINTENANCE_OWNED: "1" },
+    env: { ...process.env, TENVYR_MAINTENANCE_TOKEN: lock.token },
   });
   if (backupStatus !== 0) {
     console.error("[upgrade] FAIL: verified backup did not complete; refusing to build or mutate the deployment");

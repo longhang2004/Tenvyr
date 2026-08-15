@@ -97,8 +97,9 @@ OPEN.
 
 ## Limitations
 
-- M11 is `READY FOR INDEPENDENT SOL VERIFICATION`; M8–M10 Sol reviews are
-  still pending at owner direction (recorded in EXECUTION_STATUS).
+- M11 is `READY FOR INDEPENDENT TECH LEAD VERIFICATION`; M8–M10 have been
+  accepted by independent Tech Lead review (Sol closure remains Sol's
+  decision; recorded in EXECUTION_STATUS).
 - No prior-version upgrade drill was run (no published prior version); the
   upgrade path is documented and the migration machinery is proven.
 - Design-partner evidence: 0 interviews; nothing promoted without real
@@ -263,11 +264,12 @@ OPEN.
   (`tenvyr_backup_verify`, staging dump paths) or the authority-swap
   names. Crash-release: a dead owner PID makes the lock stale and the
   next acquisition reclaims it. `upgrade` owns the lock for its whole run
-  and the backup child inherits ownership via
-  `TENVYR_MAINTENANCE_OWNED=1` (explicit re-entrancy, never a
-  self-deadlock). E2E: concurrent backups -> exactly one PASS (its
-  artifact drills PASS), the other fails fast; concurrent promotions ->
-  only one enters authority mutation.
+  and the backup child inherits ownership (superseded in closure
+  hardening 5 by the AUTHENTICATED `TENVYR_MAINTENANCE_TOKEN` contract —
+  token equality + direct-parent-owner; the earlier forgeable
+  `TENVYR_MAINTENANCE_OWNED=1` marker is gone). E2E: concurrent backups
+  -> exactly one PASS (its artifact drills PASS), the other fails fast;
+  concurrent promotions -> only one enters authority mutation.
 - MANIFEST CONTRACT FAILS CLOSED: `validateManifestContract` (shared in
   anchors.mjs) enforces the checksum TRIPLE (computed dump SHA-256 ==
   .sha256 sidecar == manifest.checksum; ANY mismatch fails), the
@@ -289,4 +291,49 @@ OPEN.
 - Docs describe the ACTUAL crash-recovery and mutual-exclusion semantics
   (no "failure-safe state machine" overclaim). M8/M9/M10 remain
   independently accepted. M11 is NOT closed — closure remains the
+  Technical Lead's decision.
+
+## Closure hardening 5 (2026-08-15, implementer — authenticated inheritance, fail-safe journal, required checksum)
+
+- AUTHENTICATED MAINTENANCE INHERITANCE: the lock record now carries a
+  random OPERATION TOKEN alongside the owner PID. `upgrade` always
+  acquires as OWNER (`allowInheritance: false` — a stray token in the
+  operator's shell can never turn it into an inheritor) and passes its
+  token to the REAL backup child via `TENVYR_MAINTENANCE_TOKEN`. The
+  child's inherited acquisition is authenticated against the held lock:
+  token equality AND the caller's direct parent PID == lock owner PID.
+  A forged claim (wrong token, or correct token via a non-owner parent)
+  is DENIED and fails hard — it can never bypass serialization. Release
+  stays owner-only: an inherited child never deletes the parent's lock.
+  Regressions use the REAL lock code and REAL backup.mjs child: the
+  owner's direct child inherits and runs the verified backup (the
+  upgrade->backup path no longer rejects its own lock), a forged claim
+  is denied, and the child's exit never removes the parent's lock.
+- FAIL-SAFE RECOVERY JOURNAL: journal writes are now atomic + durable
+  (temp file -> fsync -> rename over the journal -> fsync the parent
+  directory where supported) — the record is never truncated in place,
+  so a crash mid-write leaves the previous complete journal, never an
+  invalid fail-open record. `readJournalState()` reports the evidence
+  state (valid/absent/malformed); reconciliation is CONSERVATIVE when
+  the evidence is unusable: "original only under safety" (active
+  missing, safety exists) is NEVER followed by a path that can DROP the
+  safety copy — the original is restored or the operation blocks; the
+  ambiguous "active + safety without usable journal" layout FAILS
+  CLOSED (both copies preserved + bounded instructions) instead of
+  guessing; no active + no safety blocks; `tenvyr_failed_promotion` is
+  never auto-dropped when the journal evidence is absent/malformed.
+  The durable "complete" marker persists for as long as the retained
+  safety copy exists (the journal is only cleared when the layout is
+  unambiguous and no safety copy remains), so a completed recovery is
+  always distinguishable from an interrupted one — and a --drill never
+  erases that evidence.
+- REQUIRED MANIFEST CHECKSUM: `manifest.checksum` is part of the
+  verified manifest contract — it must exist, be exactly 64 lowercase
+  hex, and equal the computed dump SHA-256; the .sha256 sidecar (when
+  present) must equal the same value. Missing/null/malformed/non-
+  lowercase checksums fail closed BEFORE quiescing (E2E + pure
+  regressions).
+- Docs updated to the final behavior; the stale "M8–M10 reviews still
+  pending" statement in this report is corrected (M8–M10 accepted by
+  independent Tech Lead review). M11 is NOT closed — closure remains the
   Technical Lead's decision.

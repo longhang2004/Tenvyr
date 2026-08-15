@@ -5,13 +5,20 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const COMPOSE = readFileSync(join(ROOT, "docker-compose.self-hosted.yml"), "utf8");
 const ENV_EXAMPLE = readFileSync(join(ROOT, ".env.self-hosted.example"), "utf8");
+
+/** Dynamic import of a self-hosted module (lazy — the modules carry
+ *  entry guards and must not execute at contract-suite load time). A
+ *  hoisted function declaration: never a TDZ under test-name filters. */
+function awaitImport(relative) {
+  return import(join(dirname(fileURLToPath(import.meta.url)), relative));
+}
 
 test("self-hosted profile binds loopback only (no public ports by default)", () => {
   const portLines = COMPOSE.split("\n").filter((line) => line.includes('"127.0.0.1:'));
@@ -713,60 +720,296 @@ test("maintenance lock: exclusive ownership, fail-fast contention, and stale-loc
   assert.ok(journalPath().endsWith(".recovery-journal.json"));
 });
 
+test("maintenance lock inheritance: the owner's DIRECT child is authenticated; forged claims are denied", async () => {
+  const { acquireMaintenanceLock, releaseMaintenanceLock, INHERITANCE_ENV } = await awaitImport(
+    "../self-hosted/maintenance.mjs",
+  );
+  const { spawnSync } = await import("node:child_process");
+  const { existsSync, rmSync } = await import("node:fs");
+  const lockPath = join(ROOT, "backups", ".maintenance.lock");
+  const moduleUrl = `file://${join(ROOT, "scripts", "self-hosted", "maintenance.mjs")}`;
+  const childScript = (token) => `
+import("${moduleUrl}").then((m) => {
+  const lock = m.acquireMaintenanceLock();
+  console.log("RESULT " + JSON.stringify({ owned: lock.owned, inherited: lock.inherited, held: lock.held, denied: lock.denied ?? null }));
+});
+`;
+  try {
+    rmSync(lockPath, { force: true });
+    const owner = acquireMaintenanceLock();
+    assert.equal(owner.owned, true, "the test process must own the lock");
+    assert.ok(typeof owner.token === "string" && owner.token.length >= 16, "the lock record must carry an operation token");
+
+    // 1. The owner's DIRECT child with the correct token inherits.
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", childScript(owner.token)], {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, [INHERITANCE_ENV]: owner.token },
+    });
+    const childResult = JSON.parse(child.stdout.split("\n").find((l) => l.startsWith("RESULT ")).slice("RESULT ".length));
+    assert.equal(childResult.owned, false, "the inherited child does not own the lock");
+    assert.equal(childResult.inherited, true, "the owner's direct child with the correct token must inherit");
+    assert.equal(childResult.held, true);
+    assert.equal(childResult.denied, null);
+    // 2. The inherited child must NEVER release the parent's lock: the
+    //    lock still exists and the owner still holds it after the child
+    //    exited.
+    assert.ok(existsSync(lockPath), "the inherited child must not delete the parent's lock");
+
+    // 3. Forged claim (wrong token) from the owner's own child: denied.
+    const forged = spawnSync(process.execPath, ["--input-type=module", "-e", childScript("wrong-token")], {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, [INHERITANCE_ENV]: "forged-token" },
+    });
+    const forgedResult = JSON.parse(forged.stdout.split("\n").find((l) => l.startsWith("RESULT ")).slice("RESULT ".length));
+    assert.equal(forgedResult.inherited, false, "a forged token must not inherit");
+    assert.equal(forgedResult.denied, "inherited maintenance ownership not authenticated (operation token mismatch)");
+    assert.ok(existsSync(lockPath), "the forged claim must not remove the lock");
+
+    // 4. Forged claim via a NON-OWNER parent: the correct token is
+    //    useless when the caller is not the owner's direct child.
+    const intermediate = `
+import("${moduleUrl}").then(async (m) => {
+  const { spawnSync } = await import("node:child_process");
+  const grandchild = spawnSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(childScript(owner.token))}], {
+    cwd: ${JSON.stringify(ROOT)},
+    encoding: "utf8",
+    env: { ...process.env, TENVYR_MAINTENANCE_TOKEN: ${JSON.stringify(owner.token)} },
+  });
+  console.log(grandchild.stdout);
+});
+`;
+    // The intermediate parent does NOT hold the lock; the grandchild's
+    // ppid is the intermediate, not the owner.
+    const grandchildRun = spawnSync(process.execPath, ["--input-type=module", "-e", intermediate], {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    const grandchildResult = JSON.parse(grandchildRun.stdout.split("\n").find((l) => l.startsWith("RESULT ")).slice("RESULT ".length));
+    assert.equal(grandchildResult.inherited, false, "a non-owner parent's child must not inherit");
+    assert.match(grandchildResult.denied ?? "", /not the direct child of the lock owner/);
+    assert.ok(existsSync(lockPath), "the non-owner-parent claim must not remove the lock");
+  } finally {
+    releaseMaintenanceLock({ owned: true });
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // best-effort
+    }
+  }
+});
+
+test("REAL upgrade -> REAL backup child inherits the authenticated lock (no fake backup)", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "tenvyr-upgrade-real-backup-"));
+  try {
+    const fakeGit = join(dir, "fake-git.sh");
+    writeFileSync(
+      fakeGit,
+      `#!/usr/bin/env bash\ncase "\${1} \${2}" in\n  "rev-parse --verify") printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' ;;\n  "rev-parse HEAD") printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' ;;\nesac\nexit 0\n`,
+    );
+    chmodSync(fakeGit, 0o755);
+    const deployEnv = join(dir, "deploy.env");
+    writeFileSync(
+      deployEnv,
+      `TENVYR_VERSION=v0.0.1\nPOSTGRES_PASSWORD=test\nTENVYR_SOURCE_REVISION=${"a".repeat(40)}\n`,
+    );
+    // The upgrade spawns the REAL backup.mjs as its direct child. The
+    // child must INHERIT the upgrade's lock (authenticated token +
+    // direct parent) — it must NOT fail with "maintenance operation
+    // already active" — and then fail later at the unavailable
+    // self-hosted postgres (proving it ran past the lock).
+    const realBackup = join(ROOT, "scripts", "self-hosted", "backup.mjs");
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/self-hosted/upgrade.mjs", "v0.1.0"],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          TENVYR_DEPLOY_ENV: deployEnv,
+          TENVYR_GIT_CMD: fakeGit,
+          TENVYR_UPGRADE_BACKUP_CMD: realBackup,
+        },
+      },
+    );
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    assert.notEqual(result.status, 0, "the upgrade must fail (the real backup cannot reach the self-hosted postgres)");
+    assert.ok(
+      !output.includes("maintenance operation already active"),
+      `the real backup child must INHERIT the upgrade's lock, output was: ${output.slice(0, 800)}`,
+    );
+    assert.match(output, /verified backup did not complete/);
+    // The upgrade releases its lock on exit; a subsequent acquisition
+    // succeeds (no stale lock).
+    const { acquireMaintenanceLock, releaseMaintenanceLock } = await awaitImport(
+      "../self-hosted/maintenance.mjs",
+    );
+    const after = acquireMaintenanceLock();
+    assert.equal(after.owned, true, "the upgrade must release its lock on exit");
+    releaseMaintenanceLock(after);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("planReconciliation: every crash phase maps to a deterministic, never-destructive action", async () => {
   const { planReconciliation, ACTIVE_DB, SAFETY_DB, ISOLATED_DB } = await awaitImport(
     "../self-hosted/maintenance.mjs",
   );
   const dbs = (extra) => [ACTIVE_DB, SAFETY_DB, ISOLATED_DB, ...extra];
-  // No journal / completed journal -> proceed.
-  assert.equal(planReconciliation({ phase: null, databases: dbs([]) }).action, "proceed");
-  assert.equal(planReconciliation({ phase: "complete", databases: dbs([]) }).action, "proceed");
-  // Crash after the first rename: original is the safety copy; active is
-  // missing -> restore-original (NEVER dropped).
+  // VALID journal, complete -> proceed (durable completion evidence: the
+  // retained safety copy is a completed-recovery artifact).
   assert.equal(
-    planReconciliation({ phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }).action,
-    "restore-original",
-  );
-  // Crash after candidate promotion: tenvyr holds the unproven candidate,
-  // safety holds the original -> rollback-candidate.
-  assert.equal(
-    planReconciliation({ phase: "post-gates", databases: dbs([]) }).action,
-    "rollback-candidate",
-  );
-  assert.equal(
-    planReconciliation({ phase: "swap-verified-to-active", databases: dbs([]) }).action,
-    "rollback-candidate",
-  );
-  // Crash before the first rename (journal written, nothing mutated):
-  // tenvyr is the ORIGINAL -> proceed (the safety copy is the previous
-  // completed recovery's artifact).
-  for (const phase of ["verify-done", "quiescing", "swap-active-to-safety"]) {
-    assert.equal(
-      planReconciliation({ phase, databases: dbs([]) }).action,
-      "proceed",
-      `phase ${phase} with active+safety must proceed`,
-    );
-  }
-  // Mid-reconciliation crash after the rename-back: original active, no
-  // safety -> proceed.
-  assert.equal(
-    planReconciliation({ phase: "swap-verified-to-active", databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+    planReconciliation({ journalState: "valid", phase: "complete", databases: dbs([]) }).action,
     "proceed",
   );
-  // No active AND no safety -> blocked (no safe automatic action).
+  // VALID journal, crash after the first rename: original is the safety
+  // copy; active is missing -> restore-original (NEVER dropped).
   assert.equal(
-    planReconciliation({ phase: "swap-verified-to-active", databases: [ISOLATED_DB] }).action,
+    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }).action,
+    "restore-original",
+  );
+  // VALID journal, crash after candidate promotion: tenvyr holds the
+  // unproven candidate, safety holds the original -> rollback-candidate.
+  assert.equal(
+    planReconciliation({ journalState: "valid", phase: "post-gates", databases: dbs([]) }).action,
+    "rollback-candidate",
+  );
+  assert.equal(
+    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: dbs([]) }).action,
+    "rollback-candidate",
+  );
+  // VALID journal, crash before the first rename (journal written,
+  // nothing mutated): tenvyr is the ORIGINAL -> proceed (the safety copy
+  // is the previous completed recovery's artifact).
+  for (const phase of ["verify-done", "quiescing", "swap-active-to-safety"]) {
+    assert.equal(
+      planReconciliation({ journalState: "valid", phase, databases: dbs([]) }).action,
+      "proceed",
+      `valid phase ${phase} with active+safety must proceed`,
+    );
+  }
+  // VALID journal, mid-reconciliation crash after the rename-back:
+  // original active, no safety -> proceed.
+  assert.equal(
+    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+    "proceed",
+  );
+  // VALID journal, no active AND no safety -> blocked.
+  assert.equal(
+    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [ISOLATED_DB] }).action,
     "blocked",
   );
+
+  // ABSENT/MALFORMED journal (evidence unusable) — the OBSERVED layout
+  // decides CONSERVATIVELY; never a default proceed:
+  //  - safety exists, active missing (first rename happened) -> the
+  //    original is under the safety name -> restore-original, NEVER a
+  //    path that can DROP safety.
+  for (const journalState of ["absent", "malformed"]) {
+    assert.equal(
+      planReconciliation({ journalState, databases: [SAFETY_DB, ISOLATED_DB] }).action,
+      "restore-original",
+      `${journalState} journal with original-only-under-safety must restore-original`,
+    );
+    //  - active + safety: ambiguous (completed prior recovery vs
+    //    uncommitted candidate) -> FAIL CLOSED, both copies preserved.
+    assert.equal(
+      planReconciliation({ journalState, databases: dbs([]) }).action,
+      "blocked",
+      `${journalState} journal with active+safety must block`,
+    );
+    //  - no active + no safety -> blocked.
+    assert.equal(
+      planReconciliation({ journalState, databases: [ISOLATED_DB] }).action,
+      "blocked",
+      `${journalState} journal with no active + no safety must block`,
+    );
+    //  - active + no safety -> clean state -> proceed.
+    assert.equal(
+      planReconciliation({ journalState, databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+      "proceed",
+      `${journalState} journal with clean active layout must proceed`,
+    );
+  }
   // The original authority must never be dropped by any plan: every
   // non-proceed action renames the safety copy back or blocks.
   for (const outcome of [
-    planReconciliation({ phase: "post-gates", databases: dbs([]) }),
-    planReconciliation({ phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }),
+    planReconciliation({ journalState: "valid", phase: "post-gates", databases: dbs([]) }),
+    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }),
+    planReconciliation({ journalState: "absent", databases: [SAFETY_DB, ISOLATED_DB] }),
+    planReconciliation({ journalState: "malformed", databases: dbs([]) }),
   ]) {
     assert.ok(
       ["restore-original", "rollback-candidate", "blocked"].includes(outcome.action),
     );
+  }
+});
+
+test("recovery journal: atomic writes never fail open; completion evidence survives", async () => {
+  const {
+    writeJournal,
+    readJournalState,
+    readJournal,
+    clearJournal,
+    journalPath,
+  } = await awaitImport("../self-hosted/maintenance.mjs");
+  const { rmSync, writeFileSync } = await import("node:fs");
+  const path = journalPath();
+  try {
+    // Every phase writes a complete, well-formed, immediately readable
+    // record (temp+rename: no in-place truncation window).
+    for (const phase of [
+      "verify-done",
+      "quiescing",
+      "swap-active-to-safety",
+      "swap-verified-to-active",
+      "post-gates",
+      "complete",
+    ]) {
+      writeJournal(phase, "backup.dump");
+      const { state, journal } = readJournalState();
+      assert.equal(state, "valid", `phase ${phase} must be read back as valid`);
+      assert.equal(journal.phase, phase);
+      assert.equal(readJournal().startedAt, journal.startedAt, "startedAt must be stable");
+    }
+    // A leftover temp file (simulating a crash between the temp write and
+    // the rename) must NEVER corrupt reads: the last valid record wins.
+    writeJournal("post-gates", "backup.dump");
+    writeFileSync(`${path}.tmp`, "{truncated garbage", "utf8");
+    const afterTmp = readJournalState();
+    assert.equal(afterTmp.state, "valid");
+    assert.equal(afterTmp.journal.phase, "post-gates");
+    // A malformed journal file is reported as "malformed" (evidence
+    // unusable), never as a valid phase and never silently "absent".
+    writeFileSync(path, "{not json", "utf8");
+    assert.equal(readJournalState().state, "malformed");
+    assert.equal(readJournal(), null);
+    // Absent journal is reported as "absent".
+    rmSync(path, { force: true });
+    assert.equal(readJournalState().state, "absent");
+    // Completion evidence lifecycle: a "complete" journal (retained
+    // safety copy) must be preserved as the unambiguous completion
+    // marker — clearing is explicit and only for resolved states.
+    writeJournal("complete", "backup.dump");
+    assert.equal(readJournalState().state, "valid");
+    assert.equal(readJournalState().journal.phase, "complete");
+  } finally {
+    clearJournal();
+    try {
+      rmSync(`${journalPath()}.tmp`, { force: true });
+    } catch {
+      // best-effort
+    }
   }
 });
 
@@ -815,6 +1058,41 @@ test("validateManifestContract fails closed on every corruption/tamper class", a
         manifest: { ...validManifest, checksum: "d".repeat(64) },
       }),
     /checksum mismatch/,
+  );
+  // The manifest checksum is REQUIRED: missing, null, malformed, and
+  // non-lowercase shapes all fail closed.
+  const { checksum: _omit, ...withoutChecksum } = validManifest;
+  assert.throws(
+    () => validateManifestContract({ ...context, manifest: withoutChecksum }),
+    /manifest checksum is missing or malformed/,
+    "missing checksum must fail",
+  );
+  assert.throws(
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, checksum: null },
+      }),
+    /manifest checksum is missing or malformed/,
+    "null checksum must fail",
+  );
+  assert.throws(
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, checksum: "not-a-checksum" },
+      }),
+    /manifest checksum is missing or malformed/,
+    "malformed checksum must fail",
+  );
+  assert.throws(
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, checksum: "C".repeat(64) },
+      }),
+    /manifest checksum is missing or malformed/,
+    "non-lowercase checksum must fail",
   );
   // Missing manifest / missing verified marker.
   assert.throws(() => validateManifestContract({ ...context, manifest: null }), /manifest is missing/);
@@ -882,6 +1160,3 @@ test("package.json wires the advertised upgrade and invariants commands", () => 
   assert.match(pkg.scripts["self-hosted:upgrade"], /scripts\/self-hosted\/upgrade\.mjs/);
   assert.match(pkg.scripts["self-hosted:invariants"], /scripts\/self-hosted\/invariants\.mjs/);
 });
-
-const { existsSync } = await import("node:fs");
-const awaitImport = (relative) => import(join(dirname(fileURLToPath(import.meta.url)), relative));

@@ -95,9 +95,15 @@ const main = () => {
   // THAT EXACT dump — a concurrent second backup fails fast instead of
   // interleaving. A crashed backup releases the lock automatically
   // (dead-owner-PID stale reclaim). Under `upgrade` the lock is already
-  // owned and inherited via TENVYR_MAINTENANCE_OWNED=1.
+  // owned and inherited with an AUTHENTICATED operation token
+  // (TENVYR_MAINTENANCE_TOKEN: token equality + direct-parent-owner);
+  // a forged inheritance claim fails hard and never bypasses the lock.
   const lock = acquireMaintenanceLock();
-  if (!lock.owned) {
+  if (!lock.owned && !lock.inherited) {
+    if (lock.denied) {
+      console.error(`[backup] FAIL: ${lock.denied} — refusing to bypass serialization`);
+      process.exit(1);
+    }
     const owner = lock.owner
       ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
       : "";

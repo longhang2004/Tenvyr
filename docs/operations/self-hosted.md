@@ -95,8 +95,11 @@ operator fills values from their own secret store. No installer framework.
   + startedAt) is written at acquisition, and the next acquisition
   reclaims a lock whose owner PID is dead, so a crashed backup/restore can
   never wedge maintenance. `upgrade` owns the lock for its whole run and
-  hands ownership to its backup child via `TENVYR_MAINTENANCE_OWNED=1`
-  (explicit re-entrancy — never a self-deadlock).
+  hands ownership to its backup child with the AUTHENTICATED operation
+  token `TENVYR_MAINTENANCE_TOKEN` (the child's claim is validated
+  against the held lock: token equality AND direct-parent-owner — a
+  forged claim is denied and can never bypass serialization; the child
+  never releases the parent's lock).
 - `pnpm self-hosted:backup` — VERIFIED backup. A consistent `pg_dump`
   (custom format) is restored into an isolated verification database
   (`tenvyr_backup_verify`, bounded and dropped before/after); ALL manifest
