@@ -88,7 +88,13 @@ jobs:
 
       - name: Diff hygiene for pushes
         if: github.event_name == 'push'
-        run: git diff --check "${{ github.event.before }}..${{ github.sha }}"
+        run: |
+          before="${{ github.event.before }}"
+          if ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            echo "before SHA ${before} is not reachable (force-push rewrote history); checking the pushed tip's own diff instead"
+            before="$(git rev-parse "${{ github.sha }}^")"
+          fi
+          git diff --check "${before}..${{ github.sha }}"
 
   python-worker:
     runs-on: ubuntu-latest
