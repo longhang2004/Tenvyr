@@ -3,54 +3,68 @@
  * M11 closure: disposable self-hosted recovery E2E suite — run with
  * `pnpm self-hosted:recovery-test` on infrastructure that is DISPOSABLE.
  *
- * One throwaway stack (postgres + orchestrator + gateway) is brought up in
- * `before` and torn down in `after` (containers, volumes, temp DBs, deploy
- * env, and backup artifacts are cleaned unconditionally). The suite needs
- * no Codex/Claude/OpenCode credentials and never touches real operator
- * deployment state.
+ * ISOLATION (by construction): the suite brings up its own stack under
+ * the UNIQUE project `tenvyr-recovery-e2e` with unique container names
+ * (tenvyr-recovery-e2e-*), a unique PostgreSQL volume, unique host
+ * ports, and its own disposable deploy env at
+ * backups/.recovery-e2e-deploy.env. The production `tenvyr-self-hosted`
+ * names are NEVER targeted — not by the tests and not by the teardown
+ * (the teardown is gated by `disposableStackCreated` and only ever runs
+ * `compose down -v` against the disposable project). An early
+ * safety-guard failure performs ZERO compose-down / volume-delete
+ * actions.
+ *
+ * SAFETY GUARD (before anything is created): refuses to run when
+ *   - any `tenvyr-self-hosted-*` container exists — RUNNING OR STOPPED
+ *     (`docker ps -a`), or
+ *   - the real deployment PostgreSQL volume
+ *     `tenvyr-self-hosted_tenvyr_postgres_data` exists, or
+ *   - a previous E2E stack (`tenvyr-recovery-e2e-*`) still exists.
  *
  * Tests:
- *   A. Concurrent-write backup consistency: writes race backup creation;
- *      a backup that reports PASS must pass an immediate drill of that
- *      exact artifact.
+ *   A. Concurrent-write backup consistency.
  *   B. Historical recovery: state A -> backup A -> live B -> drill A PASS
  *      -> promote A -> B absent -> readiness -> new write succeeds.
- *   C. Invalid backup promotion safety: malformed/corrupt/manifest-
- *      inconsistent backups FAIL promotion BEFORE service quiescing; the
- *      original DB stays active and the services stay ready.
- *   D. Rename failure fault injection: the `verified -> active` rename is
- *      faulted (TENVYR_RESTORE_FAULT=second-rename); the swap state
- *      machine automatically rolls `tenvyr_pre_restore` back to active
- *      and the original deployment becomes healthy again.
- *   E. Post-promotion failure: the orchestrator-readiness gate is faulted
- *      after the restored DB became active; rollback restores the
- *      original authority while the safety copy is still available.
- *   D2. Rollback-rename fault: both the second rename AND the rollback
- *      rename are faulted; restore prints the exact observed state and
- *      bounded recovery commands and never claims success — and the
- *      printed commands, executed by the test, repair the deployment.
- *
- * SAFETY — refuses to run when real infrastructure is present: any
- * tenvyr-self-hosted-* container (a real deployment would be using it) or
- * a leftover preserved deploy.env from a crashed run.
+ *   C. Invalid backup promotion safety (pre-quiesce).
+ *   D. Second-rename fault -> automatic rollback.
+ *   E. Post-promotion gate fault -> rollback.
+ *   D2. Rollback-rename fault -> exact printed commands repair.
+ *   F1/F2. SIGKILL after first rename / after candidate promotion.
+ *   F3/F4. Concurrent backups / concurrent promotions.
+ *   F5. Manifest contract fails closed (incl. required checksum).
+ *   F6/F7/F8. Malformed/missing journal crash layouts.
+ *   G1/G2. SIGKILL after quiesce / after rollback renames -> --reconcile
+ *      restores availability.
+ *   F9. Existing tenvyr_failed_promotion cannot collide with a later
+ *      rollback.
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const DEPLOY_ENV = join(ROOT, "deploy.env");
-const SAVED_DEPLOY_ENV = `${DEPLOY_ENV}.recovery-test-saved`;
+
+/** UNIQUE disposable stack identity — never the production names. */
+export const E2E_PROJECT = "tenvyr-recovery-e2e";
+export const E2E_POSTGRES_CONTAINER = "tenvyr-recovery-e2e-postgres";
+export const E2E_ORCHESTRATOR_PORT = "3101";
+export const E2E_GATEWAY_PORT = "3100";
+export const E2E_POSTGRES_PORT = "5544";
+export const E2E_VOLUME = "recovery_e2e_postgres_data";
+export const E2E_DEPLOY_ENV = join(ROOT, "backups", ".recovery-e2e-deploy.env");
+
 const COMPOSE = [
   "docker",
   "compose",
+  "-p",
+  E2E_PROJECT,
   "-f",
   "docker-compose.self-hosted.yml",
   "--env-file",
-  DEPLOY_ENV,
+  E2E_DEPLOY_ENV,
 ];
 const TARGET = "v0.1.0";
 const DISPOSABLE_SHA = "a".repeat(40);
@@ -84,11 +98,48 @@ const runAsync = (cmd, args, opts = {}) =>
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const dockerPs = () =>
-  run("docker", ["ps", "--format", "{{.Names}}"], { timeout: 30_000 }).stdout
+/** All containers — RUNNING OR STOPPED (docker ps -a). */
+const dockerPsA = () =>
+  run("docker", ["ps", "-a", "--format", "{{.Names}}"], { timeout: 30_000 }).stdout
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+
+const dockerVolumes = () => {
+  const result = run("docker", ["volume", "ls", "--format", "json"], { timeout: 30_000 });
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split("\n")
+    .map((line) => {
+      try {
+        return JSON.parse(line)?.Name ?? null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+};
+
+/** PURE safety decision: the reason to refuse running, or null when the
+ *  environment is safe (no real deployment infrastructure, no leftover
+ *  E2E stack). */
+export const safetyBlockReason = ({ containerNames, volumeNames }) => {
+  for (const name of containerNames) {
+    if (name.startsWith("tenvyr-self-hosted-")) {
+      return `container "${name}" exists (a real self-hosted deployment is using the infrastructure — running or stopped)`;
+    }
+    if (name.startsWith(`${E2E_PROJECT}-`)) {
+      return `disposable E2E container "${name}" already exists (a previous E2E run was not torn down)`;
+    }
+  }
+  if (volumeNames.includes("tenvyr-self-hosted_tenvyr_postgres_data")) {
+    return "the real deployment PostgreSQL volume tenvyr-self-hosted_tenvyr_postgres_data exists";
+  }
+  if (volumeNames.includes(`${E2E_PROJECT}_${E2E_VOLUME}`)) {
+    return `disposable E2E volume ${E2E_PROJECT}_${E2E_VOLUME} already exists (a previous E2E run was not torn down)`;
+  }
+  return null;
+};
 
 const waitForHealth = (url, expected, attempts = 120) => {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -114,7 +165,7 @@ const postJson = (url, body) => {
 };
 
 const psql = (sql, db = "tenvyr") =>
-  run("docker", ["exec", "tenvyr-self-hosted-postgres", "psql", "-U", "tenvyr", "-d", db, "-tA", "-c", sql], {
+  run("docker", ["exec", E2E_POSTGRES_CONTAINER, "psql", "-U", "tenvyr", "-d", db, "-tA", "-c", sql], {
     timeout: 60_000,
   });
 
@@ -130,48 +181,15 @@ const pipelines = () =>
 
 describe("self-hosted recovery E2E (disposable infrastructure)", { timeout: 2_400_000 }, () => {
   let createdBackups = [];
-  let preExistingDeployEnv = null;
-  let disposableDeployEnvWritten = false;
+  let disposableStackCreated = false;
 
   before(() => {
-    // ---- SAFETY GUARDS: disposable infrastructure only ----
-    const names = dockerPs();
-    for (const name of names) {
-      assert.ok(
-        !name.startsWith("tenvyr-self-hosted-"),
-        `refusing to run: container "${name}" exists (a real self-hosted deployment is using the infrastructure)`,
-      );
-    }
-    assert.ok(
-      !process.env.TENVYR_DEPLOY_ENV,
-      "refusing to run: TENVYR_DEPLOY_ENV is set (this test owns ROOT/deploy.env)",
-    );
-    assert.ok(
-      !existsSync(SAVED_DEPLOY_ENV),
-      `refusing to run: ${SAVED_DEPLOY_ENV} already exists (a previous run's preserved deploy.env was never restored)`,
-    );
-    let deployEnvExists = false;
-    try {
-      readFileSync(DEPLOY_ENV, "utf8");
-      deployEnvExists = true;
-    } catch {
-      deployEnvExists = false;
-    }
-    if (deployEnvExists) {
-      preExistingDeployEnv = readFileSync(DEPLOY_ENV, "utf8");
-      if (!preExistingDeployEnv.includes("DISPOSABLE — created by recovery.test.mjs")) {
-        // Preserve a pre-existing (operator or prior-drill) deploy.env and
-        // restore it in teardown — the test only ever writes its own marked,
-        // disposable file.
-        writeFileSync(SAVED_DEPLOY_ENV, preExistingDeployEnv);
-      }
-    }
-
-    // ---- disposable deploy.env (marked, removed in teardown) ----
+    // ---- 0. The disposable deploy env is written FIRST (a fixed,
+    //        gitignored path the suite owns). It carries the unique
+    //        stack identity so the resolved compose project, containers,
+    //        ports, and volume are all E2E-specific. ----
     const example = readFileSync(join(ROOT, ".env.self-hosted.example"), "utf8")
       .split("\n")
-      // The appended values below are authoritative — drop the example's
-      // empty identity placeholders to avoid env-file duplicate semantics.
       .filter((line) => !/^TENVYR_VERSION=/.test(line) && !/^TENVYR_SOURCE_REVISION=/.test(line))
       .join("\n");
     const disposable = `# DISPOSABLE — created by recovery.test.mjs; safe to delete
@@ -179,28 +197,54 @@ ${example}
 POSTGRES_PASSWORD=test
 TENVYR_VERSION=${TARGET}
 TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
+TENVYR_SELF_HOSTED_PREFIX=${E2E_PROJECT}
+TENVYR_POSTGRES_PORT=${E2E_POSTGRES_PORT}
+TENVYR_ORCHESTRATOR_PORT=${E2E_ORCHESTRATOR_PORT}
+TENVYR_GATEWAY_PORT=${E2E_GATEWAY_PORT}
+TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
 `;
-    writeFileSync(DEPLOY_ENV, disposable);
-    disposableDeployEnvWritten = true;
+    writeFileSync(E2E_DEPLOY_ENV, disposable);
 
-    // ---- build (only if missing) + start the disposable stack ----
+    // ---- 1. SAFETY GUARD: refuse when real infrastructure is present
+    //        (containers RUNNING OR STOPPED, or the production volume),
+    //        or when a previous E2E stack was not torn down. On refusal
+    //        NOTHING is created and the teardown performs ZERO
+    //        destructive actions (disposableStackCreated stays false). ----
+    const reason = safetyBlockReason({
+      containerNames: dockerPsA(),
+      volumeNames: dockerVolumes(),
+    });
+    assert.ok(reason === null, `refusing to run: ${reason}`);
+    assert.ok(
+      !process.env.TENVYR_DEPLOY_ENV,
+      `refusing to run: TENVYR_DEPLOY_ENV is already set (${process.env.TENVYR_DEPLOY_ENV}) — the suite owns its disposable deploy env`,
+    );
+
+    // ---- 2. Build (only if missing) + start the disposable stack. ----
     const needsBuild = ["tenvyr-orchestrator", "tenvyr-gateway"].some(
       (image) => run("docker", ["image", "inspect", `${image}:${TARGET}`], { timeout: 30_000 }).status !== 0,
     );
     if (needsBuild) {
       runOk("docker", [...COMPOSE.slice(1), "build"], { timeout: 1_200_000 });
     }
+    // From this point the disposable stack may exist — the teardown is
+    // allowed to tear it down (and ONLY it).
+    disposableStackCreated = true;
     runOk("docker", [...COMPOSE.slice(1), "up", "-d"], { timeout: 300_000 });
     assert.ok(
-      waitForHealth("http://127.0.0.1:3001/health", '"ready":true'),
+      waitForHealth(`http://127.0.0.1:${E2E_ORCHESTRATOR_PORT}/health`, '"ready":true'),
       "orchestrator did not become ready (migrations must have applied)",
     );
-    assert.ok(waitForHealth("http://127.0.0.1:3000/health", "UP"), "gateway did not become ready");
+    assert.ok(waitForHealth(`http://127.0.0.1:${E2E_GATEWAY_PORT}/health`, "UP"), "gateway did not become ready");
   });
 
   after(() => {
-    // ---- TEARDOWN (disposable infrastructure only), always runs ----
-    run("docker", [...COMPOSE.slice(1), "down", "-v"], { timeout: 300_000 });
+    // ---- TEARDOWN: ONLY the disposable E2E project is ever touched.
+    //      If the safety guard failed, disposableStackCreated is false
+    //      and ZERO compose-down / volume-delete actions run. ----
+    if (disposableStackCreated) {
+      run("docker", [...COMPOSE.slice(1), "down", "-v"], { timeout: 300_000 });
+    }
     for (const file of createdBackups) {
       try {
         rmSync(file, { force: true });
@@ -208,41 +252,46 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
         // best-effort cleanup
       }
     }
-    if (disposableDeployEnvWritten) {
-      try {
-        const text = readFileSync(DEPLOY_ENV, "utf8");
-        if (text.includes("DISPOSABLE — created by recovery.test.mjs")) {
-          rmSync(DEPLOY_ENV, { force: true });
-        }
-      } catch {
-        // best-effort cleanup
-      }
-    }
-    // Restore any pre-existing deploy.env the test preserved.
-    if (preExistingDeployEnv !== null) {
-      try {
-        if (!existsSync(DEPLOY_ENV)) {
-          writeFileSync(DEPLOY_ENV, preExistingDeployEnv);
-        }
-        rmSync(SAVED_DEPLOY_ENV, { force: true });
-      } catch {
-        // best-effort cleanup; the preserved copy remains at
-        // deploy.env.recovery-test-saved
-      }
-    }
-    // Hygiene: a crashed test could leave the durable recovery journal or
-    // a stale maintenance lock behind — both are disposable test state.
+    // The suite owns its disposable deploy env + the shared disposable
+    // journal/lock/tombstone paths (no real deployment can exist when
+    // the suite ran — the guard refused otherwise).
     try {
+      rmSync(E2E_DEPLOY_ENV, { force: true });
       rmSync(join(ROOT, "backups", ".recovery-journal.json"), { force: true });
-      rmSync(join(ROOT, "backups", ".maintenance.lock"), { recursive: true, force: true });
+      rmSync(join(ROOT, "backups", ".maintenance.lock"), { force: true });
+      for (const entry of readdirSync(join(ROOT, "backups"))) {
+        if (entry.startsWith(".maintenance.lock.stale.")) {
+          rmSync(join(ROOT, "backups", entry), { recursive: true, force: true });
+        }
+      }
     } catch {
       // best-effort cleanup
     }
   });
 
+  /** The E2E stack identity for spawned scripts: the disposable deploy
+   *  env, the disposable postgres container, the disposable compose
+   *  project, and the disposable ports. The production names are never
+   *  referenced. */
+  const e2eEnv = (extra = {}) => ({
+    ...process.env,
+    TENVYR_DEPLOY_ENV: E2E_DEPLOY_ENV,
+    TENVYR_POSTGRES_CONTAINER: E2E_POSTGRES_CONTAINER,
+    TENVYR_SELF_HOSTED_PROJECT: E2E_PROJECT,
+    TENVYR_ORCHESTRATOR_PORT: E2E_ORCHESTRATOR_PORT,
+    TENVYR_GATEWAY_PORT: E2E_GATEWAY_PORT,
+    ...extra,
+  });
+
+  const orchestratorBase = `http://127.0.0.1:${E2E_ORCHESTRATOR_PORT}`;
+  const gatewayBase = `http://127.0.0.1:${E2E_GATEWAY_PORT}`;
+
   /** Runs backup.mjs and returns { dumpPath, output } of the VERIFIED artifact. */
   const takeBackup = () => {
-    const result = runOk(process.execPath, ["scripts/self-hosted/backup.mjs"], { timeout: 300_000 });
+    const result = runOk(process.execPath, ["scripts/self-hosted/backup.mjs"], {
+      timeout: 300_000,
+      env: e2eEnv(),
+    });
     const match = result.stdout.match(/\[backup\] PASS (\S+\.dump)/);
     assert.ok(match, `backup did not report a PASS dump path: ${result.stdout}`);
     const dumpPath = match[1];
@@ -251,19 +300,25 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
   };
 
   const drill = (dumpPath) =>
-    run(process.execPath, ["scripts/self-hosted/restore.mjs", dumpPath, "--drill"], { timeout: 600_000 });
+    run(process.execPath, ["scripts/self-hosted/restore.mjs", dumpPath, "--drill"], {
+      timeout: 600_000,
+      env: e2eEnv(),
+    });
 
   const promote = (dumpPath, faultLabels = "") =>
     run(process.execPath, ["scripts/self-hosted/restore.mjs", dumpPath, "--promote"], {
       timeout: 900_000,
-      env: {
-        ...process.env,
-        ...(faultLabels ? { TENVYR_RESTORE_FAULT: faultLabels } : {}),
-      },
+      env: e2eEnv(faultLabels ? { TENVYR_RESTORE_FAULT: faultLabels } : {}),
+    });
+
+  const reconcile = () =>
+    run(process.execPath, ["scripts/self-hosted/restore.mjs", "--reconcile"], {
+      timeout: 120_000,
+      env: e2eEnv(),
     });
 
   const createPipeline = (name) =>
-    postJson("http://127.0.0.1:3001/pipelines", {
+    postJson(`${orchestratorBase}/pipelines`, {
       name,
       version: "1.0",
       steps: [{ id: "step", agent: "agent", input: {}, dependsOn: [] }],
@@ -271,17 +326,17 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
 
   const assertServicesReady = (context) => {
     assert.ok(
-      waitForHealth("http://127.0.0.1:3001/health", '"ready":true'),
+      waitForHealth(`${orchestratorBase}/health`, '"ready":true'),
       `${context}: orchestrator not ready`,
     );
-    assert.ok(waitForHealth("http://127.0.0.1:3000/health", "UP"), `${context}: gateway not ready`);
+    assert.ok(waitForHealth(`${gatewayBase}/health`, "UP"), `${context}: gateway not ready`);
   };
 
   it("A: concurrent writes during backup creation never break the backup-drill invariant", async () => {
     // Writes race the backup for its whole duration (dump -> isolated
     // restore -> anchors -> finalize). A PASS must imply an immediate
     // drill of that exact artifact PASSes.
-    const backupPromise = runAsync(process.execPath, ["scripts/self-hosted/backup.mjs"]);
+    const backupPromise = runAsync(process.execPath, ["scripts/self-hosted/backup.mjs"], { env: e2eEnv() });
     let backupDone = false;
     backupPromise.then(() => {
       backupDone = true;
@@ -313,14 +368,14 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
     // 1. STATE A
     const pipelineA = createPipeline("recovery-state-A");
     assert.ok(pipelineA, "state A pipeline did not persist");
-    const executionA = postJson("http://127.0.0.1:3001/executions", { pipelineId: pipelineA });
+    const executionA = postJson(`${orchestratorBase}/executions`, { pipelineId: pipelineA });
     assert.ok(executionA, "state A execution did not persist");
     // 2. BACKUP A (VERIFIED by construction)
     const { dumpPath } = takeBackup();
     // 3. MUTATE the live database with legitimate state B
     const pipelineB = createPipeline("recovery-state-B");
     assert.ok(pipelineB, "state B pipeline did not persist");
-    const executionB = postJson("http://127.0.0.1:3001/executions", { pipelineId: pipelineB });
+    const executionB = postJson(`${orchestratorBase}/executions`, { pipelineId: pipelineB });
     assert.ok(executionB, "state B execution did not persist");
     // 4. DRILL of A: must PASS despite A != current B
     const drillResult = drill(dumpPath);
@@ -481,8 +536,8 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
     // Two backups with deliberate overlap: the exclusive maintenance lock
     // serializes them (one PASS, one deterministic fail-fast), so no
     // corrupt artifact can ever be labeled PASS.
-    const first = runAsync(process.execPath, ["scripts/self-hosted/backup.mjs"]);
-    const second = runAsync(process.execPath, ["scripts/self-hosted/backup.mjs"]);
+    const first = runAsync(process.execPath, ["scripts/self-hosted/backup.mjs"], { env: e2eEnv() });
+    const second = runAsync(process.execPath, ["scripts/self-hosted/backup.mjs"], { env: e2eEnv() });
     const results = await Promise.all([first, second]);
     const passed = results.filter((result) => result.status === 0);
     const failed = results.filter((result) => result.status !== 0);
@@ -503,7 +558,7 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
     const marker = createPipeline("crash-f4-state");
     assert.ok(marker, "crash-f4 pipeline did not persist");
     const { dumpPath } = takeBackup();
-    const first = runAsync(process.execPath, ["scripts/self-hosted/restore.mjs", dumpPath, "--promote"]);
+    const first = runAsync(process.execPath, ["scripts/self-hosted/restore.mjs", dumpPath, "--promote"], { env: e2eEnv() });
     // The second promote starts while the first holds the maintenance
     // lock: it must fail fast BEFORE touching any database name.
     await sleep(2_000);
@@ -670,11 +725,102 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
     assert.ok(dbs.includes("tenvyr_failed_promotion") || databases().includes("tenvyr_failed_promotion"), "the unproven candidate must be preserved");
     // The malformed journal on the now-clean layout is cleared by
     // --reconcile.
-    const reconcile = run(process.execPath, ["scripts/self-hosted/restore.mjs", "--reconcile"], {
-      timeout: 120_000,
-    });
-    assert.equal(reconcile.status, 0, `--reconcile must exit clean: ${reconcile.stdout}\n${reconcile.stderr}`);
+    const reconcileResult = reconcile();
+    assert.equal(reconcileResult.status, 0, `--reconcile must exit clean: ${reconcile.stdout}\n${reconcile.stderr}`);
     assert.ok(!existsSync(journalPath), "the malformed journal must be cleared on the clean layout");
+  });
+
+  it("G1: SIGKILL after quiesce — --reconcile restarts the original deployment and reports the interrupted operation", () => {
+    const marker = createPipeline("crash-g1-state");
+    assert.ok(marker, "crash-g1 pipeline did not persist");
+    const { dumpPath } = takeBackup();
+    // The "quiescing" journal marker is written BEFORE quiesce; the fault
+    // hook kills the process abruptly right after the writers stopped.
+    const crashed = promote(dumpPath, "crash-after-quiesce");
+    assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    // Writers are quiesced: the services are down, the ORIGINAL authority
+    // is still active, and the journal says "quiescing".
+    assert.ok(!waitForHealth(`${orchestratorBase}/health`, '"ready":true', 5), "orchestrator must be quiesced after the crash");
+    assert.ok(pipelines().includes("crash-g1-state"), "the ORIGINAL data must still be present");
+    // --reconcile must restart the deployment, keep the original
+    // authority, and REPORT the interrupted operation (never "no
+    // interrupted promotion detected" while the app is offline).
+    const result = reconcile();
+    assert.equal(result.status, 0, `--reconcile must exit clean: ${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout + result.stderr, /interrupted promotion reconciled/);
+    assert.ok(
+      !(result.stdout + result.stderr).includes("no interrupted promotion detected"),
+      "--reconcile must not claim a clean state while restoring availability",
+    );
+    assert.ok(pipelines().includes("crash-g1-state"), "the ORIGINAL authority must still hold the data");
+    assertServicesReady("after crash-after-quiesce reconcile");
+    const postRecovery = createPipeline("crash-g1-recovery-write");
+    assert.ok(postRecovery, "new write after --reconcile must succeed");
+  });
+
+  it("G2: SIGKILL after DB rollback renames but before service restart — --reconcile finishes the restart", () => {
+    const marker = createPipeline("crash-g2-state");
+    assert.ok(marker, "crash-g2 pipeline did not persist");
+    const { dumpPath } = takeBackup();
+    // Post-promotion gate fault triggers the rollback; the fault hook
+    // kills the process after the rollback renames succeeded but BEFORE
+    // the services were restarted.
+    const crashed = promote(dumpPath, "post-gate-readiness,crash-after-rollback-renames");
+    assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    // The original authority is active again (rollback renames done) but
+    // the services are still stopped; the journal still says "post-gates".
+    const dbs = databases();
+    assert.ok(dbs.includes("tenvyr"), "the original authority must be active after the rollback renames");
+    assert.ok(!dbs.includes("tenvyr_pre_restore"), "the safety copy must have been consumed by the rollback");
+    const result = reconcile();
+    assert.equal(result.status, 0, `--reconcile must exit clean: ${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout + result.stderr, /interrupted promotion reconciled/);
+    assert.ok(pipelines().includes("crash-g2-state"), "the ORIGINAL data must still be present");
+    assertServicesReady("after crash-after-rollback-renames reconcile");
+    const postRecovery = createPipeline("crash-g2-recovery-write");
+    assert.ok(postRecovery, "new write after --reconcile must succeed");
+  });
+
+  it("F9: existing tenvyr_failed_promotion never collides with a later rollback (non-colliding preserve)", () => {
+    const marker = createPipeline("crash-f9-state");
+    assert.ok(marker, "crash-f9 pipeline did not persist");
+    const { dumpPath } = takeBackup();
+    // Manual ambiguous-state repair (the supported operator path):
+    // crash after candidate promotion, corrupt the journal, FAIL CLOSED,
+    // then repair by preserving the candidate under tenvyr_failed_promotion
+    // and restoring the original — leaving NO journal.
+    const crashed = promote(dumpPath, "crash-after-promotion");
+    assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    writeFileSync(journalPath, "{truncated garbage", "utf8");
+    const blocked = promote(dumpPath);
+    assert.notEqual(blocked.status, 0, "the ambiguous state must fail closed");
+    let preserve = psql("ALTER DATABASE tenvyr RENAME TO tenvyr_failed_promotion", "postgres");
+    assert.equal(preserve.status, 0, `preserve command failed: ${preserve.stderr}`);
+    const restoreOriginal = psql("ALTER DATABASE tenvyr_pre_restore RENAME TO tenvyr", "postgres");
+    assert.equal(restoreOriginal.status, 0, `restore command failed: ${restoreOriginal.stderr}`);
+    runOk("docker", [...COMPOSE.slice(1), "start", "orchestrator", "gateway"], { timeout: 120_000 });
+    assertServicesReady("after the manual ambiguous-state repair");
+    const reconciled = reconcile();
+    assert.equal(reconciled.status, 0, `--reconcile must exit clean: ${reconciled.stdout}\n${reconciled.stderr}`);
+    assert.ok(!existsSync(journalPath), "the journal must be cleared on the clean layout");
+    assert.ok(databases().includes("tenvyr_failed_promotion"), "the preserved candidate must still exist");
+    // A NEW promotion with a post-promotion gate failure: its rollback
+    // must NOT target the existing tenvyr_failed_promotion — it preserves
+    // the candidate under a non-colliding bounded name and the original
+    // authority becomes healthy again.
+    const { dumpPath: freshDump } = takeBackup();
+    const failed = promote(freshDump, "post-gate-readiness");
+    assert.notEqual(failed.status, 0, "the faulted promotion must fail");
+    assert.match(failed.stdout + failed.stderr, /automatic rollback restored the original authority/);
+    const after = databases();
+    assert.ok(after.includes("tenvyr"), "the ORIGINAL authority must be active after the non-colliding rollback");
+    assert.ok(after.includes("tenvyr_failed_promotion"), "the manually preserved candidate must NOT have been overwritten or deleted");
+    assert.ok(!after.includes("tenvyr_failed_promotion_1"), "the rollback's own candidate was cleaned up after the successful rollback (only the pre-existing preserved candidate remains)");
+    assert.ok(pipelines().includes("crash-f9-state"), "the ORIGINAL data must still be present");
+    assertServicesReady("after the non-colliding rollback");
+    const postRecovery = createPipeline("crash-f9-recovery-write");
+    assert.ok(postRecovery, "new write must succeed");
   });
 
   it("D2: rollback-rename fault — loud failure with exact recovery commands; the printed commands repair the deployment", () => {
@@ -703,11 +849,9 @@ TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
     assert.ok(pipelines().includes("fault-d2-state"), `recovered authority must hold the original data, got: ${pipelines().join(", ")}`);
     // The durable journal still records the interrupted promotion; the
     // explicit --reconcile mode clears it and proves the state is clean.
-    const reconcile = run(process.execPath, ["scripts/self-hosted/restore.mjs", "--reconcile"], {
-      timeout: 120_000,
-    });
-    assert.equal(reconcile.status, 0, `--reconcile must exit clean: ${reconcile.stdout}\n${reconcile.stderr}`);
-    assert.match(reconcile.stdout, /no interrupted promotion detected|reconciled/);
+    const reconcileResult = reconcile();
+    assert.equal(reconcileResult.status, 0, `--reconcile must exit clean: ${reconcile.stdout}\n${reconcile.stderr}`);
+    assert.match(reconcileResult.stdout, /no interrupted promotion detected|reconciled/);
     assert.ok(!existsSync(join(ROOT, "backups", ".recovery-journal.json")), "the recovery journal must be cleared");
   });
 });

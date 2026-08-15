@@ -51,15 +51,18 @@ const BACKUP_DIR = join(ROOT, "backups");
 /** Bounded isolated verification database (never the active authority). */
 export const VERIFY_DB = "tenvyr_backup_verify";
 
-const container = () => "tenvyr-self-hosted-postgres";
+/** The postgres container name — overridable so disposable-infrastructure
+ *  tests never target the real self-hosted deployment's container. */
+const container = () =>
+  process.env.TENVYR_POSTGRES_CONTAINER ?? "tenvyr-self-hosted-postgres";
 
 /** Deploy env file: overridable so disposable-infrastructure tests never
  *  touch an operator's real deploy.env. */
 const deployEnvPath = () =>
   process.env.TENVYR_DEPLOY_ENV ?? join(ROOT, "deploy.env");
 
-const env = () => {
-  const deploy = readFileSync(deployEnvPath(), "utf8");
+const env = (path) => {
+  const deploy = readFileSync(path, "utf8");
   const values = {};
   for (const line of deploy.split("\n")) {
     if (!line || line.startsWith("#")) continue;
@@ -87,36 +90,22 @@ export const buildManifest = (base, anchors, sourceRevision) => ({
   anchors,
 });
 
-const main = () => {
+/**
+ * The VERIFIED BACKUP OPERATION as an exported callable — the full
+ * pipeline WITHOUT lock management. `upgrade` invokes this IN THE SAME
+ * OWNER PROCESS while holding the maintenance lock (there is no
+ * upgrade->backup child and therefore nothing that could survive the
+ * owner's death and overlap a new owner). The CLI entry `main()` wraps
+ * it with the exclusive maintenance lock. Returns { ok: true, dumpPath }
+ * or THROWS — a caller must treat a throw as "no verified backup was
+ * produced" and refuse any deployment mutation.
+ */
+export const runVerifiedBackup = ({ deployEnvPath: envPath } = {}) => {
+  const path = envPath ?? deployEnvPath();
   mkdirSync(BACKUP_DIR, { recursive: true });
-  // Maintenance serialization: backup uses shared bounded resources (the
-  // verification database + staging dump paths). The exclusive
-  // process-lifetime lock guarantees that a PASSing manifest describes
-  // THAT EXACT dump — a concurrent second backup fails fast instead of
-  // interleaving. A crashed backup releases the lock automatically
-  // (dead-owner-PID stale reclaim). Under `upgrade` the lock is already
-  // owned and inherited with an AUTHENTICATED operation token
-  // (TENVYR_MAINTENANCE_TOKEN: token equality + direct-parent-owner);
-  // a forged inheritance claim fails hard and never bypasses the lock.
-  const lock = acquireMaintenanceLock();
-  if (!lock.owned && !lock.inherited) {
-    if (lock.denied) {
-      console.error(`[backup] FAIL: ${lock.denied} — refusing to bypass serialization`);
-      process.exit(1);
-    }
-    const owner = lock.owner
-      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
-      : "";
-    console.error(
-      `[backup] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
-    );
-    process.exit(1);
-  }
-  const { TENVYR_VERSION, POSTGRES_PASSWORD, TENVYR_SOURCE_REVISION } = env();
+  const { TENVYR_VERSION, POSTGRES_PASSWORD, TENVYR_SOURCE_REVISION } = env(path);
   if (!TENVYR_VERSION || !POSTGRES_PASSWORD) {
-    console.error("[backup] FAIL: deploy.env must set TENVYR_VERSION and POSTGRES_PASSWORD");
-    releaseMaintenanceLock(lock);
-    process.exit(1);
+    throw new Error("deploy.env must set TENVYR_VERSION and POSTGRES_PASSWORD");
   }
   // M11 closure: the deployment identity model has ONE meaning per key —
   // TENVYR_VERSION is the release version (vMAJOR.MINOR.PATCH) and
@@ -125,11 +114,9 @@ const main = () => {
   // attest what it is, so it fails closed:
   //   TENVYR_SOURCE_REVISION=$(git rev-parse HEAD)
   if (!/^[0-9a-f]{40}$/.test(TENVYR_SOURCE_REVISION ?? "")) {
-    console.error(
-      "[backup] FAIL: deploy.env must set TENVYR_SOURCE_REVISION to the full git commit SHA of the deployed source (e.g. TENVYR_SOURCE_REVISION=$(git rev-parse HEAD))",
+    throw new Error(
+      "deploy.env must set TENVYR_SOURCE_REVISION to the full git commit SHA of the deployed source (e.g. TENVYR_SOURCE_REVISION=$(git rev-parse HEAD))",
     );
-    releaseMaintenanceLock(lock);
-    process.exit(1);
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -137,10 +124,10 @@ const main = () => {
   const stagingPath = join(BACKUP_DIR, `.staging-${base}.dump`);
   const finalPath = join(BACKUP_DIR, `${base}.dump`);
   let finalized = false;
-  // Failure contract: any step failure throws, the catch reports FAIL (the
-  // artifact is never labeled verified), and the finally block always
-  // performs deterministic cleanup (verification DB, in-container staging,
-  // and the host staging artifact while it is not a finalized backup).
+  // Failure contract: any step failure throws, the caller reports FAIL
+  // (the artifact is never labeled verified), and the finally block
+  // always performs deterministic cleanup (verification DB, in-container
+  // staging, and the host staging artifact while it is not finalized).
   try {
     // 1. Consistent snapshot of the ACTIVE authority (read-only).
     const dump = docker([
@@ -223,13 +210,7 @@ const main = () => {
       TENVYR_SOURCE_REVISION,
     );
     writeFileSync(join(BACKUP_DIR, `${base}.manifest.json`), JSON.stringify(manifest, null, 2));
-    console.log(`[backup] PASS ${finalPath}`);
-    console.log(`[backup] sha256 ${checksum}`);
-    console.log(`[backup] manifest: version=${manifest.version} sourceRevision=${manifest.sourceRevision} verified=${manifest.verified}`);
-  } catch (error) {
-    console.error(`[backup] FAIL: ${error instanceof Error ? error.message : String(error)}`);
-    releaseMaintenanceLock(lock);
-    process.exit(1);
+    return { ok: true, dumpPath: finalPath, checksum, manifest };
   } finally {
     // Deterministic cleanup: the verification database and in-container
     // staging files are always removed; a failed verification also removes
@@ -243,6 +224,41 @@ const main = () => {
         // best-effort cleanup
       }
     }
+  }
+};
+
+const main = () => {
+  // Maintenance serialization: backup uses shared bounded resources (the
+  // verification database + staging dump paths). The exclusive
+  // process-lifetime lock guarantees that a PASSing manifest describes
+  // THAT EXACT dump — a concurrent second backup fails fast instead of
+  // interleaving. A crashed backup releases the lock automatically: the
+  // next acquisition atomically renames the stale lock (dead owner PID)
+  // to a tombstone and retries, and there is NO child delegation — the
+  // verified-backup operation always runs in the lock owner's process.
+  const lock = acquireMaintenanceLock();
+  if (!lock.owned) {
+    if (lock.denied) {
+      console.error(`[backup] FAIL: ${lock.denied}`);
+      process.exit(1);
+    }
+    const owner = lock.owner
+      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
+      : "";
+    console.error(
+      `[backup] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
+    );
+    process.exit(1);
+  }
+  try {
+    const result = runVerifiedBackup({ deployEnvPath: deployEnvPath() });
+    console.log(`[backup] PASS ${result.dumpPath}`);
+    console.log(`[backup] sha256 ${result.checksum}`);
+    console.log(`[backup] manifest: version=${result.manifest.version} sourceRevision=${result.manifest.sourceRevision} verified=${result.manifest.verified}`);
+  } catch (error) {
+    console.error(`[backup] FAIL: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  } finally {
     releaseMaintenanceLock(lock);
   }
 };

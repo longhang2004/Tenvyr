@@ -82,7 +82,7 @@ import {
   acquireMaintenanceLock,
   clearJournal,
   FAILED_PROMOTION_DB,
-  INHERITANCE_ENV,
+  freeFailedPromotionName,
   ISOLATED_DB,
   journalPath,
   planReconciliation,
@@ -93,7 +93,7 @@ import {
 } from "./maintenance.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
-const CONTAINER = "tenvyr-self-hosted-postgres";
+const CONTAINER = process.env.TENVYR_POSTGRES_CONTAINER ?? "tenvyr-self-hosted-postgres";
 
 /** Deploy env file: overridable so disposable-infrastructure tests never
  *  touch an operator's real deploy.env. */
@@ -303,8 +303,16 @@ const verifyBackup = (dumpPath, TENVYR_VERSION) => {
   });
 };
 
-const compose = () =>
-  ["docker", "compose", "-f", "docker-compose.self-hosted.yml", "--env-file", deployEnvPath()];
+const compose = () => {
+  const args = ["docker", "compose"];
+  const project = process.env.TENVYR_SELF_HOSTED_PROJECT;
+  if (project) args.push("-p", project);
+  args.push("-f", "docker-compose.self-hosted.yml");
+  const override = process.env.TENVYR_SELF_HOSTED_COMPOSE_OVERRIDE;
+  if (override) args.push("-f", override);
+  args.push("--env-file", deployEnvPath());
+  return args;
+};
 
 /** Stops orchestrator + gateway (quiescing authoritative writers). A
  *  partial failure restarts BOTH services before reporting failure so a
@@ -342,9 +350,12 @@ const startServices = () => {
   return true;
 };
 
+const orchestratorUrl = () => `http://127.0.0.1:${process.env.TENVYR_ORCHESTRATOR_PORT ?? "3001"}`;
+const gatewayUrl = () => `http://127.0.0.1:${process.env.TENVYR_GATEWAY_PORT ?? "3000"}`;
+
 const orchestratorReady = (attempts = 20) => {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const probe = spawnSync("curl", ["-s", "http://127.0.0.1:3001/health"], {
+    const probe = spawnSync("curl", ["-s", `${orchestratorUrl()}/health`], {
       cwd: ROOT,
       encoding: "utf8",
       timeout: 5_000,
@@ -360,7 +371,7 @@ const orchestratorReady = (attempts = 20) => {
 
 const gatewayReady = (attempts = 20) => {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const probe = spawnSync("curl", ["-s", "http://127.0.0.1:3000/health"], {
+    const probe = spawnSync("curl", ["-s", `${gatewayUrl()}/health`], {
       cwd: ROOT,
       encoding: "utf8",
       timeout: 5_000,
@@ -407,7 +418,7 @@ const capsuleReconstructionGate = (manifest) => {
 const writeProof = () => {
   const pipeline = spawnSync(
     "curl",
-    ["-s", "-X", "POST", "http://127.0.0.1:3001/pipelines", "-H", "Content-Type: application/json", "-d", JSON.stringify({ name: `post-recovery-proof-${Date.now()}`, version: "1.0", steps: [{ id: "proof-step", agent: "proof-agent", input: {}, dependsOn: [] }] })],
+    ["-s", "-X", "POST", `${orchestratorUrl()}/pipelines`, "-H", "Content-Type: application/json", "-d", JSON.stringify({ name: `post-recovery-proof-${Date.now()}`, version: "1.0", steps: [{ id: "proof-step", agent: "proof-agent", input: {}, dependsOn: [] }] })],
     { cwd: ROOT, encoding: "utf8", timeout: 30_000 },
   );
   const pipelineBody = (() => {
@@ -490,11 +501,23 @@ const printUnrecoverableState = (context) => {
     console.error(`  ${psqlCmd} 'ALTER DATABASE ${SAFETY_DB} RENAME TO ${ACTIVE_DB}'`);
   } else if (hasSafety && hasActive) {
     // An active database already exists: it is the UNPROVEN restored
-    // candidate — preserve it under the bounded failed name BEFORE
-    // restoring the original, so no copy is lost.
+    // candidate — preserve it under a NON-COLLIDING bounded failed name
+    // (an existing tenvyr_failed_promotion is never overwritten and no
+    // rename may target an existing database) BEFORE restoring the
+    // original, so no copy is lost.
+    let failedName = FAILED_PROMOTION_DB;
+    try {
+      failedName = freeFailedPromotionName(dbs);
+    } catch (error) {
+      console.error(`  # ${error.message}`);
+      failedName = `${FAILED_PROMOTION_DB}_archived_${Date.now()}`;
+    }
     console.error(`  # the active database is the unproven restored candidate; preserve it first:`);
-    console.error(`  ${psqlCmd} 'ALTER DATABASE ${ACTIVE_DB} RENAME TO ${FAILED_PROMOTION_DB}'`);
+    console.error(`  ${psqlCmd} 'ALTER DATABASE ${ACTIVE_DB} RENAME TO ${failedName}'`);
     console.error(`  ${psqlCmd} 'ALTER DATABASE ${SAFETY_DB} RENAME TO ${ACTIVE_DB}'`);
+    if (failedName !== FAILED_PROMOTION_DB) {
+      console.error(`  # note: ${FAILED_PROMOTION_DB} already existed and was NOT touched; the candidate was preserved as ${failedName}`);
+    }
   } else if (!hasActive) {
     // No active authority AND no safety copy: no safe automatic command.
     console.error("  # NO active authority and NO safety copy exist — preserve every remaining");
@@ -547,7 +570,53 @@ const reconcileInterruptedState = () => {
     if (journalState === "malformed" || (journalState === "valid" && !dbs.includes(SAFETY_DB))) {
       clearJournal();
     }
+    if (plan.restartServices) {
+      // Mid-resolution window (rename-back done, restart pending): the
+      // original is active but the services may still be stopped. Restart
+      // + prove availability BEFORE continuing.
+      const healthy = restartAndProve();
+      if (!healthy.ok) {
+        printUnrecoverableState(`reconciliation restored the original authority but the deployment is not healthy (${healthy.reason})`);
+        return { action: "blocked", journalState, message: "reconciliation restored the original authority but the deployment is not healthy — see CRITICAL state above" };
+      }
+      console.error("[restore] reconciled: the original authority is active and the services were restarted");
+      return {
+        action: "proceed",
+        journalState,
+        restartServices: true,
+        message: "interrupted promotion reconciled — the original authority is active and the services were restarted; the new operation may continue",
+      };
+    }
     return { action: "proceed", journalState };
+  }
+  if (plan.action === "restart-original") {
+    // Crash at/after the quiescing marker, before the swap: the writers
+    // may be stopped while the ORIGINAL authority is still active.
+    // Restart + prove the original deployment and abort the new
+    // operation (retry required) — availability is never left broken.
+    console.error(`[restore] detected an INTERRUPTED promotion (journal phase=${journal?.phase ?? "unavailable"}); writers may be quiesced while the original authority is still active`);
+    const healthy = restartAndProve();
+    if (!healthy.ok) {
+      printUnrecoverableState(`reconciliation restarted the deployment but it is not healthy (${healthy.reason})`);
+      return { action: "blocked", journalState, message: "reconciliation restarted the deployment but it is not healthy — see CRITICAL state above" };
+    }
+    // The interrupted state is resolved (services running, original
+    // active). The journal is cleared ONLY when no safety copy remains
+    // that could still need durable evidence; otherwise it is kept and
+    // the operator instructions below cover the retained safety copy.
+    if (!dbs.includes(SAFETY_DB)) {
+      clearJournal();
+    } else {
+      console.error(
+        `[restore] note: a retained ${SAFETY_DB} copy exists without an active promotion — archive it manually before retrying: ALTER DATABASE ${SAFETY_DB} RENAME TO ${SAFETY_DB}_archived_<date> (or drop it after confirming the active authority is healthy)`,
+      );
+    }
+    console.error("[restore] reconciled: the original authority is active and the services were restarted; the new operation was aborted — retry explicitly");
+    return {
+      action: "restart-original",
+      journalState,
+      message: "interrupted promotion reconciled — the original authority is active and the services were restarted; the new operation was aborted; retry explicitly",
+    };
   }
   if (plan.action === "restore-original") {
     console.error(`[restore] detected an INTERRUPTED promotion (journal ${journalState === "valid" ? `phase=${journal.phase}` : "evidence unavailable"}); the original authority is preserved as ${SAFETY_DB}`);
@@ -558,16 +627,16 @@ const reconcileInterruptedState = () => {
       );
       return { action: "blocked", journalState, message: "reconciliation failed — see CRITICAL state above" };
     }
-    // The interrupted state is resolved (original active, safety consumed
-    // by the rename-back): the stale journal evidence is cleared.
-    clearJournal();
     // The crashed promotion left the services quiesced: restart the
-    // original deployment and prove readiness + invariants.
+    // original deployment and prove readiness + invariants FIRST, then
+    // clear the stale journal evidence (a crash in this window leaves
+    // the journal in place and the next invocation finishes the restart).
     const healthy = restartAndProve();
     if (!healthy.ok) {
       printUnrecoverableState(`reconciliation restored the original authority but the deployment is not healthy (${healthy.reason})`);
       return { action: "blocked", journalState, message: "reconciliation restored the original authority but the deployment is not healthy — see CRITICAL state above" };
     }
+    clearJournal();
     console.error("[restore] reconciled: the original authority was RESTORED from the safety copy (renamed back, never dropped); services ready");
     return {
       action: "restore-original",
@@ -577,7 +646,11 @@ const reconcileInterruptedState = () => {
   }
   if (plan.action === "rollback-candidate") {
     console.error(`[restore] detected an INTERRUPTED promotion (journal phase=${journal?.phase ?? "unavailable"}); the active database is the UNPROVEN restored candidate`);
-    const preserve = psqlRename(ACTIVE_DB, FAILED_PROMOTION_DB);
+    // Preserve the candidate under a NON-COLLIDING bounded name: an
+    // existing tenvyr_failed_promotion (e.g. from a manual repair) is
+    // never overwritten, and no rename targets an existing database.
+    const failedName = freeFailedPromotionName(dbs);
+    const preserve = psqlRename(ACTIVE_DB, failedName);
     if (!preserve.ok) {
       printUnrecoverableState(
         `reconciliation could not preserve the unproven candidate (${preserve.error})`,
@@ -591,17 +664,17 @@ const reconcileInterruptedState = () => {
       );
       return { action: "blocked", journalState, message: "reconciliation failed — see CRITICAL state above" };
     }
-    clearJournal();
     const healthy = restartAndProve();
     if (!healthy.ok) {
       printUnrecoverableState(`reconciliation restored the original authority but the deployment is not healthy (${healthy.reason})`);
       return { action: "blocked", journalState, message: "reconciliation restored the original authority but the deployment is not healthy — see CRITICAL state above" };
     }
-    console.error(`[restore] reconciled: the unproven candidate was preserved as ${FAILED_PROMOTION_DB}; the original authority restored; services ready`);
+    clearJournal();
+    console.error(`[restore] reconciled: the unproven candidate was preserved as ${failedName}; the original authority restored; services ready`);
     return {
       action: "rollback-candidate",
       journalState,
-      message: "interrupted promotion reconciled — the unproven candidate was preserved and the original authority restored; services are ready; the new operation was aborted; retry explicitly",
+      message: `interrupted promotion reconciled — the unproven candidate was preserved as ${failedName} and the original authority restored; services are ready; the new operation was aborted; retry explicitly`,
     };
   }
   // blocked: no safe automatic action — exact state + instructions.
@@ -623,8 +696,9 @@ const rollbackAfterGateFailure = (gateFailure) => {
     printUnrecoverableState(`post-promotion rollback could not quiesce writers: ${error.message}`);
     throw new Error("post-promotion gate failed and rollback could not quiesce writers — see CRITICAL state above");
   }
+  const failedName = freeFailedPromotionName(observedDatabases() ?? []);
   const rollback = rollbackPostPromotion({
-    renameActiveToFailed: () => psqlRename(ACTIVE_DB, FAILED_PROMOTION_DB),
+    renameActiveToFailed: () => psqlRename(ACTIVE_DB, failedName),
     renameSafetyToActive: () =>
       faulted("rollback-rename") ? { ok: false, error: "injected fault: rollback-rename" } : psqlRename(SAFETY_DB, ACTIVE_DB),
   });
@@ -635,11 +709,19 @@ const rollbackAfterGateFailure = (gateFailure) => {
     );
     throw new Error("post-promotion gate failed AND rollback failed — see CRITICAL state and recovery instructions above");
   }
-  // The state is reconciled (original authority active again): clear the
-  // durable journal. Bounded cleanup: the failed candidate is dropped only
-  // AFTER the original authority is active again.
-  clearJournal();
-  psql(`DROP DATABASE IF EXISTS ${FAILED_PROMOTION_DB}`);
+  if (faulted("crash-after-rollback-renames")) {
+    // Test hook: the original authority is active again but the services
+    // have NOT been restarted — the durable journal still records the
+    // interrupted state, and the next invocation must finish the restart.
+    process.kill(process.pid, "SIGKILL");
+  }
+  // The state is reconciled (original authority active again): restart
+  // + prove FIRST, then clear the durable journal (a crash in this
+  // window leaves the journal in place and the next invocation finishes
+  // the restart). Bounded cleanup: the failed candidate is dropped only
+  // AFTER the original authority is active again, and only the name THIS
+  // rollback created — a pre-existing preserved candidate is never
+  // silently deleted.
   startServices();
   if (!orchestratorReady() || !gatewayReady()) {
     printUnrecoverableState("post-rollback services did not become ready");
@@ -649,6 +731,8 @@ const rollbackAfterGateFailure = (gateFailure) => {
     printUnrecoverableState("post-rollback invariants failed");
     throw new Error("post-promotion rollback restored the database but invariants failed — see CRITICAL state above");
   }
+  clearJournal();
+  psql(`DROP DATABASE IF EXISTS ${failedName}`);
   throw new Error(
     `post-promotion gate failed (${gateFailure}) — automatic rollback restored the original authority; services are ready and invariants pass`,
   );
@@ -682,24 +766,25 @@ const runPostPromotionGates = (manifest) => {
   return null;
 };
 
-/** Acquires the maintenance lock; FAILS HARD on contention or a forged
- *  inheritance claim. Restore always acquires as OWNER (nothing spawns a
- *  restore child; a stray TENVYR_MAINTENANCE_TOKEN in the operator's
- *  shell must never turn restore into an inheritor). */
+/** Acquires the maintenance lock; FAILS HARD on contention or on a stale
+ *  lock whose ownership cannot be established (restore always acquires
+ *  as the sole owner — there is no child delegation anywhere). */
 const requireMaintenanceLock = () => {
-  const lock = acquireMaintenanceLock({ allowInheritance: false });
-  if (lock.owned || lock.inherited) return lock;
-  if (lock.denied) {
-    console.error(`[restore] FAIL: ${lock.denied} — refusing to bypass serialization`);
+  const lock = acquireMaintenanceLock();
+  if (!lock.owned) {
+    if (lock.denied) {
+      console.error(`[restore] FAIL: ${lock.denied} — refusing to bypass serialization`);
+      process.exit(1);
+    }
+    const owner = lock.owner
+      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
+      : "";
+    console.error(
+      `[restore] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
+    );
     process.exit(1);
   }
-  const owner = lock.owner
-    ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
-    : "";
-  console.error(
-    `[restore] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
-  );
-  process.exit(1);
+  return lock;
 };
 
 /** `--reconcile` mode: inspect + reconcile the recovery state only. */
@@ -749,9 +834,12 @@ const main = () => {
   }
 
   // Maintenance serialization: only one backup/restore operation may use
-  // the shared bounded resources at a time (a crashed owner releases the
-  // lock automatically via dead-PID stale reclaim). An inherited lock
-  // (authenticated token + direct-parent-owner) is accepted.
+  // the shared bounded resources at a time. A crashed owner releases the
+  // lock automatically: the next acquisition atomically renames the
+  // stale lock (dead owner PID) to a tombstone and retries. The
+  // verified-backup operation runs in the lock owner's process (no child
+  // delegation), so nothing can survive the owner's death and overlap a
+  // new owner.
   const lock = requireMaintenanceLock();
 
   try {
@@ -812,9 +900,20 @@ const main = () => {
     console.log("[restore] verified backup (pre-quiesce): checksum + manifest contract + deep integrity PASS against the backup manifest");
     writeJournal("verify-done", dumpPath);
 
-    // 3. Quiesce writers (partial failure restarts both services).
-    quiesce();
+    // 3. Quiesce writers. The "quiescing" marker is written BEFORE the
+    //    quiesce attempt: the marker means "services may be partially or
+    //    fully stopped; the DB authority is still the original", so a
+    //    crash at ANY point during/after quiesce is reconciled by
+    //    restarting + proving the original deployment (never left
+    //    offline).
     writeJournal("quiescing", dumpPath);
+    quiesce();
+    if (faulted("crash-after-quiesce")) {
+      // Test hook: writers are quiesced, the journal says "quiescing",
+      // and the process dies abruptly — the next invocation must restart
+      // the original deployment and abort the new operation.
+      process.kill(process.pid, "SIGKILL");
+    }
 
     // 4. Bounded authority swap with deterministic automatic rollback.
     //    The durable journal advances BEFORE each destructive rename, so
@@ -862,9 +961,10 @@ const main = () => {
       }
       if (swap.phase === "rolled-back") {
         // Original authority is active again (the state is reconciled):
-        // clear the journal, restart + prove readiness, then return
-        // promotion failure (never success).
-        clearJournal();
+        // restart + prove readiness FIRST, then clear the journal (a
+        // crash in this window leaves the journal in place and the next
+        // invocation finishes the restart), then return promotion
+        // failure (never success).
         startServices();
         if (!orchestratorReady() || !gatewayReady()) {
           printUnrecoverableState("post-rollback services did not become ready");
@@ -874,6 +974,7 @@ const main = () => {
           printUnrecoverableState("post-rollback invariants failed");
           throw new Error("promotion swap failed, rollback restored the original authority, but invariants failed — see CRITICAL state above");
         }
+        clearJournal();
         console.log(`[restore] ok: original authority restored after failed swap (${swap.reason})`);
         throw new Error("promotion swap failed — automatic rollback restored the original authority; services are ready and invariants pass");
       }

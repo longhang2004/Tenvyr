@@ -34,7 +34,10 @@ test("self-hosted profile pins versions (no :latest floats)", () => {
 
 test("named volumes exist and hold the authority", () => {
   assert.match(COMPOSE, /tenvyr_postgres_data:/);
-  assert.match(COMPOSE, /- tenvyr_postgres_data:\/var\/lib\/postgresql\/data/);
+  assert.match(COMPOSE, /- "\$\{TENVYR_POSTGRES_VOLUME:-tenvyr_postgres_data\}:\/var\/lib\/postgresql\/data"/);
+  // The disposable recovery-E2E volume is DECLARED but never created by
+  // the production profile (the E2E mounts it under its own project).
+  assert.match(COMPOSE, /recovery_e2e_postgres_data:/);
 });
 
 test("orchestrator/gateway consume ORCHESTRATOR_PORT/GATEWAY_PORT (never PORT)", () => {
@@ -49,8 +52,12 @@ test("orchestrator/gateway consume ORCHESTRATOR_PORT/GATEWAY_PORT (never PORT)",
 });
 
 test("orchestrator consumes the POSTGRES_* contract with interpolated password", () => {
-  const orchestratorIndex = COMPOSE.indexOf("container_name: tenvyr-self-hosted-orchestrator");
-  const gatewayIndex = COMPOSE.indexOf("container_name: tenvyr-self-hosted-gateway");
+  // The container names are parameterized so the disposable recovery-E2E
+  // stack is physically separate (unique project/containers/volume/ports).
+  const containerDelimiter = (service) =>
+    COMPOSE.indexOf(`container_name: ${"${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}"}-${service}`);
+  const orchestratorIndex = containerDelimiter("orchestrator");
+  const gatewayIndex = containerDelimiter("gateway");
   const orchestratorBlock = COMPOSE.slice(orchestratorIndex, gatewayIndex);
   assert.ok(orchestratorBlock.includes("POSTGRES_HOST: postgres"), "POSTGRES_HOST missing");
   assert.ok(orchestratorBlock.includes("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD"), "password not interpolated");
@@ -128,8 +135,10 @@ test("restore verifies checksum and version before touching the target", () => {
 });
 
 test("clean checkout is bootable: orchestrator and gateway declare build contexts", () => {
-  const orchestratorIndex = COMPOSE.indexOf("container_name: tenvyr-self-hosted-orchestrator");
-  const gatewayIndex = COMPOSE.indexOf("container_name: tenvyr-self-hosted-gateway");
+  const containerDelimiter = (service) =>
+    COMPOSE.indexOf(`container_name: ${"${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}"}-${service}`);
+  const orchestratorIndex = containerDelimiter("orchestrator");
+  const gatewayIndex = containerDelimiter("gateway");
   const orchestratorBlock = COMPOSE.slice(0, orchestratorIndex);
   assert.match(orchestratorBlock, /build:\n\s+context: \.\n\s+dockerfile: services\/orchestrator\/Dockerfile\n\s+target: production/);
   const gatewayBlock = COMPOSE.slice(orchestratorIndex, gatewayIndex);
@@ -720,81 +729,180 @@ test("maintenance lock: exclusive ownership, fail-fast contention, and stale-loc
   assert.ok(journalPath().endsWith(".recovery-journal.json"));
 });
 
-test("maintenance lock inheritance: the owner's DIRECT child is authenticated; forged claims are denied", async () => {
-  const { acquireMaintenanceLock, releaseMaintenanceLock, INHERITANCE_ENV } = await awaitImport(
+test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO destructive cleanup in teardown", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "tenvyr-fake-docker-"));
+  const logPath = join(dir, "docker.log");
+  const psOutput = join(dir, "ps-a.txt");
+  const volumeOutput = join(dir, "volumes.json");
+  try {
+    // Scenario 1: docker ps -a reports REAL Tenvyr infrastructure (a
+    // STOPPED production container — ps -a shows stopped containers).
+    writeFileSync(psOutput, "tenvyr-self-hosted-postgres\n", "utf8");
+    writeFileSync(volumeOutput, "", "utf8");
+    const fakeDocker = join(dir, "docker");
+    writeFileSync(
+      fakeDocker,
+      `#!/usr/bin/env bash\necho "$*" >> "$TENVYR_FAKE_DOCKER_LOG"\ncase "$1" in\n  ps) cat "$TENVYR_FAKE_DOCKER_PSA" ;;\n  volume) cat "$TENVYR_FAKE_DOCKER_VOLUMES" ;;\n  *) exit 0 ;;\nesac\n`,
+    );
+    chmodSync(fakeDocker, 0o755);
+    // node:test marks its own test-file children with NODE_TEST_CONTEXT;
+    // the spawned SUITE must not inherit it (it would skip running).
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const suite = spawnSync(
+      process.execPath,
+      ["--test", "scripts/self-hosted/recovery.test.mjs"],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 120_000,
+        env: {
+          ...childEnv,
+          PATH: `${dir}:${childEnv.PATH ?? ""}`,
+          TENVYR_FAKE_DOCKER_LOG: logPath,
+          TENVYR_FAKE_DOCKER_PSA: psOutput,
+          TENVYR_FAKE_DOCKER_VOLUMES: volumeOutput,
+        },
+      },
+    );
+    assert.notEqual(suite.status, 0, `the suite must refuse to run when real infrastructure is present: status=${suite.status} out=${(suite.stdout ?? "").slice(-600)} err=${(suite.stderr ?? "").slice(-600)}`);
+    assert.match(suite.stdout + suite.stderr, /refusing to run/);
+    const log = readFileSync(logPath, "utf8");
+    assert.ok(
+      !log.includes("compose"),
+      `the teardown must NEVER run compose against the production project: ${log}`,
+    );
+    assert.ok(
+      !log.includes("down") && !log.includes("volume rm") && !log.includes("rm "),
+      `no destructive cleanup may run after a guard failure: ${log}`,
+    );
+    // Scenario 2: the real production VOLUME exists (preserved volume,
+    // no running container) — also refused, also zero cleanup.
+    const psOutput2 = join(dir, "ps-a2.txt");
+    const volumeOutput2 = join(dir, "volumes2.json");
+    writeFileSync(psOutput2, "", "utf8");
+    writeFileSync(
+      volumeOutput2,
+      JSON.stringify({ Name: "tenvyr-self-hosted_tenvyr_postgres_data", Driver: "local", Scope: "local" }) + "\n",
+      "utf8",
+    );
+    const logPath2 = join(dir, "docker2.log");
+    const suite2 = spawnSync(
+      process.execPath,
+      ["--test", "scripts/self-hosted/recovery.test.mjs"],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 120_000,
+        env: {
+          ...childEnv,
+          PATH: `${dir}:${childEnv.PATH ?? ""}`,
+          TENVYR_FAKE_DOCKER_LOG: logPath2,
+          TENVYR_FAKE_DOCKER_PSA: psOutput2,
+          TENVYR_FAKE_DOCKER_VOLUMES: volumeOutput2,
+        },
+      },
+    );
+    assert.notEqual(suite2.status, 0, "the suite must refuse when the real production volume exists");
+    assert.match(suite2.stdout + suite2.stderr, /refusing to run/);
+    const log2 = readFileSync(logPath2, "utf8");
+    assert.ok(!log2.includes("compose"), `zero compose actions after a volume guard failure: ${log2}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("freeFailedPromotionName: a preserved candidate is never overwritten; rollback renames never collide", async () => {
+  const { freeFailedPromotionName, FAILED_PROMOTION_DB } = await awaitImport(
     "../self-hosted/maintenance.mjs",
   );
-  const { spawnSync } = await import("node:child_process");
-  const { existsSync, rmSync } = await import("node:fs");
+  assert.equal(freeFailedPromotionName([]), FAILED_PROMOTION_DB);
+  assert.equal(
+    freeFailedPromotionName([FAILED_PROMOTION_DB]),
+    `${FAILED_PROMOTION_DB}_1`,
+    "a colliding preserved candidate must yield a non-colliding name",
+  );
+  assert.equal(
+    freeFailedPromotionName([FAILED_PROMOTION_DB, `${FAILED_PROMOTION_DB}_1`, `${FAILED_PROMOTION_DB}_2`]),
+    `${FAILED_PROMOTION_DB}_3`,
+  );
+  assert.throws(
+    () =>
+      freeFailedPromotionName(
+        Array.from({ length: 101 }, (_, i) => (i === 0 ? FAILED_PROMOTION_DB : `${FAILED_PROMOTION_DB}_${i}`)),
+      ),
+    /no free failed-promotion name available/,
+  );
+});
+
+test("concurrent stale-lock reclaim: at most ONE contender becomes owner (atomic rename, no TOCTOU)", async () => {
+  const { acquireMaintenanceLock, releaseMaintenanceLock } = await awaitImport(
+    "../self-hosted/maintenance.mjs",
+  );
+  const { spawnSync, spawn } = await import("node:child_process");
+  const { writeFileSync, rmSync } = await import("node:fs");
   const lockPath = join(ROOT, "backups", ".maintenance.lock");
   const moduleUrl = `file://${join(ROOT, "scripts", "self-hosted", "maintenance.mjs")}`;
-  const childScript = (token) => `
+  const childScript = `
 import("${moduleUrl}").then((m) => {
   const lock = m.acquireMaintenanceLock();
-  console.log("RESULT " + JSON.stringify({ owned: lock.owned, inherited: lock.inherited, held: lock.held, denied: lock.denied ?? null }));
+  const t0 = Date.now();
+  console.log("RESULT " + JSON.stringify({ owned: lock.owned, held: lock.held, owner: lock.owner?.pid ?? null, t0 }));
+  if (lock.owned) {
+    // Hold the lock for a bounded window so a concurrent contender
+    // would OBSERVE this owner as alive — overlapping ownership would
+    // be detectable.
+    const until = Date.now() + 300;
+    while (Date.now() < until) {}
+    m.releaseMaintenanceLock(lock);
+  }
 });
 `;
+  const runChild = () =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], {
+        cwd: ROOT,
+        encoding: "utf8",
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      child.on("close", () => {
+        const line = out.split("\n").find((l) => l.startsWith("RESULT "));
+        resolve(line ? JSON.parse(line.slice("RESULT ".length)) : null);
+      });
+    });
   try {
     rmSync(lockPath, { force: true });
-    const owner = acquireMaintenanceLock();
-    assert.equal(owner.owned, true, "the test process must own the lock");
-    assert.ok(typeof owner.token === "string" && owner.token.length >= 16, "the lock record must carry an operation token");
-
-    // 1. The owner's DIRECT child with the correct token inherits.
-    const child = spawnSync(process.execPath, ["--input-type=module", "-e", childScript(owner.token)], {
-      cwd: ROOT,
-      encoding: "utf8",
-      timeout: 30_000,
-      env: { ...process.env, [INHERITANCE_ENV]: owner.token },
-    });
-    const childResult = JSON.parse(child.stdout.split("\n").find((l) => l.startsWith("RESULT ")).slice("RESULT ".length));
-    assert.equal(childResult.owned, false, "the inherited child does not own the lock");
-    assert.equal(childResult.inherited, true, "the owner's direct child with the correct token must inherit");
-    assert.equal(childResult.held, true);
-    assert.equal(childResult.denied, null);
-    // 2. The inherited child must NEVER release the parent's lock: the
-    //    lock still exists and the owner still holds it after the child
-    //    exited.
-    assert.ok(existsSync(lockPath), "the inherited child must not delete the parent's lock");
-
-    // 3. Forged claim (wrong token) from the owner's own child: denied.
-    const forged = spawnSync(process.execPath, ["--input-type=module", "-e", childScript("wrong-token")], {
-      cwd: ROOT,
-      encoding: "utf8",
-      timeout: 30_000,
-      env: { ...process.env, [INHERITANCE_ENV]: "forged-token" },
-    });
-    const forgedResult = JSON.parse(forged.stdout.split("\n").find((l) => l.startsWith("RESULT ")).slice("RESULT ".length));
-    assert.equal(forgedResult.inherited, false, "a forged token must not inherit");
-    assert.equal(forgedResult.denied, "inherited maintenance ownership not authenticated (operation token mismatch)");
-    assert.ok(existsSync(lockPath), "the forged claim must not remove the lock");
-
-    // 4. Forged claim via a NON-OWNER parent: the correct token is
-    //    useless when the caller is not the owner's direct child.
-    const intermediate = `
-import("${moduleUrl}").then(async (m) => {
-  const { spawnSync } = await import("node:child_process");
-  const grandchild = spawnSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(childScript(owner.token))}], {
-    cwd: ${JSON.stringify(ROOT)},
-    encoding: "utf8",
-    env: { ...process.env, TENVYR_MAINTENANCE_TOKEN: ${JSON.stringify(owner.token)} },
-  });
-  console.log(grandchild.stdout);
-});
-`;
-    // The intermediate parent does NOT hold the lock; the grandchild's
-    // ppid is the intermediate, not the owner.
-    const grandchildRun = spawnSync(process.execPath, ["--input-type=module", "-e", intermediate], {
-      cwd: ROOT,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-    const grandchildResult = JSON.parse(grandchildRun.stdout.split("\n").find((l) => l.startsWith("RESULT ")).slice("RESULT ".length));
-    assert.equal(grandchildResult.inherited, false, "a non-owner parent's child must not inherit");
-    assert.match(grandchildResult.denied ?? "", /not the direct child of the lock owner/);
-    assert.ok(existsSync(lockPath), "the non-owner-parent claim must not remove the lock");
+    // Two contenders encounter ONE stale lock (dead owner) SIMULTANEOUSLY.
+    // The reclaim is a single atomic rename: exactly one contender can win
+    // it, and the loser observes the winner's live lock. LINEARIZABILITY:
+    // at most one owner may hold the lock at any instant — if both report
+    // ownership, their 300ms hold windows must NOT overlap.
+    const HOLD_MS = 300;
+    for (let round = 0; round < 5; round += 1) {
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: 999_999_999, startedAt: new Date().toISOString() }),
+        { flag: "wx" },
+      );
+      const [a, b] = await Promise.all([runChild(), runChild()]);
+      const owners = [a, b].filter((r) => r?.owned === true);
+      assert.ok(owners.length >= 1, `at least one contender must become owner (round ${round}): ${JSON.stringify([a, b])}`);
+      if (owners.length === 2) {
+        // Both reported ownership — they must be SEQUENTIAL, never
+        // overlapping (the second acquired only after the first released).
+        assert.ok(
+          Math.abs(owners[0].t0 - owners[1].t0) >= HOLD_MS,
+          `overlapping ownership windows (round ${round}): ${JSON.stringify([a, b])}`,
+        );
+      }
+      rmSync(lockPath, { force: true });
+    }
   } finally {
-    releaseMaintenanceLock({ owned: true });
     try {
       rmSync(lockPath, { force: true });
     } catch {
@@ -803,11 +911,12 @@ import("${moduleUrl}").then(async (m) => {
   }
 });
 
-test("REAL upgrade -> REAL backup child inherits the authenticated lock (no fake backup)", async () => {
-  const { spawnSync } = await import("node:child_process");
+test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL leaves NO delegated worker behind", async () => {
+  const { spawn } = await import("node:child_process");
   const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "tenvyr-upgrade-real-backup-"));
+  const lockPath = join(ROOT, "backups", ".maintenance.lock");
   try {
     const fakeGit = join(dir, "fake-git.sh");
     writeFileSync(
@@ -820,44 +929,86 @@ test("REAL upgrade -> REAL backup child inherits the authenticated lock (no fake
       deployEnv,
       `TENVYR_VERSION=v0.0.1\nPOSTGRES_PASSWORD=test\nTENVYR_SOURCE_REVISION=${"a".repeat(40)}\n`,
     );
-    // The upgrade spawns the REAL backup.mjs as its direct child. The
-    // child must INHERIT the upgrade's lock (authenticated token +
-    // direct parent) — it must NOT fail with "maintenance operation
-    // already active" — and then fail later at the unavailable
-    // self-hosted postgres (proving it ran past the lock).
-    const realBackup = join(ROOT, "scripts", "self-hosted", "backup.mjs");
-    const result = spawnSync(
+    // The upgrade invokes the REAL backup.mjs runVerifiedBackup IN THE
+    // SAME PROCESS while holding the maintenance lock — there is no
+    // upgrade->backup child, so NOTHING that uses the shared maintenance
+    // resources can survive the owner's death. The backup fails only at
+    // the unavailable self-hosted postgres (proving it ran past the
+    // lock, which the owner process itself holds).
+    const child = spawn(
       process.execPath,
       ["scripts/self-hosted/upgrade.mjs", "v0.1.0"],
       {
         cwd: ROOT,
-        encoding: "utf8",
-        timeout: 60_000,
         env: {
           ...process.env,
           TENVYR_DEPLOY_ENV: deployEnv,
           TENVYR_GIT_CMD: fakeGit,
-          TENVYR_UPGRADE_BACKUP_CMD: realBackup,
         },
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    assert.notEqual(result.status, 0, "the upgrade must fail (the real backup cannot reach the self-hosted postgres)");
-    assert.ok(
-      !output.includes("maintenance operation already active"),
-      `the real backup child must INHERIT the upgrade's lock, output was: ${output.slice(0, 800)}`,
-    );
-    assert.match(output, /verified backup did not complete/);
-    // The upgrade releases its lock on exit; a subsequent acquisition
-    // succeeds (no stale lock).
+    let output = "";
+    let killed = false;
+    const killPromise = new Promise((resolve) => {
+      child.stdout.on("data", (d) => {
+        output += d;
+        if (output.includes("taking VERIFIED backup") && !killed) {
+          killed = true;
+          // SIGKILL the owner MID-BACKUP: the crash-linearizability
+          // property under test.
+          child.kill("SIGKILL");
+          resolve({ killed: true });
+        }
+      });
+      child.stderr.on("data", (d) => {
+        output += d;
+      });
+    });
+    const exitPromise = new Promise((resolve) => {
+      child.on("close", (code, signal) => resolve({ code, signal }));
+    });
+    const killDone = await Promise.race([
+      killPromise,
+      exitPromise.then(() => ({ timedOut: true })),
+    ]);
+    const exit = await exitPromise;
+    if (killDone.timedOut) {
+      // The backup failed before the kill landed — the upgrade exited
+      // normally; the ORPHAN-PROOF still holds (nothing was ever forked).
+      assert.notEqual(exit.code, 0, "the upgrade must fail (the real backup cannot reach the postgres)");
+      assert.match(output, /verified backup did not complete/);
+    } else {
+      assert.equal(exit.signal, "SIGKILL", "the owner must die by SIGKILL mid-backup");
+    }
+    // PROOF: no process capable of using the shared maintenance
+    // resources survives the owner's death — the backup ran IN the
+    // owner process, so no backup.mjs process can exist.
+    const survivors = await new Promise((resolve) => {
+      import("node:child_process").then(({ spawnSync }) => {
+        const result = spawnSync("pgrep", ["-f", "scripts/self-hosted/backup.mjs"], {
+          cwd: ROOT,
+          encoding: "utf8",
+        });
+        resolve(result.status === 0 ? result.stdout.trim().split("\n").filter(Boolean) : []);
+      });
+    });
+    assert.deepEqual(survivors, [], `no orphan backup process may survive the owner's death, got: ${survivors.join(", ")}`);
+    // The dead owner's stale lock is safely reclaimed (atomic rename) by
+    // the next acquisition — and with no orphan, nothing can overlap.
     const { acquireMaintenanceLock, releaseMaintenanceLock } = await awaitImport(
       "../self-hosted/maintenance.mjs",
     );
     const after = acquireMaintenanceLock();
-    assert.equal(after.owned, true, "the upgrade must release its lock on exit");
+    assert.equal(after.owned, true, "the stale lock from the dead owner must be reclaimable");
     releaseMaintenanceLock(after);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // best-effort
+    }
   }
 });
 
@@ -888,21 +1039,40 @@ test("planReconciliation: every crash phase maps to a deterministic, never-destr
     planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: dbs([]) }).action,
     "rollback-candidate",
   );
-  // VALID journal, crash before the first rename (journal written,
-  // nothing mutated): tenvyr is the ORIGINAL -> proceed (the safety copy
-  // is the previous completed recovery's artifact).
-  for (const phase of ["verify-done", "quiescing", "swap-active-to-safety"]) {
+  // VALID journal, crash before the first rename: "verify-done" (quiesce
+  // never started — services running) -> proceed; "quiescing" and
+  // "swap-active-to-safety" (writers may be stopped, original active) ->
+  // restart-original (availability is never left broken).
+  assert.equal(
+    planReconciliation({ journalState: "valid", phase: "verify-done", databases: dbs([]) }).action,
+    "proceed",
+  );
+  for (const phase of ["quiescing", "swap-active-to-safety"]) {
     assert.equal(
       planReconciliation({ journalState: "valid", phase, databases: dbs([]) }).action,
-      "proceed",
-      `valid phase ${phase} with active+safety must proceed`,
+      "restart-original",
+      `valid phase ${phase} with active+safety must restart-original`,
+    );
+    assert.equal(
+      planReconciliation({ journalState: "valid", phase, databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+      "restart-original",
+      `valid phase ${phase} with active+no-safety must restart-original`,
     );
   }
   // VALID journal, mid-reconciliation crash after the rename-back:
-  // original active, no safety -> proceed.
+  // original active, no safety, services possibly still stopped ->
+  // proceed WITH restartServices (the next invocation finishes the
+  // restart before continuing).
+  const midReconciliation = planReconciliation({
+    journalState: "valid",
+    phase: "swap-verified-to-active",
+    databases: [ACTIVE_DB, ISOLATED_DB],
+  });
+  assert.equal(midReconciliation.action, "proceed");
+  assert.equal(midReconciliation.restartServices, true);
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [ACTIVE_DB, ISOLATED_DB] }).action,
-    "proceed",
+    planReconciliation({ journalState: "valid", phase: "post-gates", databases: [ACTIVE_DB, ISOLATED_DB] }).restartServices,
+    true,
   );
   // VALID journal, no active AND no safety -> blocked.
   assert.equal(

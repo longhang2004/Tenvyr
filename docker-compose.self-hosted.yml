@@ -14,7 +14,7 @@ name: tenvyr-self-hosted
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: tenvyr-self-hosted-postgres
+    container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-postgres
     environment:
       POSTGRES_USER: tenvyr
       # Secret REFERENCES only — never live values. The operator provides
@@ -23,9 +23,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (or POSTGRES_PASSWORD_FILE) at deploy time}
       POSTGRES_DB: tenvyr
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${TENVYR_POSTGRES_PORT:-5433}:5432"
     volumes:
-      - tenvyr_postgres_data:/var/lib/postgresql/data
+      - "${TENVYR_POSTGRES_VOLUME:-tenvyr_postgres_data}:/var/lib/postgresql/data"
     networks:
       - tenvyr-net
     healthcheck:
@@ -43,7 +43,7 @@ services:
       context: .
       dockerfile: services/orchestrator/Dockerfile
       target: production
-    container_name: tenvyr-self-hosted-orchestrator
+    container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-orchestrator
     environment:
       ORCHESTRATOR_PORT: "3001"
       # The orchestrator's database contract is POSTGRES_* (see
@@ -61,7 +61,7 @@ services:
       HTTP_AGENT_CALLBACK_KEYS: ${HTTP_AGENT_CALLBACK_KEYS:?set callback keys (JSON of keyId -> secretEnv name)}
       ORCHESTRATOR_SUPERVISION_CONFIG: ${ORCHESTRATOR_SUPERVISION_CONFIG:-{}}
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:${TENVYR_ORCHESTRATOR_PORT:-3001}:3001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,12 +81,12 @@ services:
       context: .
       dockerfile: services/gateway/Dockerfile
       target: production
-    container_name: tenvyr-self-hosted-gateway
+    container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-gateway
     environment:
       GATEWAY_PORT: "3000"
       ORCHESTRATOR_URL: http://orchestrator:3001
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${TENVYR_GATEWAY_PORT:-3000}:3000"
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -100,6 +100,11 @@ services:
 
 volumes:
   tenvyr_postgres_data:
+  # Declared for the disposable recovery-E2E stack (scripts/self-hosted/
+  # recovery.test.mjs mounts it via TENVYR_POSTGRES_VOLUME under the
+  # tenvyr-recovery-e2e project). Never created or touched by the
+  # production profile.
+  recovery_e2e_postgres_data:
 
 networks:
   tenvyr-net:

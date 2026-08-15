@@ -7,20 +7,24 @@
  *    dump paths, the authority-swap database names). Every backup and
  *    every restore (drill/promote/reconcile) acquires it; a second
  *    concurrent operation FAILS FAST with "maintenance operation already
- *    active" instead of interleaving destructive operations. Ownership is
- *    an atomic O_EXCL lock-file create carrying the owner record (PID +
- *    startedAt + a random OPERATION TOKEN) in the same write — a process
- *    crash releases it automatically because the next acquisition
- *    detects the dead owner PID and reclaims the stale lock.
+ *    active" instead of interleaving destructive operations.
  *
- *    INHERITANCE (upgrade -> its backup child): the owner passes its
- *    operation token to its DIRECT child via TENVYR_MAINTENANCE_TOKEN.
- *    Inherited acquisition is authenticated against the currently held
- *    lock: the token must equal the lock record's token AND the caller's
- *    direct parent PID must equal the lock owner PID. A forged
- *    TENVYR_MAINTENANCE_TOKEN from an unrelated process is DENIED — it
- *    can never bypass serialization. An inherited child never releases
- *    the lock (release is owner-only).
+ *    CRASH-LINEARIZABLE OWNERSHIP:
+ *      - the claim is an atomic O_EXCL lock-file create carrying the
+ *        owner record (PID + startedAt) in the same syscall — there is
+ *        no mkdir-then-write window a concurrent acquirer could race;
+ *      - STALE-LOCK RECLAIM is a single atomic RENAME of the stale lock
+ *        file to a tombstone name (exactly one contender can win the
+ *        rename; losers retry and observe the winner's live owner), so
+ *        two simultaneous reclaimers can NEVER both become owner — the
+ *        old rm-then-create TOCTOU is gone;
+ *      - an unreadable owner record is never removed: the acquirer
+ *        waits a bounded moment (the owner may be mid-write) and FAILS
+ *        CLOSED with operator instructions if it stays unreadable;
+ *      - there is NO child/inheritance delegation: the verified backup
+ *        runs IN the owner process (upgrade calls backup.mjs's exported
+ *        runVerifiedBackup while holding the lock), so no delegated
+ *        worker can survive the owner's death and overlap a new owner.
  *
  * 2. RECOVERY JOURNAL — durable phase markers for `restore --promote`,
  *    written BEFORE every destructive database step via an atomic
@@ -30,7 +34,9 @@
  *    a truncated/invalid fail-open record. Phases:
  *
  *      verify-done                 deep verification passed, about to quiesce
- *      quiescing                   writers stopped, about to swap
+ *      quiescing                   written BEFORE quiesce: writers may be
+ *                                  partially or fully stopped; DB authority
+ *                                  is still the ORIGINAL
  *      swap-active-to-safety       about to rename tenvyr -> tenvyr_pre_restore
  *      swap-verified-to-active     first rename done, about to rename
  *                                  tenvyr_restore -> tenvyr
@@ -39,11 +45,13 @@
  *
  *    Reconciliation is CONSERVATIVE when the journal evidence is absent,
  *    malformed, or truncated: the OBSERVED database-name layout decides,
- *    never a default "proceed". In particular, `tenvyr_pre_restore` is
- *    NEVER dropped by reconciliation — it is only ever renamed back to
- *    `tenvyr` (or preserved with exact instructions when no safe action
- *    exists), and an ambiguous "active + safety without usable journal"
- *    layout FAILS CLOSED instead of guessing.
+ *    never a default "proceed". `tenvyr_pre_restore` is NEVER dropped by
+ *    reconciliation — it is only ever renamed back to `tenvyr` (or
+ *    preserved with exact instructions when no safe action exists), the
+ *    ambiguous "active + safety without usable journal" layout FAILS
+ *    CLOSED, and phases at-or-after "quiescing" restart + prove the
+ *    services (a crash after writers were quiesced must never leave the
+ *    application offline).
  */
 import { randomBytes } from "node:crypto";
 import {
@@ -71,13 +79,6 @@ export const FAILED_PROMOTION_DB = "tenvyr_failed_promotion";
 
 const JOURNAL_PATH = join(BACKUP_DIR, ".recovery-journal.json");
 
-/** Operation token conveyed by the maintenance owner to its DIRECT child
- *  (upgrade -> backup). The child's inherited acquisition is validated
- *  against the currently held lock record: token equality AND direct
- *  parent PID == lock owner PID. Forgeable by nobody: the env var alone
- *  is never sufficient. */
-export const INHERITANCE_ENV = "TENVYR_MAINTENANCE_TOKEN";
-
 export const journalPath = () => JOURNAL_PATH;
 
 /* ------------------------------------------------------------------ */
@@ -85,10 +86,12 @@ export const journalPath = () => JOURNAL_PATH;
 /* ------------------------------------------------------------------ */
 
 /** Exclusive ownership is claimed by an atomic O_EXCL file create; the
- *  owner record (PID + startedAt + operation token) is written in the
- *  SAME syscall, so there is no mkdir-then-write window a concurrent
- *  acquirer could race. Crash-release: the next acquisition reclaims a
- *  lock whose owner PID is dead. */
+ *  owner record (PID + startedAt) is written in the SAME syscall, so
+ *  there is no mkdir-then-write window a concurrent acquirer could race.
+ *  Crash-release: the next acquisition atomically renames a stale lock
+ *  (dead owner PID) to a tombstone and retries — exactly one contender
+ *  can win the rename, so two simultaneous reclaimers can never both
+ *  become owner (no rm-then-create TOCTOU). */
 const LOCK_PATH = join(BACKUP_DIR, ".maintenance.lock");
 
 const syncSleep = (ms) => {
@@ -98,56 +101,39 @@ const syncSleep = (ms) => {
   }
 };
 
-const readLockOwner = () => {
+const readOwnerFrom = (path) => {
   try {
-    const owner = JSON.parse(readFileSync(LOCK_PATH, "utf8"));
+    const owner = JSON.parse(readFileSync(path, "utf8"));
     return typeof owner?.pid === "number" && owner.pid > 0 ? owner : null;
   } catch {
     return null;
   }
 };
 
-/** Inherited acquisition: the caller claims the lock already held by its
- *  direct parent. AUTHENTICATED: the operation token must equal the lock
- *  record's token AND the caller's direct parent PID must be the lock
- *  owner. Anything else is a forged inheritance claim and is denied. */
-const acquireInherited = () => {
-  const token = process.env[INHERITANCE_ENV] ?? "";
-  const owner = readLockOwner();
-  if (owner === null) {
-    return { owned: false, inherited: false, held: false, denied: "no maintenance lock is currently held" };
+const readLockOwner = () => readOwnerFrom(LOCK_PATH);
+
+const isPidAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
-  if (typeof owner.token !== "string" || owner.token.length === 0 || owner.token !== token) {
-    return { owned: false, inherited: false, held: true, denied: "inherited maintenance ownership not authenticated (operation token mismatch)" };
-  }
-  if (owner.pid !== process.ppid) {
-    return { owned: false, inherited: false, held: true, denied: "inherited maintenance ownership not authenticated (caller is not the direct child of the lock owner)" };
-  }
-  return { owned: false, inherited: true, held: true, token };
 };
 
-export const acquireMaintenanceLock = ({ allowInheritance = true } = {}) => {
-  if (
-    allowInheritance &&
-    process.env[INHERITANCE_ENV] !== undefined &&
-    process.env[INHERITANCE_ENV] !== ""
-  ) {
-    return acquireInherited();
-  }
+export const acquireMaintenanceLock = () => {
   mkdirSync(BACKUP_DIR, { recursive: true });
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const token = randomBytes(16).toString("hex");
       writeFileSync(
         LOCK_PATH,
         JSON.stringify({
           pid: process.pid,
           startedAt: new Date().toISOString(),
-          token,
         }),
         { flag: "wx" },
       );
-      return { owned: true, inherited: false, held: true, token };
+      return { owned: true, held: true };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       let owner = readLockOwner();
@@ -157,30 +143,59 @@ export const acquireMaintenanceLock = ({ allowInheritance = true } = {}) => {
         syncSleep(25);
         owner = readLockOwner();
       }
+      if (owner !== null && isPidAlive(owner.pid)) {
+        return { owned: false, held: true, owner };
+      }
       if (owner !== null) {
+        // Stale lock (dead owner): reclaim via a single ATOMIC RENAME to
+        // a tombstone — exactly one contender wins the rename. The
+        // tombstone is then VERIFIED: it must still hold the SAME stale
+        // record we read. If the lock was replaced between our read and
+        // our rename (a live owner's fresh lock), the tombstone holds a
+        // LIVE record — restore it immediately and yield (the live
+        // owner's lock is never destroyed).
+        const tombstone = `${LOCK_PATH}.stale.${process.pid}.${Date.now()}`;
         try {
-          process.kill(owner.pid, 0);
-          return { owned: false, inherited: false, held: true, owner };
-        } catch {
-          // ESRCH: the owner PID is dead -> stale lock
+          renameSync(LOCK_PATH, tombstone);
+        } catch (renameError) {
+          if (renameError?.code === "ENOENT") {
+            continue; // another contender reclaimed it first — retry
+          }
+          throw renameError;
         }
+        const tombstoneOwner = readOwnerFrom(tombstone);
+        if (tombstoneOwner !== null && isPidAlive(tombstoneOwner.pid)) {
+          // We moved a LIVE owner's lock: restore it and yield.
+          try {
+            renameSync(tombstone, LOCK_PATH);
+          } catch {
+            // best-effort restore; the lock path is recreated by retry
+          }
+          return { owned: false, held: true, owner: tombstoneOwner };
+        }
+        // The tombstone holds the stale record we intended to reclaim
+        // (or an unreadable/dead one): proceed to create the new lock.
+        // The tombstone itself is left as bounded evidence; it is never
+        // swept by acquisition (a sweep could race an in-flight
+        // verify-and-restore) — the E2E teardown and operators clean
+        // tombstones explicitly.
+        continue;
       }
-      // Stale lock (dead owner or unreadable after the bounded wait):
-      // a crashed process releases the lock automatically — reclaim it.
-      try {
-        rmSync(LOCK_PATH, { force: true });
-      } catch {
-        // best-effort
-      }
+      // Unreadable owner record after the bounded wait: FAIL CLOSED —
+      // never remove a lock whose ownership cannot be established.
+      return {
+        owned: false,
+        held: true,
+        owner: null,
+        denied: "the maintenance lock exists but its owner record is unreadable — a crashed owner may be mid-write; remove backups/.maintenance.lock only after confirming no maintenance process is running",
+      };
     }
   }
-  return { owned: false, inherited: false, held: true, owner: null };
+  return { owned: false, held: true, owner: null };
 };
 
-/** Release is OWNER-ONLY: an inherited child never deletes the parent's
- *  lock (it only ever releases when it actually owns the lock). */
 export const releaseMaintenanceLock = (lock) => {
-  if (!lock?.owned || lock.inherited) return;
+  if (!lock?.owned) return;
   try {
     rmSync(LOCK_PATH, { force: true });
   } catch {
@@ -291,6 +306,25 @@ export const readJournalState = () => {
 export const readJournal = () => readJournalState().journal;
 
 /* ------------------------------------------------------------------ */
+/* Failed-promotion candidate names                                    */
+/* ------------------------------------------------------------------ */
+
+/** A non-colliding name for preserving an unresolved candidate: the
+ *  bounded base name when free, otherwise a bounded numeric suffix. No
+ *  rollback rename may target an existing database, and an unresolved
+ *  failed candidate is never silently overwritten or deleted. */
+export const freeFailedPromotionName = (existingNames) => {
+  if (!existingNames.includes(FAILED_PROMOTION_DB)) return FAILED_PROMOTION_DB;
+  for (let i = 1; i <= 100; i += 1) {
+    const name = `${FAILED_PROMOTION_DB}_${i}`;
+    if (!existingNames.includes(name)) return name;
+  }
+  throw new Error(
+    "no free failed-promotion name available — archive or drop the preserved candidates first",
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* Crash reconciliation (pure decision table)                          */
 /* ------------------------------------------------------------------ */
 
@@ -301,12 +335,20 @@ export const readJournal = () => readJournalState().journal;
  * authority: the safety name is only ever renamed back.
  *
  *   proceed            nothing to undo; the new operation may continue
+ *                      (restartServices: an at-or-after-quiescing crash
+ *                      window was resolved — services must be restarted
+ *                      and proven before continuing)
+ *   restart-original   services may be quiesced while the original
+ *                      authority is still active (crash at/after the
+ *                      quiescing marker, before the swap); restart +
+ *                      prove the original deployment and abort the new
+ *                      operation (retry required)
  *   restore-original   the original authority is under the safety name
  *                      (first rename happened, second did not) and must
  *                      be renamed back (abort, retry required)
  *   rollback-candidate `tenvyr` holds the UNPROVEN restored candidate;
- *                      move it to the bounded failed state and restore
- *                      the original (abort, retry required)
+ *                      move it to a bounded non-colliding failed name
+ *                      and restore the original (abort, retry required)
  *   blocked            no safe automatic action; print exact state +
  *                      bounded instructions (FAIL CLOSED — never guess)
  *
@@ -356,15 +398,28 @@ export const planReconciliation = ({ journalState = "absent", phase = null, data
       // The second rename happened: `tenvyr` is the unproven candidate.
       return { action: "rollback-candidate" };
     }
-    // Phases before the swap ("verify-done", "quiescing",
-    // "swap-active-to-safety"): no rename ran, `tenvyr` is the ORIGINAL
-    // (the safety copy is the previous completed recovery's artifact).
+    if (phase === "quiescing" || phase === "swap-active-to-safety") {
+      // Writers may be stopped (the quiescing marker is written BEFORE
+      // quiesce); the first rename never ran — `tenvyr` is the ORIGINAL.
+      // Restart + prove availability and abort (retry required).
+      return { action: "restart-original" };
+    }
+    // "verify-done": quiesce never started — services are running.
     return { action: "proceed" };
   }
   if (!hasActive) {
     return { action: "blocked" };
   }
-  // Active present, no safety: the original is active (either nothing was
-  // mutated or a mid-reconciliation crash after the rename-back).
+  // Active present, no safety:
+  if (phase === "quiescing" || phase === "swap-active-to-safety") {
+    // Writers may be stopped; the original is active.
+    return { action: "restart-original" };
+  }
+  if (phase === "swap-verified-to-active" || phase === "post-gates") {
+    // Mid-reconciliation window (rename-back done, restart pending):
+    // the original is active but services may still be stopped.
+    return { action: "proceed", restartServices: true };
+  }
+  // "verify-done" (and anything else): nothing was quiesced.
   return { action: "proceed" };
 };

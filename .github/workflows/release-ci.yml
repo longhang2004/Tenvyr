@@ -272,6 +272,21 @@ jobs:
       - name: Disposable self-hosted recovery E2E (required)
         run: pnpm self-hosted:recovery-test
 
+      - name: Tear down the disposable recovery-E2E stack (always)
+        # ONLY the disposable E2E project (tenvyr-recovery-e2e) is ever
+        # targeted — never the production tenvyr-self-hosted project. The
+        # E2E suite writes backups/.recovery-e2e-deploy.env before
+        # anything else, so the env file exists whenever the stack could
+        # have been created.
+        if: always()
+        run: |
+          if [ -f backups/.recovery-e2e-deploy.env ]; then
+            docker compose -p tenvyr-recovery-e2e \
+              -f docker-compose.self-hosted.yml \
+              --env-file backups/.recovery-e2e-deploy.env \
+              down -v
+          fi
+
       - name: Show leftover containers on failure
         if: failure()
         run: docker ps -a

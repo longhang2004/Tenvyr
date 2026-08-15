@@ -337,3 +337,49 @@ OPEN.
   pending" statement in this report is corrected (M8–M10 accepted by
   independent Tech Lead review). M11 is NOT closed — closure remains the
   Technical Lead's decision.
+
+## Closure hardening 6 (2026-08-15, implementer — crash-linearizable lock, E2E isolation, availability-restoring reconcile, collision-safe failed-promotion)
+
+- CRASH-LINEARIZABLE MAINTENANCE LOCK: verified-backup is now an
+  exported callable (`runVerifiedBackup`) invoked IN THE LOCK OWNER'S
+  PROCESS — `upgrade` no longer spawns a backup child, so no delegated
+  worker can survive the owner's death and overlap a new owner (the
+  forgeable TENVYR_MAINTENANCE_TOKEN inheritance mechanism is GONE).
+  Stale-lock reclaim is a single atomic RENAME to a tombstone followed
+  by a verify-and-restore of the tombstone record: a contender that
+  races a LIVE owner's fresh lock restores it and yields, and an
+  unreadable owner record fails closed with instructions. Two
+  simultaneous reclaimers can never both become owner (regression: 5
+  rounds of concurrent reclaim with overlapping-hold-window detection;
+  the owner-SIGKILL regression proves no backup.mjs process survives the
+  upgrade's death).
+- RECOVERY E2E ISOLATION (by construction): the E2E stack runs under the
+  unique `tenvyr-recovery-e2e` project with unique container names,
+  volume, ports, and its own disposable deploy env
+  (backups/.recovery-e2e-deploy.env); the base compose parameterizes
+  container names/ports/volume (defaults unchanged); the guard checks
+  `docker ps -a` (running OR stopped) + the real deployment volume and
+  fails BEFORE creating anything; teardown is gated by
+  disposableStackCreated and only targets the disposable project (fake-
+  docker regressions prove ZERO destructive cleanup on guard failure,
+  incl. the stopped-container and production-volume scenarios); CI's
+  always() cleanup targets only `tenvyr-recovery-e2e`.
+- AVAILABILITY-RESTORING RECONCILE: the "quiescing" journal marker is
+  written BEFORE quiesce (services may be partially or fully stopped;
+  the DB authority is still original). Reconciliation maps quiescing /
+  swap-active-to-safety to a new restart-original action (restart +
+  readiness + invariants + abort retry-required) and the
+  mid-reconciliation windows (rename-back done, restart pending) to
+  proceed-with-restartServices; journal clears were reordered to AFTER
+  restart+prove so a crash in the window is finished by the next
+  invocation. `--reconcile` after a SIGKILL at/after quiesce (or after
+  rollback renames before restart) restarts the original deployment and
+  reports the interrupted operation — it never prints "no interrupted
+  promotion detected" while the app is offline (E2E G1/G2).
+- COLLISION-SAFE FAILED-PROMOTION: candidates are preserved under
+  non-colliding bounded names (`tenvyr_failed_promotion`, `_1`, `_2`,
+  ...) — an existing preserved candidate is never overwritten, no
+  rollback rename targets an existing database, printUnrecoverableState
+  inspects FAILED_PROMOTION_DB and prints the free name, and the
+  rollback's own candidate is the only one it cleans up (E2E F9 proves
+  the manual-repair + journal-reconciled + later gate-failure flow).

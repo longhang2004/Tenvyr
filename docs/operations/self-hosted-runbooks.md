@@ -135,8 +135,9 @@ both values in `deploy.env` only after success.
    newer target tag.
 3. It then takes a VERIFIED backup (backup.mjs PASS implies a manifest
    proven against an isolated restore of that exact dump; the upgrade
-   holds the maintenance lock and the backup child inherits ownership via
-   the authenticated `TENVYR_MAINTENANCE_TOKEN`). Any backup failure
+   holds the maintenance lock and the verified backup runs in the
+   upgrade's own process — no child, nothing that can outlive the owner).
+   Any backup failure
    aborts BEFORE compose build/up or any other deployment mutation. After that it FAILS
    CLOSED unless the resolved Compose stack points every Tenvyr service
    at the requested target.

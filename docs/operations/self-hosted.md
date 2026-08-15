@@ -94,12 +94,15 @@ operator fills values from their own secret store. No installer framework.
   destructive operations. The lock is crash-release: an owner record (PID
   + startedAt) is written at acquisition, and the next acquisition
   reclaims a lock whose owner PID is dead, so a crashed backup/restore can
-  never wedge maintenance. `upgrade` owns the lock for its whole run and
-  hands ownership to its backup child with the AUTHENTICATED operation
-  token `TENVYR_MAINTENANCE_TOKEN` (the child's claim is validated
-  against the held lock: token equality AND direct-parent-owner — a
-  forged claim is denied and can never bypass serialization; the child
-  never releases the parent's lock).
+  never wedge maintenance. Stale reclaim is crash-linearizable: the lock
+  is moved by a single atomic RENAME to a tombstone, the tombstone is
+  verified to still hold the stale record, and a live owner's lock that
+  was raced is restored immediately — two simultaneous reclaimers can
+  never both become owner. The verified-backup operation runs IN THE
+  LOCK OWNER'S PROCESS (`upgrade` calls backup.mjs's exported
+  `runVerifiedBackup` while holding the lock): there is no delegated
+  child, so nothing capable of using the shared maintenance resources
+  can survive the owner's death and overlap a new owner.
 - `pnpm self-hosted:backup` — VERIFIED backup. A consistent `pg_dump`
   (custom format) is restored into an isolated verification database
   (`tenvyr_backup_verify`, bounded and dropped before/after); ALL manifest
@@ -221,3 +224,30 @@ recovery. Warn/fail closed on insufficient disk for migration/backup.
 No public/multi-user authorization, SaaS tenancy, Kubernetes, HA, sandbox,
 provider credential backup, artifact-byte backup, telemetry backend, or
 package publication. The External Production Exposure Gate stays OPEN.
+
+## Recovery E2E isolation (must never touch a real deployment)
+
+`pnpm self-hosted:recovery-test` runs against a PHYSICALLY SEPARATE
+disposable stack — never the production names:
+
+- unique project `tenvyr-recovery-e2e` (compose `-p`), unique container
+  names `tenvyr-recovery-e2e-*`, unique PostgreSQL volume
+  `tenvyr-recovery-e2e_recovery_e2e_postgres_data`, unique host ports
+  (postgres 5544, orchestrator 3101, gateway 3100), and its own
+  disposable deploy env at `backups/.recovery-e2e-deploy.env` (the base
+  `docker-compose.self-hosted.yml` parameterizes container names, ports,
+  and the volume via `TENVYR_SELF_HOSTED_PREFIX` / `TENVYR_POSTGRES_PORT`
+  / `TENVYR_ORCHESTRATOR_PORT` / `TENVYR_GATEWAY_PORT` /
+  `TENVYR_POSTGRES_VOLUME`, all defaulting to the production values);
+- the SAFETY GUARD refuses to run when ANY `tenvyr-self-hosted-*`
+  container exists (RUNNING OR STOPPED — `docker ps -a`), when the real
+  deployment volume `tenvyr-self-hosted_tenvyr_postgres_data` exists, or
+  when a previous E2E stack was not torn down — BEFORE anything is
+  created;
+- teardown is gated by `disposableStackCreated` and only ever runs
+  `compose down -v` against the `tenvyr-recovery-e2e` project; an early
+  safety-guard failure performs ZERO compose-down / volume-delete
+  actions (proven by a fake-docker regression);
+- CI's `if: always()` cleanup step targets ONLY the disposable
+  `tenvyr-recovery-e2e` project — the production `tenvyr-self-hosted`
+  project is never named in E2E teardown.

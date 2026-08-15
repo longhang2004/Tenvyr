@@ -32,8 +32,19 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { acquireMaintenanceLock, releaseMaintenanceLock } from "./maintenance.mjs";
+
+/** The verified-backup operation is invoked IN THIS PROCESS while the
+ *  maintenance lock is held (there is no upgrade->backup child and
+ *  therefore nothing that could survive the owner's death and overlap a
+ *  new owner). `TENVYR_UPGRADE_BACKUP_MODULE` is a bounded test seam
+ *  (never set in production) pointing at a module exporting
+ *  runVerifiedBackup. */
+const backupModuleUrl = pathToFileURL(
+  join(import.meta.dirname, process.env.TENVYR_UPGRADE_BACKUP_MODULE ?? "backup.mjs"),
+).href;
+const { runVerifiedBackup } = await import(backupModuleUrl);
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -225,16 +236,18 @@ const run = (cmd, args, opts = {}) => {
 
 export const main = () => {
   // Maintenance serialization: the upgrade owns the exclusive maintenance
-  // lock for its whole run; the verified-backup child INHERITS ownership
-  // with the AUTHENTICATED operation token (TENVYR_MAINTENANCE_TOKEN:
-  // token equality + direct-parent-owner — a forged claim is denied and
-  // can never bypass serialization; the child never releases the
-  // parent's lock). A crashed upgrade releases the lock automatically via
-  // dead-owner-PID stale reclaim. The upgrade itself always acquires as
-  // OWNER (a stray TENVYR_MAINTENANCE_TOKEN in the operator's shell must
-  // never turn the upgrade into an inheritor).
-  const lock = acquireMaintenanceLock({ allowInheritance: false });
+  // lock for its whole run, and the verified backup runs IN THIS PROCESS
+  // while the lock is held (no child, no inheritance — nothing can
+  // survive the owner's death and overlap a new owner). A crashed
+  // upgrade releases the lock automatically: the next acquisition
+  // atomically renames the stale lock (dead owner PID) to a tombstone
+  // and retries.
+  const lock = acquireMaintenanceLock();
   if (!lock.owned) {
+    if (lock.denied) {
+      console.error(`[upgrade] FAIL: ${lock.denied}`);
+      process.exit(1);
+    }
     const owner = lock.owner
       ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
       : "";
@@ -280,24 +293,32 @@ export const main = () => {
   const compose = [
     "docker",
     "compose",
+    ...(process.env.TENVYR_SELF_HOSTED_PROJECT ? ["-p", process.env.TENVYR_SELF_HOSTED_PROJECT] : []),
     "-f",
     "docker-compose.self-hosted.yml",
+    ...(process.env.TENVYR_SELF_HOSTED_COMPOSE_OVERRIDE ? ["-f", process.env.TENVYR_SELF_HOSTED_COMPOSE_OVERRIDE] : []),
     "--env-file",
     deployEnvPath(),
   ];
 
-  // 1. Verified backup first (the documented recovery path). backup.mjs
-  //    reports PASS only for a dump whose manifest was proven against an
-  //    isolated restore of that exact dump — so a backup exit 0 here is a
-  //    VERIFIED recovery artifact. Any backup failure aborts the upgrade
-  //    BEFORE compose build/up or any other deployment mutation.
+  // 1. Verified backup first (the documented recovery path). The
+  //    verified-backup operation runs IN THIS PROCESS while the
+  //    maintenance lock is held: backup.mjs reports PASS only for a dump
+  //    whose manifest was proven against an isolated restore of that
+  //    exact dump — so a success here is a VERIFIED recovery artifact.
+  //    Any backup failure aborts the upgrade BEFORE compose build/up or
+  //    any other deployment mutation.
   console.log("[upgrade] taking VERIFIED backup before touching the stack...");
-  const backupScript = process.env.TENVYR_UPGRADE_BACKUP_CMD ?? "scripts/self-hosted/backup.mjs";
-  const backupStatus = run(process.execPath, [backupScript], {
-    env: { ...process.env, TENVYR_MAINTENANCE_TOKEN: lock.token },
-  });
-  if (backupStatus !== 0) {
-    console.error("[upgrade] FAIL: verified backup did not complete; refusing to build or mutate the deployment");
+  try {
+    const backup = runVerifiedBackup({ deployEnvPath: deployEnvPath() });
+    if (!backup?.ok) {
+      throw new Error("verified backup did not complete");
+    }
+    console.log(`[upgrade] ok: verified backup ${backup.dumpPath}`);
+  } catch (error) {
+    console.error(
+      `[upgrade] FAIL: verified backup did not complete (${error instanceof Error ? error.message : String(error)}); refusing to build or mutate the deployment`,
+    );
     exit(1);
   }
 
