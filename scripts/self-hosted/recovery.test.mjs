@@ -47,14 +47,25 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** UNIQUE disposable stack identity — never the production names. */
-export const E2E_PROJECT = "tenvyr-recovery-e2e";
-export const E2E_POSTGRES_CONTAINER = "tenvyr-recovery-e2e-postgres";
+/** UNIQUE per-run disposable identity — never the production names and
+ *  never shared between two simultaneous E2E invocations: each run gets
+ *  its own project, container names, volume (project-scoped), and
+ *  maintenance directory. Two concurrent suites can therefore never tear
+ *  down or mutate each other's stack/state. */
+export const E2E_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+export const E2E_PROJECT = `tenvyr-recovery-e2e-${E2E_RUN_ID}`;
+export const E2E_PREFIX = E2E_PROJECT;
+export const E2E_POSTGRES_CONTAINER = `${E2E_PREFIX}-postgres`;
 export const E2E_ORCHESTRATOR_PORT = "3101";
 export const E2E_GATEWAY_PORT = "3100";
 export const E2E_POSTGRES_PORT = "5544";
 export const E2E_VOLUME = "recovery_e2e_postgres_data";
-export const E2E_DEPLOY_ENV = join(ROOT, "backups", ".recovery-e2e-deploy.env");
+/** The suite's OWN maintenance/backup directory (lock, journal,
+ *  tombstones, dumps, manifests, checksums, deploy env). ONLY this
+ *  directory is ever created or removed by the suite — the production
+ *  <repo>/backups files are never touched. */
+export const E2E_DIR = join(ROOT, "backups", `recovery-e2e-${E2E_RUN_ID}`);
+export const E2E_DEPLOY_ENV = join(E2E_DIR, "deploy.env");
 
 const COMPOSE = [
   "docker",
@@ -120,23 +131,37 @@ const dockerVolumes = () => {
     .filter(Boolean);
 };
 
+/** Leftover E2E maintenance directories (another suite mid-run or a
+ *  crashed one). The suite never touches them — it only refuses. */
+const leftoverE2eDirs = () => {
+  try {
+    return readdirSync(join(ROOT, "backups")).filter((entry) =>
+      entry.startsWith("recovery-e2e-"),
+    );
+  } catch {
+    return [];
+  }
+};
+
 /** PURE safety decision: the reason to refuse running, or null when the
  *  environment is safe (no real deployment infrastructure, no leftover
- *  E2E stack). */
-export const safetyBlockReason = ({ containerNames, volumeNames }) => {
+ *  E2E stack, no concurrent E2E run). */
+export const safetyBlockReason = ({ containerNames, volumeNames, e2eDirs }) => {
   for (const name of containerNames) {
     if (name.startsWith("tenvyr-self-hosted-")) {
       return `container "${name}" exists (a real self-hosted deployment is using the infrastructure — running or stopped)`;
     }
-    if (name.startsWith(`${E2E_PROJECT}-`)) {
+    if (name.startsWith("tenvyr-recovery-e2e-")) {
       return `disposable E2E container "${name}" already exists (a previous E2E run was not torn down)`;
     }
   }
   if (volumeNames.includes("tenvyr-self-hosted_tenvyr_postgres_data")) {
     return "the real deployment PostgreSQL volume tenvyr-self-hosted_tenvyr_postgres_data exists";
   }
-  if (volumeNames.includes(`${E2E_PROJECT}_${E2E_VOLUME}`)) {
-    return `disposable E2E volume ${E2E_PROJECT}_${E2E_VOLUME} already exists (a previous E2E run was not torn down)`;
+  for (const entry of e2eDirs ?? []) {
+    if (entry.startsWith("recovery-e2e-")) {
+      return `another recovery E2E run owns "${entry}" — refuse (two E2E invocations must never share or mutate state)`;
+    }
   }
   return null;
 };
@@ -184,37 +209,18 @@ describe("self-hosted recovery E2E (disposable infrastructure)", { timeout: 2_40
   let disposableStackCreated = false;
 
   before(() => {
-    // ---- 0. The disposable deploy env is written FIRST (a fixed,
-    //        gitignored path the suite owns). It carries the unique
-    //        stack identity so the resolved compose project, containers,
-    //        ports, and volume are all E2E-specific. ----
-    const example = readFileSync(join(ROOT, ".env.self-hosted.example"), "utf8")
-      .split("\n")
-      .filter((line) => !/^TENVYR_VERSION=/.test(line) && !/^TENVYR_SOURCE_REVISION=/.test(line))
-      .join("\n");
-    const disposable = `# DISPOSABLE — created by recovery.test.mjs; safe to delete
-${example}
-POSTGRES_PASSWORD=test
-TENVYR_VERSION=${TARGET}
-TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
-TENVYR_SELF_HOSTED_PREFIX=${E2E_PROJECT}
-TENVYR_POSTGRES_PORT=${E2E_POSTGRES_PORT}
-TENVYR_ORCHESTRATOR_PORT=${E2E_ORCHESTRATOR_PORT}
-TENVYR_GATEWAY_PORT=${E2E_GATEWAY_PORT}
-TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
-`;
-    // (backups/ is gitignored — ensure it exists on a fresh checkout)
-    mkdirSync(join(ROOT, "backups"), { recursive: true });
-    writeFileSync(E2E_DEPLOY_ENV, disposable);
-
-    // ---- 1. SAFETY GUARD: refuse when real infrastructure is present
-    //        (containers RUNNING OR STOPPED, or the production volume),
-    //        or when a previous E2E stack was not torn down. On refusal
-    //        NOTHING is created and the teardown performs ZERO
-    //        destructive actions (disposableStackCreated stays false). ----
+    // ---- 1. SAFETY GUARD FIRST — BEFORE anything is created. Refuse
+    //        when real infrastructure is present (containers RUNNING OR
+    //        STOPPED via docker ps -a, or the production volume), when a
+    //        previous E2E stack was not torn down, or when another E2E
+    //        run owns a maintenance directory. On refusal NOTHING is
+    //        created — no E2E directory, no deploy env, no compose
+    //        action, no volume action, no mutation of any production
+    //        maintenance file. ----
     const reason = safetyBlockReason({
       containerNames: dockerPsA(),
       volumeNames: dockerVolumes(),
+      e2eDirs: leftoverE2eDirs(),
     });
     assert.ok(reason === null, `refusing to run: ${reason}`);
     assert.ok(
@@ -222,7 +228,31 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
       `refusing to run: TENVYR_DEPLOY_ENV is already set (${process.env.TENVYR_DEPLOY_ENV}) — the suite owns its disposable deploy env`,
     );
 
-    // ---- 2. Build (only if missing) + start the disposable stack. ----
+    // ---- 2. SAFETY PASS: create the suite's OWN directory + deploy
+    //        env (inside that directory). The disposable env carries the
+    //        unique per-run stack identity + the suite's maintenance
+    //        directory, so every spawned script resolves its lock,
+    //        journal, dumps, and manifests INSIDE this directory. ----
+    mkdirSync(E2E_DIR, { recursive: true });
+    writeFileSync(join(E2E_DIR, "project-name"), E2E_PROJECT, "utf8");
+    const example = readFileSync(join(ROOT, ".env.self-hosted.example"), "utf8")
+      .split("\n")
+      .filter((line) => !/^TENVYR_VERSION=/.test(line) && !/^TENVYR_SOURCE_REVISION=/.test(line))
+      .join("\n");
+    const disposable = `# DISPOSABLE — created by recovery.test.mjs inside the suite's own directory; safe to delete
+${example}
+POSTGRES_PASSWORD=test
+TENVYR_VERSION=${TARGET}
+TENVYR_SOURCE_REVISION=${DISPOSABLE_SHA}
+TENVYR_SELF_HOSTED_PREFIX=${E2E_PREFIX}
+TENVYR_POSTGRES_PORT=${E2E_POSTGRES_PORT}
+TENVYR_ORCHESTRATOR_PORT=${E2E_ORCHESTRATOR_PORT}
+TENVYR_GATEWAY_PORT=${E2E_GATEWAY_PORT}
+TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
+`;
+    writeFileSync(E2E_DEPLOY_ENV, disposable);
+
+    // ---- 3. Build (only if missing) + start the disposable stack. ----
     const needsBuild = ["tenvyr-orchestrator", "tenvyr-gateway"].some(
       (image) => run("docker", ["image", "inspect", `${image}:${TARGET}`], { timeout: 30_000 }).status !== 0,
     );
@@ -241,9 +271,14 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
   });
 
   after(() => {
-    // ---- TEARDOWN: ONLY the disposable E2E project is ever touched.
-    //      If the safety guard failed, disposableStackCreated is false
-    //      and ZERO compose-down / volume-delete actions run. ----
+    // ---- TEARDOWN: ONLY the suite's OWN state is ever touched — the
+    //      disposable E2E project (when the stack may exist) and the
+    //      suite's OWN maintenance directory. The production
+    //      <repo>/backups files (lock, journal, tombstones, dumps,
+    //      manifests, deploy env) are NEVER referenced. If the safety
+    //      guard failed, disposableStackCreated is false and ZERO
+    //      compose-down / volume-delete actions run, and the E2E
+    //      directory was never created. ----
     if (disposableStackCreated) {
       run("docker", [...COMPOSE.slice(1), "down", "-v"], { timeout: 300_000 });
     }
@@ -254,18 +289,9 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
         // best-effort cleanup
       }
     }
-    // The suite owns its disposable deploy env + the shared disposable
-    // journal/lock/tombstone paths (no real deployment can exist when
-    // the suite ran — the guard refused otherwise).
+    // Remove ONLY the suite's own maintenance directory.
     try {
-      rmSync(E2E_DEPLOY_ENV, { force: true });
-      rmSync(join(ROOT, "backups", ".recovery-journal.json"), { force: true });
-      rmSync(join(ROOT, "backups", ".maintenance.lock"), { force: true });
-      for (const entry of readdirSync(join(ROOT, "backups"))) {
-        if (entry.startsWith(".maintenance.lock.stale.")) {
-          rmSync(join(ROOT, "backups", entry), { recursive: true, force: true });
-        }
-      }
+      rmSync(E2E_DIR, { recursive: true, force: true });
     } catch {
       // best-effort cleanup
     }
@@ -273,17 +299,37 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
 
   /** The E2E stack identity for spawned scripts: the disposable deploy
    *  env, the disposable postgres container, the disposable compose
-   *  project, and the disposable ports. The production names are never
-   *  referenced. */
+   *  project, the disposable ports, and the suite's OWN maintenance
+   *  directory (locks/journals/dumps/manifests). The production names
+   *  and files are never referenced. */
   const e2eEnv = (extra = {}) => ({
     ...process.env,
     TENVYR_DEPLOY_ENV: E2E_DEPLOY_ENV,
     TENVYR_POSTGRES_CONTAINER: E2E_POSTGRES_CONTAINER,
     TENVYR_SELF_HOSTED_PROJECT: E2E_PROJECT,
+    TENVYR_MAINTENANCE_DIR: E2E_DIR,
     TENVYR_ORCHESTRATOR_PORT: E2E_ORCHESTRATOR_PORT,
     TENVYR_GATEWAY_PORT: E2E_GATEWAY_PORT,
     ...extra,
   });
+
+  /** Explicit stale-lock clear AFTER a SIGKILL crash: the crash leaves
+   *  the maintenance lock stale, and the fail-closed policy DENIES the
+   *  next acquisition until the operator (here: the test) confirms the
+   *  maintenance process tree is gone and clears the lock explicitly. */
+  const clearStaleLock = () => {
+    const result = run(
+      process.execPath,
+      ["scripts/self-hosted/maintenance.mjs", "--clear-stale-lock"],
+      { timeout: 60_000, env: e2eEnv() },
+    );
+    assert.equal(
+      result.status,
+      0,
+      `the explicit stale-lock clear after the crash must succeed: ${result.stdout}\n${result.stderr}`,
+    );
+    return result;
+  };
 
   const orchestratorBase = `http://127.0.0.1:${E2E_ORCHESTRATOR_PORT}`;
   const gatewayBase = `http://127.0.0.1:${E2E_GATEWAY_PORT}`;
@@ -494,7 +540,8 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // second rename (SIGKILL — no cleanup can run).
     const crashed = promote(dumpPath, "crash-after-first-rename");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
-    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    clearStaleLock();
+    const journalPath = join(E2E_DIR, ".recovery-journal.json");
     // The durable journal + database names record the interrupted state.
     const journal = JSON.parse(readFileSync(journalPath, "utf8"));
     assert.equal(journal.phase, "swap-verified-to-active");
@@ -526,6 +573,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // but BEFORE the post-promotion gates complete.
     const crashed = promote(dumpPath, "crash-after-promotion");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    clearStaleLock();
     let dbs = databases();
     assert.ok(dbs.includes("tenvyr"), "the candidate is active after the promotion rename");
     assert.ok(dbs.includes("tenvyr_pre_restore"), "the ORIGINAL authority must still be preserved");
@@ -659,7 +707,8 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // durable journal evidence (truncated/malformed write).
     const crashed = promote(dumpPath, "crash-after-first-rename");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
-    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    clearStaleLock();
+    const journalPath = join(E2E_DIR, ".recovery-journal.json");
     writeFileSync(journalPath, "{truncated garbage", "utf8");
     let dbs = databases();
     assert.ok(!dbs.includes("tenvyr"), "tenvyr must be absent after the first-rename crash");
@@ -687,8 +736,9 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     const { dumpPath } = takeBackup();
     const crashed = promote(dumpPath, "crash-after-first-rename");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    clearStaleLock();
     // Remove the journal entirely (as if the write never landed).
-    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    const journalPath = join(E2E_DIR, ".recovery-journal.json");
     rmSync(journalPath, { force: true });
     let dbs = databases();
     assert.ok(!dbs.includes("tenvyr"), "tenvyr must be absent after the first-rename crash");
@@ -713,10 +763,11 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     const { dumpPath } = takeBackup();
     const crashed = promote(dumpPath, "crash-after-promotion");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    clearStaleLock();
     // Corrupt the journal: the layout (active candidate + original safety)
     // becomes ambiguous — the next invocation must FAIL CLOSED, never
     // treat the candidate as committed and never delete the original.
-    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    const journalPath = join(E2E_DIR, ".recovery-journal.json");
     writeFileSync(journalPath, "{truncated garbage", "utf8");
     let dbs = databases();
     assert.ok(dbs.includes("tenvyr"), "the candidate is active after the promotion rename");
@@ -759,6 +810,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // hook kills the process abruptly right after the writers stopped.
     const crashed = promote(dumpPath, "crash-after-quiesce");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    clearStaleLock();
     // Writers are quiesced: the services are down, the ORIGINAL authority
     // is still active, and the journal says "quiescing".
     assert.ok(!waitForHealth(`${orchestratorBase}/health`, '"ready":true', 5), "orchestrator must be quiesced after the crash");
@@ -788,6 +840,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // the services were restarted.
     const crashed = promote(dumpPath, "post-gate-readiness,crash-after-rollback-renames");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
+    clearStaleLock();
     // The original authority is active again (rollback renames done) but
     // the services are still stopped; the journal still says "post-gates".
     const dbs = databases();
@@ -815,7 +868,8 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // and restoring the original — leaving NO journal.
     const crashed = promote(dumpPath, "crash-after-promotion");
     assert.equal(crashed.signal, "SIGKILL", "the fault hook must terminate the child abruptly");
-    const journalPath = join(ROOT, "backups", ".recovery-journal.json");
+    clearStaleLock();
+    const journalPath = join(E2E_DIR, ".recovery-journal.json");
     writeFileSync(journalPath, "{truncated garbage", "utf8");
     const blocked = promote(dumpPath);
     assert.notEqual(blocked.status, 0, "the ambiguous state must fail closed");

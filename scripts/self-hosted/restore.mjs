@@ -769,22 +769,23 @@ const runPostPromotionGates = (manifest) => {
   return null;
 };
 
-/** Acquires the maintenance lock; FAILS HARD on contention or on a stale
- *  lock whose ownership cannot be established (restore always acquires
- *  as the sole owner — there is no child delegation anywhere). */
+/** Acquires the maintenance lock; FAILS HARD on contention or on stale/
+ *  uncertain maintenance state (restore always acquires as the sole
+ *  owner — there is no child delegation anywhere). */
 const requireMaintenanceLock = () => {
   const lock = acquireMaintenanceLock();
   if (!lock.owned) {
-    if (lock.denied) {
-      console.error(`[restore] FAIL: ${lock.denied} — refusing to bypass serialization`);
-      process.exit(1);
+    console.error(`[restore] FAIL: ${lock.denied ?? "maintenance operation already active"} — refusing to bypass serialization`);
+    if (lock.instructions) {
+      console.error("[restore] stale/uncertain maintenance state — bounded operator recovery:");
+      for (const step of lock.instructions) {
+        console.error(`  ${step}`);
+      }
+    } else if (lock.owner) {
+      console.error(
+        `[restore] (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`,
+      );
     }
-    const owner = lock.owner
-      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
-      : "";
-    console.error(
-      `[restore] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
-    );
     process.exit(1);
   }
   return lock;

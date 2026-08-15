@@ -240,20 +240,22 @@ export const main = () => {
   // while the lock is held (no child, no inheritance — nothing can
   // survive the owner's death and overlap a new owner). A crashed
   // upgrade releases the lock automatically: the next acquisition
-  // atomically renames the stale lock (dead owner PID) to a tombstone
-  // and retries.
+  // Stale/uncertain maintenance state FAILS CLOSED (a dead owner does not
+  // prove its docker/DB descendants are dead) — the lock is never
+  // auto-reclaimed; the operator clears it explicitly.
   const lock = acquireMaintenanceLock();
   if (!lock.owned) {
-    if (lock.denied) {
-      console.error(`[upgrade] FAIL: ${lock.denied}`);
-      process.exit(1);
+    console.error(`[upgrade] FAIL: ${lock.denied ?? "maintenance operation already active"} — refusing to bypass serialization`);
+    if (lock.instructions) {
+      console.error("[upgrade] stale/uncertain maintenance state — bounded operator recovery:");
+      for (const step of lock.instructions) {
+        console.error(`  ${step}`);
+      }
+    } else if (lock.owner) {
+      console.error(
+        `[upgrade] (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`,
+      );
     }
-    const owner = lock.owner
-      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
-      : "";
-    console.error(
-      `[upgrade] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
-    );
     // No lock is held here (acquisition failed) — plain exit is correct.
     process.exit(1);
   }

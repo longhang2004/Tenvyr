@@ -77,22 +77,46 @@ export const SAFETY_DB = "tenvyr_pre_restore";
 export const ISOLATED_DB = "tenvyr_restore";
 export const FAILED_PROMOTION_DB = "tenvyr_failed_promotion";
 
-const JOURNAL_PATH = join(BACKUP_DIR, ".recovery-journal.json");
+const JOURNAL_PATH = () => join(maintenanceDir(), ".recovery-journal.json");
 
-export const journalPath = () => JOURNAL_PATH;
+export const journalPath = () => JOURNAL_PATH();
 
 /* ------------------------------------------------------------------ */
 /* Maintenance lock                                                    */
 /* ------------------------------------------------------------------ */
 
+/** Maintenance state lives under TENVYR_MAINTENANCE_DIR when set (the
+ *  recovery E2E uses its OWN directory), otherwise the production
+ *  default <repo>/backups. The E2E therefore never touches production
+ *  locks/journals/tombstones/backups. */
+const maintenanceDir = () =>
+  process.env.TENVYR_MAINTENANCE_DIR
+    ? join(process.env.TENVYR_MAINTENANCE_DIR)
+    : BACKUP_DIR;
+
+const LOCK_PATH = () => join(maintenanceDir(), ".maintenance.lock");
+
 /** Exclusive ownership is claimed by an atomic O_EXCL file create; the
  *  owner record (PID + startedAt) is written in the SAME syscall, so
  *  there is no mkdir-then-write window a concurrent acquirer could race.
- *  Crash-release: the next acquisition atomically renames a stale lock
- *  (dead owner PID) to a tombstone and retries — exactly one contender
- *  can win the rename, so two simultaneous reclaimers can never both
- *  become owner (no rm-then-create TOCTOU). */
-const LOCK_PATH = join(BACKUP_DIR, ".maintenance.lock");
+ *
+ *  STALE-OWNER POLICY (fail closed): a lock whose recorded owner PID is
+ *  dead is NOT automatically reclaimed. A dead JS owner does NOT prove
+ *  that its docker exec / pg_dump / pg_restore / psql descendants are
+ *  dead — reclaiming could let a new maintenance owner overlap live
+ *  database work. The stale state therefore DENIES acquisition and the
+ *  operator performs the explicit bounded stale-lock clear
+ *  (`maintenance.mjs --clear-stale-lock`) AFTER confirming no
+ *  maintenance process or docker/DB descendant is running. */
+const STALE_LOCK_INSTRUCTIONS = [
+  "Confirm no Tenvyr backup / restore / upgrade process is running.",
+  "Confirm no related docker exec / pg_dump / pg_restore / psql maintenance process remains (e.g. `ps` or `docker ps` for tenvyr maintenance containers).",
+  "Inspect the recovery journal / database state when restore was involved (run `restore.mjs --reconcile` where appropriate).",
+  "Only then remove the stale maintenance lock: `node scripts/self-hosted/maintenance.mjs --clear-stale-lock`.",
+  "Re-run --reconcile before retrying a restore/promotion where appropriate.",
+];
+
+export const staleLockInstructions = () => STALE_LOCK_INSTRUCTIONS;
 
 const syncSleep = (ms) => {
   const until = Date.now() + ms;
@@ -110,8 +134,6 @@ const readOwnerFrom = (path) => {
   }
 };
 
-const readLockOwner = () => readOwnerFrom(LOCK_PATH);
-
 const isPidAlive = (pid) => {
   if (typeof pid !== "number" || pid <= 0) return false;
   try {
@@ -119,18 +141,18 @@ const isPidAlive = (pid) => {
     return true;
   } catch (error) {
     // ESRCH is the ONLY "gone" verdict; EPERM (exists, not signalable) is
-    // conservatively ALIVE — a stale-lock reclaim must never treat an
+    // conservatively ALIVE — a stale decision must never treat an
     // existent owner as dead.
     return error?.code === "ESRCH" ? false : true;
   }
 };
 
 export const acquireMaintenanceLock = () => {
-  mkdirSync(BACKUP_DIR, { recursive: true });
+  mkdirSync(maintenanceDir(), { recursive: true });
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       writeFileSync(
-        LOCK_PATH,
+        LOCK_PATH(),
         JSON.stringify({
           pid: process.pid,
           startedAt: new Date().toISOString(),
@@ -140,50 +162,35 @@ export const acquireMaintenanceLock = () => {
       return { owned: true, held: true };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
-      let owner = readLockOwner();
+      let owner = readOwnerFrom(LOCK_PATH());
       if (owner === null) {
         // The creator is mid-acquisition (file exists, content not yet
-        // visible): give it a bounded moment before deciding it is stale.
+        // visible): give it a bounded moment before deciding.
         syncSleep(25);
-        owner = readLockOwner();
+        owner = readOwnerFrom(LOCK_PATH());
       }
       if (owner !== null && isPidAlive(owner.pid)) {
+        // Live owner: ordinary contention — fail fast.
         return { owned: false, held: true, owner };
       }
       if (owner !== null) {
-        // Stale lock (dead owner): reclaim via a single ATOMIC RENAME to
-        // a tombstone — exactly one contender wins the rename. The
-        // tombstone is then VERIFIED: it must still hold the SAME stale
-        // record we read. If the lock was replaced between our read and
-        // our rename (a live owner's fresh lock), the tombstone holds a
-        // LIVE record — restore it immediately and yield (the live
-        // owner's lock is never destroyed).
-        const tombstone = `${LOCK_PATH}.stale.${process.pid}.${Date.now()}`;
-        try {
-          renameSync(LOCK_PATH, tombstone);
-        } catch (renameError) {
-          if (renameError?.code === "ENOENT") {
-            continue; // another contender reclaimed it first — retry
-          }
-          throw renameError;
-        }
-        const tombstoneOwner = readOwnerFrom(tombstone);
-        if (tombstoneOwner !== null && isPidAlive(tombstoneOwner.pid)) {
-          // We moved a LIVE owner's lock: restore it and yield.
-          try {
-            renameSync(tombstone, LOCK_PATH);
-          } catch {
-            // best-effort restore; the lock path is recreated by retry
-          }
-          return { owned: false, held: true, owner: tombstoneOwner };
-        }
-        // The tombstone holds the stale record we intended to reclaim
-        // (or an unreadable/dead one): proceed to create the new lock.
-        // The tombstone itself is left as bounded evidence; it is never
-        // swept by acquisition (a sweep could race an in-flight
-        // verify-and-restore) — the E2E teardown and operators clean
-        // tombstones explicitly.
-        continue;
+        // Dead owner: STALE/UNCERTAIN MAINTENANCE STATE — FAIL CLOSED.
+        // The dead JS owner does not prove its external children
+        // (docker exec / pg_dump / pg_restore / psql) are dead, so the
+        // lock is never auto-reclaimed.
+        return {
+          owned: false,
+          held: true,
+          owner,
+          denied:
+            "stale-maintenance-state: the maintenance lock owner (pid " +
+            `${owner.pid}, started ${owner.startedAt}) is dead, but a dead owner ` +
+            "does NOT prove its external maintenance children (docker exec / " +
+            "pg_dump / pg_restore / psql) are dead. Refusing to auto-reclaim. " +
+            "Run `node scripts/self-hosted/maintenance.mjs --clear-stale-lock` " +
+            "only after the bounded operator checks below.",
+          instructions: STALE_LOCK_INSTRUCTIONS,
+        };
       }
       // Unreadable owner record after the bounded wait: FAIL CLOSED —
       // never remove a lock whose ownership cannot be established.
@@ -191,21 +198,97 @@ export const acquireMaintenanceLock = () => {
         owned: false,
         held: true,
         owner: null,
-        denied: "the maintenance lock exists but its owner record is unreadable — a crashed owner may be mid-write; remove backups/.maintenance.lock only after confirming no maintenance process is running",
+        denied:
+          "the maintenance lock exists but its owner record is unreadable — " +
+          "ownership cannot be established; remove the lock only after " +
+          "confirming no maintenance process is running",
+        instructions: STALE_LOCK_INSTRUCTIONS,
       };
     }
   }
-  return { owned: false, held: true, owner: null };
+  return {
+    owned: false,
+    held: true,
+    owner: null,
+    denied:
+      "the maintenance lock could not be resolved after bounded retries",
+    instructions: STALE_LOCK_INSTRUCTIONS,
+  };
 };
 
 export const releaseMaintenanceLock = (lock) => {
   if (!lock?.owned) return;
   try {
-    rmSync(LOCK_PATH, { force: true });
+    rmSync(LOCK_PATH(), { force: true });
   } catch {
-    // best-effort release; a stale lock is reclaimed by the next acquirer
+    // best-effort release
   }
 };
+
+/** EXPLICIT operator stale-lock clear (intentionally manual + dangerous):
+ *  removes the maintenance lock ONLY when its recorded owner is provably
+ *  dead (ESRCH) — never when the owner is alive or unreadable. The
+ *  operator confirms no maintenance process / docker / DB descendant is
+ *  running BEFORE calling this. */
+export const clearStaleMaintenanceLock = () => {
+  const path = LOCK_PATH();
+  if (!existsSync(path)) {
+    return { cleared: false, reason: "no maintenance lock exists" };
+  }
+  const owner = readOwnerFrom(path);
+  if (owner === null) {
+    return {
+      cleared: false,
+      reason:
+        "the lock's owner record is unreadable — ownership cannot be " +
+        "established; inspect the file manually and confirm no maintenance " +
+        "process is running before removing it",
+    };
+  }
+  if (isPidAlive(owner.pid)) {
+    return {
+      cleared: false,
+      reason: `the lock owner (pid ${owner.pid}) is ALIVE — refusing to remove a live owner's lock`,
+    };
+  }
+  try {
+    rmSync(path, { force: true });
+  } catch (error) {
+    return { cleared: false, reason: `could not remove the lock: ${error?.message ?? error}` };
+  }
+  return {
+    cleared: true,
+    owner: { pid: owner.pid, startedAt: owner.startedAt },
+  };
+};
+
+/* CLI entry: explicit stale-lock clear (intentionally manual). */
+if (process.argv[1] && process.argv[1].endsWith("maintenance.mjs")) {
+  if (process.argv[2] === "--clear-stale-lock") {
+    console.log(
+      "[maintenance] explicit stale-lock clear — operator must have confirmed:",
+    );
+    for (const step of STALE_LOCK_INSTRUCTIONS) {
+      console.log(`  ${step}`);
+    }
+    const outcome = clearStaleMaintenanceLock();
+    if (outcome.cleared) {
+      console.log(
+        `[maintenance] stale maintenance lock (owner pid ${outcome.owner.pid}, started ${outcome.owner.startedAt}) REMOVED.`,
+      );
+      console.log(
+        "[maintenance] re-run --reconcile before retrying a restore/promotion where appropriate.",
+      );
+      process.exit(0);
+    }
+    console.error(`[maintenance] FAIL: ${outcome.reason}`);
+    process.exit(1);
+  }
+  if (process.argv[2] === "--journal-path") {
+    console.log(journalPath());
+    process.exit(0);
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Recovery journal                                                    */
@@ -245,7 +328,7 @@ export const writeJournal = (phase, backup) => {
     null,
     2,
   );
-  const tmpPath = `${JOURNAL_PATH}.tmp`;
+  const tmpPath = `${JOURNAL_PATH()}.tmp`;
   try {
     rmSync(tmpPath, { force: true });
   } catch {
@@ -258,7 +341,7 @@ export const writeJournal = (phase, backup) => {
   } finally {
     closeSync(fd);
   }
-  renameSync(tmpPath, JOURNAL_PATH);
+  renameSync(tmpPath, JOURNAL_PATH());
   try {
     const dirFd = openSync(BACKUP_DIR, "r");
     try {
@@ -274,7 +357,7 @@ export const writeJournal = (phase, backup) => {
 
 export const clearJournal = () => {
   try {
-    rmSync(JOURNAL_PATH, { force: true });
+    rmSync(JOURNAL_PATH(), { force: true });
   } catch {
     // best-effort
   }
@@ -290,7 +373,7 @@ export const clearJournal = () => {
  *  a default proceed. */
 export const readJournalState = () => {
   try {
-    const journal = JSON.parse(readFileSync(JOURNAL_PATH, "utf8"));
+    const journal = JSON.parse(readFileSync(JOURNAL_PATH(), "utf8"));
     if (
       journal?.operation === "promote" &&
       JOURNAL_PHASES.includes(journal.phase)

@@ -680,56 +680,95 @@ test("hosted CI wires real PostgreSQL twice, the self-hosted contract gate, and 
   assert.match(ci, /TENVYR_LIVE_RUNTIME_GATES: "0"/);
 });
 
-test("maintenance lock: exclusive ownership, fail-fast contention, and stale-lock reclaim on crash", async () => {
-  const {
-    acquireMaintenanceLock,
-    releaseMaintenanceLock,
-    journalPath,
-  } = await awaitImport("../self-hosted/maintenance.mjs");
-  const { rmSync } = await import("node:fs");
-  // Clean slate (a crashed test may have left a stale lock — the reclaim
-  // path is exactly what we are testing).
-  try {
-    rmSync(join(ROOT, "backups", ".maintenance.lock"), { recursive: true, force: true });
-  } catch {
-    // best-effort
-  }
+test("maintenance lock: exclusive ownership, fail-fast live contention, and FAIL-CLOSED stale/uncertain state", async () => {
+  const { acquireMaintenanceLock, releaseMaintenanceLock, clearStaleMaintenanceLock, journalPath } =
+    await awaitImport("../self-hosted/maintenance.mjs");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  // Isolate this test's maintenance state: the maintenance module resolves
+  // its directory from TENVYR_MAINTENANCE_DIR at CALL time, so the
+  // production <repo>/backups files are never touched.
+  const maintenanceDir = mkdtempSync(join(tmpdir(), "tenvyr-lock-spec-"));
+  const previousDir = process.env.TENVYR_MAINTENANCE_DIR;
+  process.env.TENVYR_MAINTENANCE_DIR = maintenanceDir;
+  const lockPath = join(maintenanceDir, ".maintenance.lock");
   try {
     const first = acquireMaintenanceLock();
     assert.equal(first.owned, true, "first acquisition must own the lock");
+    assert.ok(
+      existsSync(lockPath) && !existsSync(join(ROOT, "backups", ".maintenance.lock")),
+      "the lock must be created ONLY inside TENVYR_MAINTENANCE_DIR",
+    );
     // A second acquisition while the owner is ALIVE fails fast.
     const second = acquireMaintenanceLock();
     assert.equal(second.owned, false, "second acquisition must not own the lock");
     assert.equal(second.held, true);
     assert.equal(second.owner?.pid, process.pid, "the held lock must name the live owner");
+    assert.equal(second.denied, undefined, "live contention is not a stale-state denial");
     releaseMaintenanceLock(first);
     // After release, acquisition succeeds again.
     const third = acquireMaintenanceLock();
     assert.equal(third.owned, true, "acquisition must succeed after release");
     releaseMaintenanceLock(third);
-    // Stale-lock reclaim: a lock owned by a DEAD pid (a crashed process)
-    // is reclaimed automatically.
-    const { writeFileSync } = await import("node:fs");
+    // STALE owner (dead pid): FAIL CLOSED — never auto-reclaimed, because
+    // a dead JS owner does not prove its docker/DB descendants are dead.
     writeFileSync(
-      join(ROOT, "backups", ".maintenance.lock"),
+      lockPath,
       JSON.stringify({ pid: 999_999_999, startedAt: new Date().toISOString() }),
       { flag: "wx" },
     );
-    const reclaimed = acquireMaintenanceLock();
-    assert.equal(reclaimed.owned, true, "a stale lock from a dead owner must be reclaimed");
-    releaseMaintenanceLock(reclaimed);
+    const stale = acquireMaintenanceLock();
+    assert.equal(stale.owned, false, "a stale lock must NEVER be auto-reclaimed");
+    assert.match(stale.denied ?? "", /stale-maintenance-state/);
+    assert.ok((stale.instructions ?? []).length >= 4, "stale state must carry bounded operator instructions");
+    assert.ok(existsSync(lockPath), "the stale lock must still exist (never deleted)");
+    // Explicit operator clear refuses a LIVE owner...
+    rmSync(lockPath, { force: true });
+    const live = acquireMaintenanceLock();
+    assert.equal(live.owned, true);
+    const liveClear = clearStaleMaintenanceLock();
+    assert.equal(liveClear.cleared, false, "the clear must refuse a live owner");
+    releaseMaintenanceLock(live);
+    // ...and the explicit clear works for a dead owner.
+    writeFileSync(
+      lockPath,
+      JSON.stringify({ pid: 999_999_999, startedAt: new Date().toISOString() }),
+      { flag: "wx" },
+    );
+    const cleared = clearStaleMaintenanceLock();
+    assert.equal(cleared.cleared, true, "explicit stale-lock clear must succeed for a dead owner");
+    assert.ok(!existsSync(lockPath), "the stale lock must be gone after the explicit clear");
+    const after = acquireMaintenanceLock();
+    assert.equal(after.owned, true, "acquisition must succeed after the explicit clear");
+    releaseMaintenanceLock(after);
+    // UNREADABLE owner record: FAIL CLOSED.
+    writeFileSync(lockPath, "\x00\x01broken", "utf8");
+    const unreadable = acquireMaintenanceLock();
+    assert.equal(unreadable.owned, false, "an unreadable lock must never be acquired");
+    assert.ok(existsSync(lockPath), "the unreadable lock must still exist");
+    rmSync(lockPath, { force: true });
   } finally {
     releaseMaintenanceLock({ owned: true });
     try {
-      rmSync(join(ROOT, "backups", ".maintenance.lock"), { recursive: true, force: true });
+      rmSync(lockPath, { force: true });
     } catch {
       // best-effort
+    }
+    try {
+      rmSync(maintenanceDir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+    if (previousDir === undefined) {
+      delete process.env.TENVYR_MAINTENANCE_DIR;
+    } else {
+      process.env.TENVYR_MAINTENANCE_DIR = previousDir;
     }
   }
   assert.ok(journalPath().endsWith(".recovery-journal.json"));
 });
 
-test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO destructive cleanup in teardown", async () => {
+test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO destructive cleanup, production maintenance state BYTE-IDENTICAL", async () => {
   const { spawnSync } = await import("node:child_process");
   const { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -737,7 +776,15 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
   const logPath = join(dir, "docker.log");
   const psOutput = join(dir, "ps-a.txt");
   const volumeOutput = join(dir, "volumes.json");
+  // Production-like maintenance sentinels: the refused suite must leave
+  // them BYTE-IDENTICAL (never deleted, never overwritten).
+  const productionLock = join(ROOT, "backups", ".maintenance.lock");
+  const productionJournal = join(ROOT, "backups", ".recovery-journal.json");
+  const lockSentinel = JSON.stringify({ pid: 999_999_999, startedAt: "sentinel-lock" });
+  const journalSentinel = JSON.stringify({ operation: "promote", phase: "complete", backup: "sentinel-journal", startedAt: "sentinel", updatedAt: "sentinel" });
   try {
+    writeFileSync(productionLock, lockSentinel, "utf8");
+    writeFileSync(productionJournal, journalSentinel, "utf8");
     // Scenario 1: docker ps -a reports REAL Tenvyr infrastructure (a
     // STOPPED production container — ps -a shows stopped containers).
     writeFileSync(psOutput, "tenvyr-self-hosted-postgres\n", "utf8");
@@ -779,8 +826,20 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
       !log.includes("down") && !log.includes("volume rm") && !log.includes("rm "),
       `no destructive cleanup may run after a guard failure: ${log}`,
     );
+    // Production maintenance state: UNTOUCHED (byte-identical).
+    assert.equal(
+      readFileSync(productionLock, "utf8"),
+      lockSentinel,
+      "the production maintenance lock must survive a refused suite byte-identical",
+    );
+    assert.equal(
+      readFileSync(productionJournal, "utf8"),
+      journalSentinel,
+      "the production recovery journal must survive a refused suite byte-identical",
+    );
     // Scenario 2: the real production VOLUME exists (preserved volume,
-    // no running container) — also refused, also zero cleanup.
+    // no running container) — also refused, also zero cleanup, also
+    // byte-identical sentinels.
     const psOutput2 = join(dir, "ps-a2.txt");
     const volumeOutput2 = join(dir, "volumes2.json");
     writeFileSync(psOutput2, "", "utf8");
@@ -810,8 +869,20 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
     assert.match(suite2.stdout + suite2.stderr, /refusing to run/);
     const log2 = readFileSync(logPath2, "utf8");
     assert.ok(!log2.includes("compose"), `zero compose actions after a volume guard failure: ${log2}`);
+    assert.equal(
+      readFileSync(productionLock, "utf8"),
+      lockSentinel,
+      "the production maintenance lock must survive the volume guard failure byte-identical",
+    );
+    assert.equal(
+      readFileSync(productionJournal, "utf8"),
+      journalSentinel,
+      "the production recovery journal must survive the volume guard failure byte-identical",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(productionLock, { force: true });
+    rmSync(productionJournal, { force: true });
   }
 });
 
@@ -838,85 +909,131 @@ test("freeFailedPromotionName: a preserved candidate is never overwritten; rollb
   );
 });
 
-test("concurrent stale-lock reclaim: at most ONE contender becomes owner (atomic rename, no TOCTOU)", async () => {
-  const { acquireMaintenanceLock, releaseMaintenanceLock } = await awaitImport(
-    "../self-hosted/maintenance.mjs",
-  );
-  const { spawnSync, spawn } = await import("node:child_process");
-  const { writeFileSync, rmSync } = await import("node:fs");
-  const lockPath = join(ROOT, "backups", ".maintenance.lock");
-  const moduleUrl = `file://${join(ROOT, "scripts", "self-hosted", "maintenance.mjs")}`;
-  const childScript = `
-import("${moduleUrl}").then((m) => {
-  const lock = m.acquireMaintenanceLock();
-  const t0 = Date.now();
-  console.log("RESULT " + JSON.stringify({ owned: lock.owned, held: lock.held, owner: lock.owner?.pid ?? null, t0 }));
-  if (lock.owned) {
-    // Hold the lock for a bounded window so a concurrent contender
-    // would OBSERVE this owner as alive — overlapping ownership would
-    // be detectable.
-    const until = Date.now() + 300;
-    while (Date.now() < until) {}
-    m.releaseMaintenanceLock(lock);
-  }
-});
-`;
-  const runChild = () =>
-    new Promise((resolve) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], {
-        cwd: ROOT,
-        encoding: "utf8",
-      });
-      let out = "";
-      child.stdout.on("data", (d) => (out += d));
-      child.stderr.on("data", (d) => (out += d));
-      child.on("close", () => {
-        const line = out.split("\n").find((l) => l.startsWith("RESULT "));
-        resolve(line ? JSON.parse(line.slice("RESULT ".length)) : null);
-      });
-    });
-  try {
-    rmSync(lockPath, { force: true });
-    // Two contenders encounter ONE stale lock (dead owner) SIMULTANEOUSLY.
-    // The reclaim is a single atomic rename: exactly one contender can win
-    // it, and the loser observes the winner's live lock. LINEARIZABILITY:
-    // at most one owner may hold the lock at any instant — if both report
-    // ownership, their 300ms hold windows must NOT overlap.
-    const HOLD_MS = 300;
-    for (let round = 0; round < 5; round += 1) {
-      writeFileSync(
-        lockPath,
-        JSON.stringify({ pid: 999_999_999, startedAt: new Date().toISOString() }),
-        { flag: "wx" },
-      );
-      const [a, b] = await Promise.all([runChild(), runChild()]);
-      const owners = [a, b].filter((r) => r?.owned === true);
-      assert.ok(owners.length >= 1, `at least one contender must become owner (round ${round}): ${JSON.stringify([a, b])}`);
-      if (owners.length === 2) {
-        // Both reported ownership — they must be SEQUENTIAL, never
-        // overlapping (the second acquired only after the first released).
-        assert.ok(
-          Math.abs(owners[0].t0 - owners[1].t0) >= HOLD_MS,
-          `overlapping ownership windows (round ${round}): ${JSON.stringify([a, b])}`,
-        );
-      }
-      rmSync(lockPath, { force: true });
-    }
-  } finally {
+test("stale-owner FAIL-CLOSED process tree: owner SIGKILL with a live docker child → DENIED until the child is gone and the lock is explicitly cleared", async () => {
+  const { spawn, spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, rmSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "tenvyr-proc-tree-"));
+  const isPidAlive = (pid) => {
     try {
-      rmSync(lockPath, { force: true });
-    } catch {
-      // best-effort
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === "ESRCH" ? false : true;
     }
+  };
+  try {
+    // FAKE long-running docker executable: records its PID and STAYS
+    // ALIVE — the real external-process boundary the maintenance owner
+    // drives (docker exec / pg_dump / pg_restore / psql descendants).
+    const pidFile = join(dir, "docker.pid");
+    const fakeDocker = join(dir, "docker");
+    writeFileSync(
+      fakeDocker,
+      `#!/usr/bin/env bash\necho $$ > "$TENVYR_FAKE_DOCKER_PIDFILE"\nwhile true; do sleep 1; done\n`,
+    );
+    chmodSync(fakeDocker, 0o755);
+    const maintenanceDir = join(dir, "maint");
+    const deployEnv = join(dir, "deploy.env");
+    writeFileSync(
+      deployEnv,
+      `TENVYR_VERSION=v0.1.0\nTENVYR_SOURCE_REVISION=${"a".repeat(40)}\nPOSTGRES_PASSWORD=test\n`,
+    );
+    const env = {
+      ...process.env,
+      PATH: `${dir}:${process.env.PATH ?? ""}`,
+      TENVYR_FAKE_DOCKER_PIDFILE: pidFile,
+      TENVYR_MAINTENANCE_DIR: maintenanceDir,
+      TENVYR_DEPLOY_ENV: deployEnv,
+    };
+    delete env.NODE_TEST_CONTEXT;
+    const acquireResult = (label) => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import("file://${join(ROOT, "scripts", "self-hosted", "maintenance.mjs")}").then((m) => {
+  const lock = m.acquireMaintenanceLock();
+  console.log("RESULT " + JSON.stringify({ owned: lock.owned, denied: lock.denied ?? null }));
+  if (lock.owned) m.releaseMaintenanceLock(lock);
+});`,
+        ],
+        { cwd: ROOT, encoding: "utf8", env },
+      );
+      const line = (result.stdout ?? "").split("\n").find((l) => l.startsWith("RESULT "));
+      assert.ok(line, `${label}: the acquire child must report a result: ${result.stdout}\n${result.stderr}`);
+      return JSON.parse(line.slice("RESULT ".length));
+    };
+    // 1. The REAL backup process acquires the REAL maintenance lock and
+    //    reaches spawnSync("docker", ...) — the fake docker records its
+    //    PID and stays alive.
+    const backup = spawn(process.execPath, ["scripts/self-hosted/backup.mjs"], {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let backupOutput = "";
+    backup.stdout.on("data", (d) => (backupOutput += d));
+    backup.stderr.on("data", (d) => (backupOutput += d));
+    const spawnDeadline = Date.now() + 30_000;
+    while (!existsSync(pidFile) && Date.now() < spawnDeadline && backup.exitCode === null) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(existsSync(pidFile), `the fake docker child must have been spawned by the real backup; output: ${backupOutput.slice(-400)}`);
+    const dockerPid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+    assert.ok(Number.isInteger(dockerPid) && dockerPid > 0, "the fake docker must record a real PID");
+    // 2. SIGKILL the maintenance owner (the backup Node process).
+    backup.kill("SIGKILL");
+    await new Promise((resolve) => backup.once("close", resolve));
+    // 3. The docker child SURVIVES the owner's death (kill does not
+    //    propagate to the external child).
+    assert.ok(isPidAlive(dockerPid), "the docker child must remain alive after the owner's SIGKILL");
+    // 4. A second REAL acquisition is DENIED — stale/uncertain
+    //    maintenance state (the dead owner does not prove the docker
+    //    descendant is dead).
+    const denied = acquireResult("second acquisition");
+    assert.equal(denied.owned, false, "the second acquisition MUST be denied while the docker child survives");
+    assert.match(denied.denied ?? "", /stale-maintenance-state/);
+    assert.ok(
+      existsSync(join(maintenanceDir, ".maintenance.lock")),
+      "the stale lock must still exist after the denial",
+    );
+    // 5. Terminate the surviving docker child (the operator's bounded
+    //    confirmation step) — then the EXPLICIT stale-lock clear allows
+    //    acquisition again.
+    try {
+      process.kill(dockerPid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+    const goneDeadline = Date.now() + 10_000;
+    while (isPidAlive(dockerPid) && Date.now() < goneDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(!isPidAlive(dockerPid), "the docker child must be terminated before the explicit clear");
+    const clear = spawnSync(
+      process.execPath,
+      ["scripts/self-hosted/maintenance.mjs", "--clear-stale-lock"],
+      { cwd: ROOT, encoding: "utf8", env },
+    );
+    assert.equal(clear.status, 0, `the explicit stale-lock clear must succeed: ${clear.stdout}\n${clear.stderr}`);
+    const acquired = acquireResult("post-clear acquisition");
+    assert.equal(acquired.owned, true, "acquisition must succeed after the explicit clear");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL leaves NO delegated worker behind", async () => {
+test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL → stale lock is DENIED until the explicit clear", async () => {
   const { spawn } = await import("node:child_process");
   const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "tenvyr-upgrade-real-backup-"));
-  const lockPath = join(ROOT, "backups", ".maintenance.lock");
+  const maintenanceDir = join(dir, "maint");
+  const lockPath = join(maintenanceDir, ".maintenance.lock");
+  const previousDir = process.env.TENVYR_MAINTENANCE_DIR;
+  process.env.TENVYR_MAINTENANCE_DIR = maintenanceDir;
   try {
     const fakeGit = join(dir, "fake-git.sh");
     writeFileSync(
@@ -944,6 +1061,7 @@ test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL leaves NO 
           ...process.env,
           TENVYR_DEPLOY_ENV: deployEnv,
           TENVYR_GIT_CMD: fakeGit,
+          TENVYR_MAINTENANCE_DIR: maintenanceDir,
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -981,33 +1099,35 @@ test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL leaves NO 
     } else {
       assert.equal(exit.signal, "SIGKILL", "the owner must die by SIGKILL mid-backup");
     }
-    // PROOF: no process capable of using the shared maintenance
-    // resources survives the owner's death — the backup ran IN the
-    // owner process, so no backup.mjs process can exist.
-    const survivors = await new Promise((resolve) => {
-      import("node:child_process").then(({ spawnSync }) => {
-        const result = spawnSync("pgrep", ["-f", "scripts/self-hosted/backup.mjs"], {
-          cwd: ROOT,
-          encoding: "utf8",
-        });
-        resolve(result.status === 0 ? result.stdout.trim().split("\n").filter(Boolean) : []);
-      });
-    });
-    assert.deepEqual(survivors, [], `no orphan backup process may survive the owner's death, got: ${survivors.join(", ")}`);
-    // The dead owner's stale lock is safely reclaimed (atomic rename) by
-    // the next acquisition — and with no orphan, nothing can overlap.
-    const { acquireMaintenanceLock, releaseMaintenanceLock } = await awaitImport(
-      "../self-hosted/maintenance.mjs",
-    );
+    // FAIL-CLOSED STALE-OWNER POLICY: the dead owner's lock is NEVER
+    // auto-reclaimed — a dead JS owner does not prove its external
+    // maintenance children (docker/DB) are dead.
+    const { acquireMaintenanceLock, releaseMaintenanceLock, clearStaleMaintenanceLock } =
+      await awaitImport("../self-hosted/maintenance.mjs");
     const after = acquireMaintenanceLock();
-    assert.equal(after.owned, true, "the stale lock from the dead owner must be reclaimable");
-    releaseMaintenanceLock(after);
+    assert.equal(after.owned, false, "the stale lock from the dead owner must NOT be auto-reclaimed");
+    assert.match(after.denied ?? "", /stale-maintenance-state/);
+    assert.ok(
+      existsSync(lockPath),
+      "the stale lock must still exist after the denial",
+    );
+    // The explicit operator clear (dead owner) then allows acquisition.
+    const cleared = clearStaleMaintenanceLock();
+    assert.equal(cleared.cleared, true, "the explicit stale-lock clear must succeed for the dead owner");
+    const afterwards = acquireMaintenanceLock();
+    assert.equal(afterwards.owned, true, "acquisition must succeed after the explicit clear");
+    releaseMaintenanceLock(afterwards);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     try {
       rmSync(lockPath, { force: true });
     } catch {
       // best-effort
+    }
+    if (previousDir === undefined) {
+      delete process.env.TENVYR_MAINTENANCE_DIR;
+    } else {
+      process.env.TENVYR_MAINTENANCE_DIR = previousDir;
     }
   }
 });
@@ -1133,7 +1253,13 @@ test("recovery journal: atomic writes never fail open; completion evidence survi
     clearJournal,
     journalPath,
   } = await awaitImport("../self-hosted/maintenance.mjs");
-  const { rmSync, writeFileSync } = await import("node:fs");
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  // Isolate the journal in a temp maintenance directory — the production
+  // <repo>/backups journal is never touched by the test suite.
+  const maintenanceDir = mkdtempSync(join(tmpdir(), "tenvyr-journal-spec-"));
+  const previousDir = process.env.TENVYR_MAINTENANCE_DIR;
+  process.env.TENVYR_MAINTENANCE_DIR = maintenanceDir;
   const path = journalPath();
   try {
     // Every phase writes a complete, well-formed, immediately readable
@@ -1179,6 +1305,16 @@ test("recovery journal: atomic writes never fail open; completion evidence survi
       rmSync(`${journalPath()}.tmp`, { force: true });
     } catch {
       // best-effort
+    }
+    try {
+      rmSync(maintenanceDir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+    if (previousDir === undefined) {
+      delete process.env.TENVYR_MAINTENANCE_DIR;
+    } else {
+      process.env.TENVYR_MAINTENANCE_DIR = previousDir;
     }
   }
 });

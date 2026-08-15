@@ -47,7 +47,12 @@ import { acquireMaintenanceLock, releaseMaintenanceLock } from "./maintenance.mj
 export const REQUIRED_ANCHOR_KEYS = REQUIRED_ANCHOR_KEYS_SHARED;
 
 const ROOT = join(import.meta.dirname, "..", "..");
-const BACKUP_DIR = join(ROOT, "backups");
+/** Maintenance/backup state lives under TENVYR_MAINTENANCE_DIR when set
+ *  (the recovery E2E uses its OWN directory), otherwise the production
+ *  default <repo>/backups. */
+const BACKUP_DIR = process.env.TENVYR_MAINTENANCE_DIR
+  ? join(process.env.TENVYR_MAINTENANCE_DIR)
+  : join(ROOT, "backups");
 /** Bounded isolated verification database (never the active authority). */
 export const VERIFY_DB = "tenvyr_backup_verify";
 
@@ -232,22 +237,24 @@ const main = () => {
   // verification database + staging dump paths). The exclusive
   // process-lifetime lock guarantees that a PASSing manifest describes
   // THAT EXACT dump — a concurrent second backup fails fast instead of
-  // interleaving. A crashed backup releases the lock automatically: the
-  // next acquisition atomically renames the stale lock (dead owner PID)
-  // to a tombstone and retries, and there is NO child delegation — the
-  // verified-backup operation always runs in the lock owner's process.
+  // interleaving. Stale/uncertain maintenance state FAILS CLOSED (a dead
+  // owner does not prove its docker/DB descendants are dead) — the lock
+  // is never auto-reclaimed; the operator clears it explicitly. There is
+  // NO child delegation — the verified-backup operation always runs in
+  // the lock owner's process.
   const lock = acquireMaintenanceLock();
   if (!lock.owned) {
-    if (lock.denied) {
-      console.error(`[backup] FAIL: ${lock.denied}`);
-      process.exit(1);
+    console.error(`[backup] FAIL: ${lock.denied ?? "maintenance operation already active"} — refusing to bypass serialization`);
+    if (lock.instructions) {
+      console.error("[backup] stale/uncertain maintenance state — bounded operator recovery:");
+      for (const step of lock.instructions) {
+        console.error(`  ${step}`);
+      }
+    } else if (lock.owner) {
+      console.error(
+        `[backup] (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`,
+      );
     }
-    const owner = lock.owner
-      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
-      : "";
-    console.error(
-      `[backup] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
-    );
     process.exit(1);
   }
   try {
