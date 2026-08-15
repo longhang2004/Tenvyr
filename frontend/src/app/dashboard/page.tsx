@@ -1,1224 +1,375 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { io } from "socket.io-client";
+import React, { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
-  Play,
-  Layers,
+  PlayCircle,
   Cpu,
-  Activity,
-  Plus,
+  FolderGit2,
   RefreshCw,
-  Clock,
-  CheckCircle2,
+  ArrowRight,
+  UserCheck,
   XCircle,
-  HelpCircle,
-  AlertTriangle,
-  Terminal,
-  Database,
+  Activity,
+  ChevronRight,
 } from "lucide-react";
-import { safeJsonPreview } from "./safe-preview.mjs";
+import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
+import type {
+  WorkbenchExecutionSummaryV1,
+  WorkbenchConnectionCardV1,
+  WorkbenchWorkspaceV1,
+  RuntimeOnboardingStatusV1,
+} from "../../lib/tenvyr-api/types.ts";
+import { StatusBadge } from "../../components/shared/StatusBadge.tsx";
+import { EmptyState } from "../../components/shared/EmptyState.tsx";
+import { LoadingSpinner } from "../../components/shared/LoadingSpinner.tsx";
 
-const GATEWAY_API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-const GATEWAY_WS_URL = process.env.NEXT_PUBLIC_WS_URL || GATEWAY_API_URL;
+const ONBOARDING_KINDS = ["codex", "claude", "opencode"] as const;
 
-type PipelineStepMetadata = {
-  runtime?: unknown;
-  language?: unknown;
-  transport?: unknown;
-  runnerRuntime?: unknown;
-};
+export default function OverviewPage() {
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [executions, setExecutions] = useState<WorkbenchExecutionSummaryV1[]>([]);
+  const [connections, setConnections] = useState<WorkbenchConnectionCardV1[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkbenchWorkspaceV1[]>([]);
+  const [onboardingStatuses, setOnboardingStatuses] = useState<Record<string, RuntimeOnboardingStatusV1>>({});
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-type PipelineStep = {
-  id: string;
-  metadata?: PipelineStepMetadata;
-};
-
-type Pipeline = {
-  id: string;
-  name: string;
-  version: string;
-  steps?: PipelineStep[];
-};
-
-type StepExecution = {
-  id: string;
-  stepId: string;
-  agent: string;
-  status: string;
-  input?: unknown;
-  output?: unknown;
-  error?: string | null;
-  errorCode?: string;
-  failureCode?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  startTime?: string;
-  endTime?: string;
-  attempts?: StepAttempt[];
-};
-
-type StepAttempt = {
-  id: string;
-  attemptNumber: number;
-  status: string;
-  invocationId: string;
-  dispatchedAt?: string;
-  startTime?: string;
-  terminalAt?: string;
-  error?: string | null;
-};
-
-type Execution = {
-  id: string;
-  pipelineId: string;
-  status: string;
-  startTime: string;
-  endTime?: string;
-  terminationReason?: string | null;
-  steps?: StepExecution[];
-};
-
-type ApiResponse<T> = {
-  success: boolean;
-  data: T;
-  error?: string;
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
-const isExecution = (value: unknown): value is Execution =>
-  isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.pipelineId === "string" &&
-  typeof value.status === "string" &&
-  typeof value.startTime === "string";
-
-const errorMessage = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
-
-const displayValue = (value: unknown) =>
-  typeof value === "string" ||
-  typeof value === "number" ||
-  typeof value === "boolean"
-    ? String(value)
-    : null;
-
-const formatDuration = (startTime?: string, endTime?: string) => {
-  if (!startTime) return null;
-
-  const start = Date.parse(startTime);
-  const end = endTime ? Date.parse(endTime) : Date.now();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-
-  const duration = Math.max(0, end - start);
-  return duration < 1000
-    ? `${duration} ms`
-    : `${(duration / 1000).toFixed(1)} s`;
-};
-
-export default function Dashboard() {
-  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
-  const [executions, setExecutions] = useState<Execution[]>([]);
-  const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
-  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(
-    null,
-  );
-  const [yamlInput, setYamlInput] = useState<string>(`name: code-review-pipeline
-version: "1.0"
-description: "Reviews code and checks for runtime anomalies"
-steps:
-  - id: review
-    agent: code-reviewer
-    input:
-      code: "{{ pipeline.input.code }}"
-      language: "{{ pipeline.input.language }}"
-    timeout: 30s
-    retries: 3
-    onFailure: retry
-  - id: observe
-    agent: observability
-    dependsOn: [review]
-    condition: "{{ steps.review.result.score < 90 }}"
-    input:
-      findings: "{{ steps.review.result.findings }}"
-      logs: "{{ pipeline.input.logs }}"`);
-
-  const [pipelineInput, setPipelineInput] = useState<string>(`{
-  "code": "const query = 'SELECT * FROM users WHERE id = ' + userId;\\nconsole.log(query);",
-  "language": "javascript",
-  "logs": "2026-05-30T16:00:00Z ERROR Database connection timeout on port 5432"
-}`);
-
-  const [loading, setLoading] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [successMsg, setSuccessMsg] = useState<string>("");
-
-  // Fetch initial pipelines and executions
-  const refreshData = async () => {
+  const loadData = useCallback(async () => {
     try {
-      const pipesRes = await fetch(`${GATEWAY_API_URL}/api/pipelines`);
-      const pipesData = (await pipesRes.json()) as ApiResponse<Pipeline[]>;
-      if (pipesData.success) {
-        setPipelines(pipesData.data);
-        if (pipesData.data.length > 0) {
-          setSelectedPipelineId((current) => current || pipesData.data[0].id);
-        }
+      setErrorMsg(null);
+      const [execsRes, connsRes, wsRes] = await Promise.allSettled([
+        tenvyrApi.getWorkbenchExecutions(1),
+        tenvyrApi.getWorkbenchConnections(),
+        tenvyrApi.getWorkspaces(),
+      ]);
+
+      if (execsRes.status === "fulfilled") {
+        setExecutions(execsRes.value?.items ?? []);
+      }
+      if (connsRes.status === "fulfilled") {
+        setConnections(connsRes.value?.cards ?? []);
+      }
+      if (wsRes.status === "fulfilled") {
+        setWorkspaces(wsRes.value?.workspaces ?? []);
       }
 
-      const execsRes = await fetch(`${GATEWAY_API_URL}/api/executions`);
-      const execsData = (await execsRes.json()) as ApiResponse<Execution[]>;
-      if (execsData.success) {
-        setExecutions(execsData.data);
-      }
-    } catch (error: unknown) {
-      console.error("Failed to load initial data:", errorMessage(error));
+      // Probe onboarding statuses for quick readiness overview
+      const statuses: Record<string, RuntimeOnboardingStatusV1> = {};
+      await Promise.all(
+        ONBOARDING_KINDS.map(async (kind) => {
+          try {
+            const res = await tenvyrApi.getRuntimeOnboarding(kind);
+            if (res?.status) statuses[kind] = res.status;
+          } catch {
+            // best effort probe
+          }
+        }),
+      );
+      setOnboardingStatuses(statuses);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setErrorMsg(message || "Failed to load overview data");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-  };
-
-  useEffect(() => {
-    refreshData();
-
-    // Setup WebSocket connection
-    const socketConnection = io(GATEWAY_WS_URL);
-
-    socketConnection.on("connect", () => {
-      console.log("Websocket connected to Gateway: " + socketConnection.id);
-    });
-
-    socketConnection.on("execution-update", (event: unknown) => {
-      if (
-        !isRecord(event) ||
-        typeof event.executionId !== "string" ||
-        !isExecution(event.data)
-      ) {
-        return;
-      }
-      const executionId = event.executionId;
-      const nextExecution = event.data;
-      console.log("WebSocket event execution-update:", event);
-      // Reload executions list
-      refreshData();
-
-      // Update currently viewed execution if matches
-      setSelectedExecution((current) => {
-        if (current && current.id === executionId) {
-          return nextExecution;
-        }
-        return current;
-      });
-    });
-
-    return () => {
-      socketConnection.disconnect();
-    };
   }, []);
 
-  // Poll selected execution if running to handle websocket fallback
   useEffect(() => {
-    if (
-      !selectedExecution ||
-      (selectedExecution.status !== "RUNNING" &&
-        selectedExecution.status !== "PENDING")
-    ) {
-      return;
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(
-          `${GATEWAY_API_URL}/api/executions/${selectedExecution.id}`,
-        );
-        const data = (await res.json()) as ApiResponse<Execution>;
-        if (data.success) {
-          setSelectedExecution(data.data);
-        }
-      } catch (err) {
-        console.error("Failed to poll execution:", err);
-      }
-    }, 2000);
-
+    loadData();
+    const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
-  }, [selectedExecution]);
+  }, [loadData]);
 
-  const handleCreatePipeline = async () => {
-    setLoading(true);
-    setErrorMsg("");
-    setSuccessMsg("");
-    try {
-      const res = await fetch(`${GATEWAY_API_URL}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ yamlString: yamlInput }),
-      });
-      const data = (await res.json()) as ApiResponse<Pipeline>;
-      if (data.success) {
-        setSuccessMsg("Pipeline registered successfully!");
-        refreshData();
-      } else {
-        setErrorMsg(data.error || "Failed to register pipeline.");
-      }
-    } catch (error: unknown) {
-      setErrorMsg("Error registering pipeline: " + errorMessage(error));
-    } finally {
-      setLoading(false);
-    }
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadData();
   };
 
-  const handleStartExecution = async () => {
-    if (!selectedPipelineId) {
-      setErrorMsg("Select a pipeline first.");
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg("");
-    setSuccessMsg("");
-    try {
-      let parsedInput = {};
-      try {
-        parsedInput = JSON.parse(pipelineInput);
-      } catch {
-        setErrorMsg("Invalid JSON input parameters.");
-        setLoading(false);
-        return;
-      }
-
-      const res = await fetch(`${GATEWAY_API_URL}/api/executions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipelineId: selectedPipelineId,
-          input: parsedInput,
-        }),
-      });
-      const data = (await res.json()) as ApiResponse<Execution>;
-      if (data.success) {
-        setSuccessMsg("Pipeline execution triggered!");
-        setSelectedExecution(data.data);
-        refreshData();
-      } else {
-        setErrorMsg(data.error || "Failed to start execution.");
-      }
-    } catch (error: unknown) {
-      setErrorMsg("Error starting execution: " + errorMessage(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSelectExecution = async (id: string) => {
-    try {
-      const res = await fetch(`${GATEWAY_API_URL}/api/executions/${id}`);
-      const data = (await res.json()) as ApiResponse<Execution>;
-      if (data.success) {
-        setSelectedExecution(data.data);
-      }
-    } catch (err) {
-      console.error("Failed to load execution details:", err);
-    }
-  };
-
-  const handleCancelExecution = async () => {
-    if (!selectedExecution) return;
-    setLoading(true);
-    setErrorMsg("");
-    setSuccessMsg("");
-    try {
-      const res = await fetch(
-        `${GATEWAY_API_URL}/api/executions/${selectedExecution.id}/cancel`,
-        { method: "POST" },
-      );
-      const data = (await res.json()) as ApiResponse<Execution>;
-      if (data.success) {
-        setSelectedExecution(data.data);
-        setSuccessMsg("Execution cancelled.");
-        refreshData();
-      } else {
-        setErrorMsg(data.error || "Failed to cancel execution.");
-      }
-    } catch (error: unknown) {
-      setErrorMsg("Error cancelling execution: " + errorMessage(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "COMPLETED":
-        return <CheckCircle2 size={18} color="var(--accent-green)" />;
-      case "FAILED":
-        return <XCircle size={18} color="var(--accent-red)" />;
-      case "CANCELLED":
-        return <XCircle size={18} color="var(--text-secondary)" />;
-      case "RUNNING":
-        return (
-          <Activity
-            size={18}
-            color="var(--accent-blue)"
-            className="pulse-spin"
-          />
-        );
-      case "SKIPPED":
-        return <AlertTriangle size={18} color="var(--text-secondary)" />;
-      case "PENDING":
-        return <Clock size={18} color="var(--accent-orange)" />;
-      default:
-        return <HelpCircle size={18} color="var(--text-secondary)" />;
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "COMPLETED":
-        return "rgba(16, 185, 129, 0.1)";
-      case "FAILED":
-        return "rgba(239, 68, 68, 0.1)";
-      case "CANCELLED":
-        return "rgba(148, 163, 184, 0.1)";
-      case "RUNNING":
-        return "rgba(59, 130, 246, 0.1)";
-      case "SKIPPED":
-        return "rgba(255, 255, 255, 0.05)";
-      default:
-        return "transparent";
-    }
-  };
-
-  const getStatusBorderColor = (status: string) => {
-    switch (status) {
-      case "COMPLETED":
-        return "rgba(16, 185, 129, 0.3)";
-      case "FAILED":
-        return "rgba(239, 68, 68, 0.3)";
-      case "CANCELLED":
-        return "rgba(148, 163, 184, 0.3)";
-      case "RUNNING":
-        return "rgba(59, 130, 246, 0.4)";
-      case "SKIPPED":
-        return "rgba(255, 255, 255, 0.1)";
-      default:
-        return "var(--border-color)";
-    }
-  };
-
-  const selectedPipeline = selectedExecution
-    ? pipelines.find((pipeline) => pipeline.id === selectedExecution.pipelineId)
-    : undefined;
+  const pendingApprovals = executions.filter(
+    (e) => e.coordinationPhase === "WAITING_FOR_HUMAN",
+  );
 
   return (
-    <div
-      className="container"
-      style={{
-        padding: "2rem",
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        gap: "2rem",
-      }}
-    >
+    <div className="page-container">
       {/* Header */}
-      <header
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          borderBottom: "1px solid var(--border-color)",
-          paddingBottom: "1rem",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div
-            style={{
-              background:
-                "linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%)",
-              padding: "0.5rem",
-              borderRadius: "8px",
-              display: "flex",
-              alignItems: "center",
-            }}
-          >
-            <Cpu size={20} color="#fff" />
-          </div>
-          <span style={{ fontWeight: 800, fontSize: "1.25rem" }}>
-            Tenvyr Control Center
-          </span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h1 style={{ fontSize: "1.5rem", marginBottom: "0.25rem" }}>Operator Overview</h1>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            Supervised Agent Execution Control Plane · Trusted Local Operator
+          </p>
         </div>
-        <button
-          onClick={refreshData}
-          className="btn btn-secondary"
-          style={{ gap: "0.5rem" }}
-        >
-          <RefreshCw size={16} /> Refresh
-        </button>
-      </header>
-
-      {/* Main Grid */}
-      <div className="dashboard-grid">
-        {/* Left Side: Pipeline Creator & Config */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-          {/* Create Pipeline Section */}
-          <div
-            className="glass-card"
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            className="btn btn-secondary btn-sm"
+            disabled={refreshing}
+            title="Refresh state from server"
           >
-            <h3
-              style={{
-                fontSize: "1.1rem",
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Layers size={18} color="var(--accent-purple)" /> Register New
-              Pipeline
-            </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-              Define DAG workflow in YAML format:
-            </p>
-            <textarea
-              value={yamlInput}
-              onChange={(e) => setYamlInput(e.target.value)}
-              style={{
-                width: "100%",
-                height: "220px",
-                background: "rgba(0, 0, 0, 0.3)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "8px",
-                padding: "0.75rem",
-                color: "var(--text-primary)",
-                fontFamily: "var(--font-code)",
-                fontSize: "0.8rem",
-                resize: "vertical",
-              }}
-            />
-            <button
-              onClick={handleCreatePipeline}
-              disabled={loading}
-              className="btn btn-primary"
-              style={{ width: "100%", gap: "0.5rem" }}
-            >
-              <Plus size={16} /> Register Pipeline
-            </button>
-          </div>
-
-          {/* Trigger Run Section */}
-          <div
-            className="glass-card"
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-          >
-            <h3
-              style={{
-                fontSize: "1.1rem",
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Play size={18} color="var(--accent-green)" /> Trigger Execution
-            </h3>
-
-            <label
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.5rem",
-                fontSize: "0.85rem",
-              }}
-            >
-              Select Active Pipeline:
-              <select
-                value={selectedPipelineId}
-                onChange={(e) => setSelectedPipelineId(e.target.value)}
-                style={{
-                  background: "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "0.5rem",
-                  color: "var(--text-primary)",
-                }}
-              >
-                <option value="">-- Choose Pipeline --</option>
-                {pipelines.map((pipe) => (
-                  <option key={pipe.id} value={pipe.id}>
-                    {pipe.name} (v{pipe.version})
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.5rem",
-                fontSize: "0.85rem",
-              }}
-            >
-              Input Context Parameters (JSON):
-              <textarea
-                value={pipelineInput}
-                onChange={(e) => setPipelineInput(e.target.value)}
-                style={{
-                  width: "100%",
-                  height: "120px",
-                  background: "rgba(0, 0, 0, 0.3)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "0.75rem",
-                  color: "var(--text-primary)",
-                  fontFamily: "var(--font-code)",
-                  fontSize: "0.8rem",
-                  resize: "vertical",
-                }}
-              />
-            </label>
-
-            <button
-              onClick={handleStartExecution}
-              disabled={loading || !selectedPipelineId}
-              className="btn btn-primary"
-              style={{ width: "100%", gap: "0.5rem" }}
-            >
-              <Play size={16} /> Run Pipeline
-            </button>
-          </div>
-
-          {/* Feedback Messages */}
-          {errorMsg && (
-            <div
-              style={{
-                background: "rgba(239, 68, 68, 0.15)",
-                border: "1px solid rgba(239, 68, 68, 0.3)",
-                color: "#f87171",
-                padding: "0.75rem 1rem",
-                borderRadius: "8px",
-                fontSize: "0.85rem",
-              }}
-            >
-              {errorMsg}
-            </div>
-          )}
-          {successMsg && (
-            <div
-              style={{
-                background: "rgba(16, 185, 129, 0.15)",
-                border: "1px solid rgba(16, 185, 129, 0.3)",
-                color: "#34d399",
-                padding: "0.75rem 1rem",
-                borderRadius: "8px",
-                fontSize: "0.85rem",
-              }}
-            >
-              {successMsg}
-            </div>
-          )}
-        </div>
-
-        {/* Right Side: Visual Graph Monitor & Executions List */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-          {/* Active Visual Graph Monitor */}
-          <div
-            className="glass-card"
-            style={{
-              minHeight: "350px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "1.5rem",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                borderBottom: "1px solid var(--border-color)",
-                paddingBottom: "0.75rem",
-              }}
-            >
-              <h3
-                style={{
-                  fontSize: "1.1rem",
-                  fontWeight: 700,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                }}
-              >
-                <Activity size={18} color="var(--accent-blue)" /> Live DAG
-                Execution Monitor
-              </h3>
-              {selectedExecution && (
-                <span
-                  style={{
-                    fontSize: "0.75rem",
-                    background: "rgba(255,255,255,0.05)",
-                    padding: "0.25rem 0.5rem",
-                    borderRadius: "4px",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  ID: {selectedExecution.id.substring(0, 8)}...
-                </span>
-              )}
-            </div>
-
-            {selectedExecution ? (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "2rem",
-                  flex: 1,
-                }}
-              >
-                {/* Overall Execution Info Header */}
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "2rem",
-                    background: "rgba(255, 255, 255, 0.01)",
-                    padding: "0.75rem",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border-color)",
-                    fontSize: "0.85rem",
-                  }}
-                >
-                  <div>
-                    Status:{" "}
-                    <span style={{ fontWeight: "bold" }}>
-                      {selectedExecution.status}
-                    </span>
-                  </div>
-                  <div>
-                    Started:{" "}
-                    <span style={{ color: "var(--text-secondary)" }}>
-                      {new Date(
-                        selectedExecution.startTime,
-                      ).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  {selectedExecution.endTime && (
-                    <div>
-                      Completed:{" "}
-                      <span style={{ color: "var(--text-secondary)" }}>
-                        {new Date(
-                          selectedExecution.endTime,
-                        ).toLocaleTimeString()}
-                      </span>
-                    </div>
-                  )}
-                  <div>
-                    Duration:{" "}
-                    <span style={{ color: "var(--text-secondary)" }}>
-                      {formatDuration(
-                        selectedExecution.startTime,
-                        selectedExecution.endTime,
-                      ) || "—"}
-                    </span>
-                  </div>
-                  {(selectedExecution.status === "RUNNING" ||
-                    selectedExecution.status === "PENDING" ||
-                    selectedExecution.status === "WAITING") && (
-                    <button
-                      type="button"
-                      onClick={handleCancelExecution}
-                      disabled={loading}
-                      style={{
-                        marginLeft: "auto",
-                        padding: "0.35rem 0.6rem",
-                        borderRadius: "6px",
-                        border: "1px solid rgba(239, 68, 68, 0.45)",
-                        background: "rgba(239, 68, 68, 0.12)",
-                        color: "#fca5a5",
-                        cursor: loading ? "wait" : "pointer",
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-                {selectedExecution.terminationReason && (
-                  <div
-                    style={{
-                      marginTop: "-1rem",
-                      color: "var(--text-secondary)",
-                      fontSize: "0.75rem",
-                    }}
-                  >
-                    Reason: {selectedExecution.terminationReason}
-                  </div>
-                )}
-
-                {/* Nodes Grid (DAG Visualization) */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "1rem",
-                    position: "relative",
-                  }}
-                >
-                  {selectedExecution.steps &&
-                  selectedExecution.steps.length > 0 ? (
-                    selectedExecution.steps.map((step, index) => {
-                      const pipelineStep = selectedPipeline?.steps?.find(
-                        (candidate) => candidate.id === step.stepId,
-                      );
-                      const metadata = isRecord(pipelineStep?.metadata)
-                        ? pipelineStep.metadata
-                        : {};
-                      const output = isRecord(step.output) ? step.output : {};
-                      const tenvyr = isRecord(output._tenvyr)
-                        ? output._tenvyr
-                        : {};
-                      const providerMetadata = isRecord(tenvyr.metadata)
-                        ? tenvyr.metadata
-                        : tenvyr;
-                      const outputError = isRecord(output.error)
-                        ? output.error
-                        : {};
-                      const runtime =
-                        displayValue(metadata.runtime) ||
-                        displayValue(providerMetadata.runtime);
-                      const language =
-                        displayValue(metadata.language) ||
-                        displayValue(providerMetadata.language);
-                      const transport =
-                        displayValue(metadata.transport) ||
-                        displayValue(providerMetadata.transport);
-                      const runnerRuntime = displayValue(
-                        metadata.runnerRuntime,
-                      );
-                      const provider = displayValue(providerMetadata.provider);
-                      const model = displayValue(providerMetadata.model);
-                      const fallback = displayValue(
-                        providerMetadata.fallbackUsed,
-                      );
-                      const stepDuration = formatDuration(
-                        step.startTime,
-                        step.endTime,
-                      );
-                      const failureCode =
-                        displayValue(step.failureCode) ||
-                        displayValue(step.errorCode) ||
-                        displayValue(tenvyr.failureCode) ||
-                        displayValue(outputError.code) ||
-                        step.error?.match(/^([A-Z][A-Z0-9_]+):\s/)?.[1];
-
-                      return (
-                        <React.Fragment key={step.id}>
-                          {index > 0 && (
-                            <div
-                              style={{
-                                width: "2px",
-                                height: "20px",
-                                backgroundColor:
-                                  step.status === "RUNNING"
-                                    ? "var(--accent-blue)"
-                                    : "var(--border-color)",
-                                marginLeft: "2rem",
-                                marginTop: "-0.5rem",
-                                marginBottom: "-0.5rem",
-                                animation:
-                                  step.status === "RUNNING"
-                                    ? "connectorPulse 1.5s infinite"
-                                    : "none",
-                              }}
-                            />
-                          )}
-
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              background: getStatusColor(step.status),
-                              border: `1px solid ${getStatusBorderColor(step.status)}`,
-                              borderRadius: "12px",
-                              padding: "1rem",
-                              transition: "all 0.3s ease",
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "0.75rem",
-                                }}
-                              >
-                                {getStatusIcon(step.status)}
-                                <span
-                                  style={{
-                                    fontWeight: 700,
-                                    fontSize: "0.9rem",
-                                  }}
-                                >
-                                  {step.stepId}
-                                </span>
-                                <span
-                                  style={{
-                                    fontSize: "0.75rem",
-                                    color: "var(--text-secondary)",
-                                  }}
-                                >
-                                  ({step.agent})
-                                </span>
-                              </div>
-                              <div
-                                style={{
-                                  display: "flex",
-                                  gap: "0.75rem",
-                                  fontSize: "0.75rem",
-                                  color: "var(--text-secondary)",
-                                }}
-                              >
-                                <span>
-                                  Attempt {step.attempt ?? "—"}
-                                  {step.maxAttempts != null
-                                    ? `/${step.maxAttempts}`
-                                    : ""}
-                                </span>
-                                {stepDuration && <span>{stepDuration}</span>}
-                              </div>
-                            </div>
-
-                            {(runtime ||
-                              language ||
-                              transport ||
-                              runnerRuntime ||
-                              provider ||
-                              model ||
-                              fallback ||
-                              failureCode) && (
-                              <div
-                                style={{
-                                  display: "flex",
-                                  flexWrap: "wrap",
-                                  gap: "0.5rem",
-                                  marginTop: "0.75rem",
-                                  fontSize: "0.75rem",
-                                  color: "var(--text-secondary)",
-                                }}
-                              >
-                                {runtime && <span>Runtime: {runtime}</span>}
-                                {language && <span>Language: {language}</span>}
-                                {transport && (
-                                  <span>Transport: {transport}</span>
-                                )}
-                                {runnerRuntime && (
-                                  <span>Runner runtime: {runnerRuntime}</span>
-                                )}
-                                {provider && <span>Provider: {provider}</span>}
-                                {model && <span>Model: {model}</span>}
-                                {fallback && <span>Fallback: {fallback}</span>}
-                                {failureCode && (
-                                  <span style={{ color: "#f87171" }}>
-                                    Failure: {failureCode}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-
-                            {/* Expanded Step Info */}
-                            {step.input !== undefined &&
-                              step.input !== null && (
-                                <div
-                                  style={{
-                                    marginTop: "0.75rem",
-                                    padding: "0.5rem",
-                                    background: "rgba(0,0,0,0.2)",
-                                    borderRadius: "6px",
-                                    fontSize: "0.75rem",
-                                    fontFamily: "var(--font-code)",
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      color: "var(--accent-blue)",
-                                      fontWeight: "bold",
-                                      marginBottom: "0.25rem",
-                                    }}
-                                  >
-                                    [Input Context]
-                                  </div>
-                                  <pre
-                                    style={{
-                                      margin: 0,
-                                      whiteSpace: "pre-wrap",
-                                      overflowWrap: "anywhere",
-                                    }}
-                                  >
-                                    {safeJsonPreview(step.input)}
-                                  </pre>
-                                </div>
-                              )}
-
-                            {step.output !== undefined &&
-                              step.output !== null && (
-                                <div
-                                  style={{
-                                    marginTop: "0.5rem",
-                                    padding: "0.5rem",
-                                    background: "rgba(0,0,0,0.2)",
-                                    borderRadius: "6px",
-                                    fontSize: "0.75rem",
-                                    fontFamily: "var(--font-code)",
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      color: "var(--accent-green)",
-                                      fontWeight: "bold",
-                                      marginBottom: "0.25rem",
-                                    }}
-                                  >
-                                    [Agent Output]
-                                  </div>
-                                  <pre
-                                    style={{
-                                      margin: 0,
-                                      whiteSpace: "pre-wrap",
-                                      overflowWrap: "anywhere",
-                                    }}
-                                  >
-                                    {safeJsonPreview(step.output)}
-                                  </pre>
-                                </div>
-                              )}
-
-                            {step.error && (
-                              <div
-                                style={{
-                                  marginTop: "0.5rem",
-                                  padding: "0.5rem",
-                                  background: "rgba(239,68,68,0.1)",
-                                  border: "1px solid rgba(239,68,68,0.2)",
-                                  borderRadius: "6px",
-                                  fontSize: "0.75rem",
-                                  fontFamily: "var(--font-code)",
-                                  color: "#f87171",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    fontWeight: "bold",
-                                    marginBottom: "0.25rem",
-                                  }}
-                                >
-                                  [Error Trace]
-                                </div>
-                                <div>{step.error}</div>
-                              </div>
-                            )}
-
-                            {step.attempts && step.attempts.length > 0 && (
-                              <div
-                                style={{
-                                  marginTop: "0.75rem",
-                                  color: "var(--text-secondary)",
-                                  fontSize: "0.75rem",
-                                }}
-                              >
-                                Attempt history: {step.attempts
-                                  .map(
-                                    (attempt) =>
-                                      `#${attempt.attemptNumber} ${attempt.status}`,
-                                  )
-                                  .join(" · ")}
-                              </div>
-                            )}
-                          </div>
-                        </React.Fragment>
-                      );
-                    })
-                  ) : (
-                    <div
-                      style={{
-                        color: "var(--text-secondary)",
-                        fontSize: "0.85rem",
-                        textAlign: "center",
-                        padding: "2rem",
-                      }}
-                    >
-                      Pipeline starting, building nodes...
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "1rem",
-                  color: "var(--text-secondary)",
-                  border: "1px dashed var(--border-color)",
-                  borderRadius: "12px",
-                }}
-              >
-                <Terminal size={32} />
-                <span style={{ fontSize: "0.9rem" }}>
-                  No active run selected. Choose a run from history or start a
-                  new run.
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Execution History */}
-          <div
-            className="glass-card"
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-          >
-            <h3
-              style={{
-                fontSize: "1.1rem",
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Database size={18} color="var(--accent-blue)" /> Execution Run
-              History
-            </h3>
-
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.75rem",
-                maxHeight: "300px",
-                overflowY: "auto",
-              }}
-            >
-              {executions.length === 0 ? (
-                <div
-                  style={{
-                    color: "var(--text-secondary)",
-                    fontSize: "0.85rem",
-                    textAlign: "center",
-                    padding: "1.5rem",
-                  }}
-                >
-                  No execution runs found.
-                </div>
-              ) : (
-                executions.map((exec) => (
-                  <div
-                    key={exec.id}
-                    onClick={() => handleSelectExecution(exec.id)}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "0.75rem 1rem",
-                      background:
-                        selectedExecution && selectedExecution.id === exec.id
-                          ? "rgba(255, 255, 255, 0.05)"
-                          : "rgba(255, 255, 255, 0.01)",
-                      border: `1px solid ${selectedExecution && selectedExecution.id === exec.id ? "var(--accent-blue)" : "var(--border-color)"}`,
-                      borderRadius: "8px",
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "0.25rem",
-                      }}
-                    >
-                      <span style={{ fontSize: "0.85rem", fontWeight: "bold" }}>
-                        Run {exec.id.substring(0, 8)}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--text-secondary)",
-                        }}
-                      >
-                        {new Date(exec.startTime).toLocaleString()}
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                      }}
-                    >
-                      <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>
-                        {exec.status}
-                      </span>
-                      {getStatusIcon(exec.status)}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+            <RefreshCw size={14} style={{ animation: refreshing ? "spin 1s linear infinite" : "none" }} />
+            <span>Refresh</span>
+          </button>
+          <Link href="/runs/new" className="btn btn-primary">
+            <PlayCircle size={16} />
+            <span>New Team Run</span>
+          </Link>
         </div>
       </div>
 
-      {/* Inline styles */}
-      <style>{`
-        .pulse-spin {
-          animation: spin 2s linear infinite, pulse 1s ease-in-out infinite alternate;
-        }
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        @keyframes pulse {
-          0% { opacity: 0.6; }
-          100% { opacity: 1; }
-        }
-        .dashboard-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
-          gap: 2rem;
-        }
-        @media (max-width: 980px) {
-          .dashboard-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-        @media (max-width: 680px) {
-          .container {
-            padding: 1rem !important;
-          }
-          .glass-card {
-            padding: 1rem;
-          }
-          header {
-            align-items: flex-start !important;
-            flex-direction: column;
-            gap: 1rem;
-          }
-        }
-        @keyframes connectorPulse {
-          0% { opacity: 0.3; }
-          50% { opacity: 1; background-color: var(--accent-blue); }
-          100% { opacity: 0.3; }
-        }
-      `}</style>
+      {errorMsg && (
+        <div className="notice notice-error">
+          <XCircle size={16} />
+          <div>{errorMsg}</div>
+        </div>
+      )}
+
+      {/* Pending Approvals Attention Banner */}
+      {pendingApprovals.length > 0 && (
+        <div
+          className="notice notice-warning"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "1rem 1.25rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <UserCheck size={20} color="var(--accent-amber)" />
+            <div>
+              <strong style={{ color: "var(--accent-amber)" }}>
+                {pendingApprovals.length} Run{pendingApprovals.length > 1 ? "s" : ""} Waiting for Human Approval
+              </strong>
+              <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: "0.15rem" }}>
+                The agent loop cannot proceed until you approve or deny the requested decision.
+              </p>
+            </div>
+          </div>
+          <Link href="/approvals" className="btn btn-sm btn-primary">
+            Review Approvals <ArrowRight size={14} />
+          </Link>
+        </div>
+      )}
+
+      {/* Readiness & Setup Grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gap: "1.25rem",
+        }}
+      >
+        {/* Runtime Readiness Card */}
+        <div className="card">
+          <div className="card-header">
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <Cpu size={16} color="var(--accent-blue)" />
+              <h2 className="card-title">Runtime Readiness</h2>
+            </div>
+            <Link href="/runtimes" style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.2rem" }}>
+              Manage <ChevronRight size={12} />
+            </Link>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+            {ONBOARDING_KINDS.map((kind) => {
+              const status = onboardingStatuses[kind];
+              const label = kind === "codex" ? "Codex CLI" : kind === "claude" ? "Claude Code" : "OpenCode";
+              const conn = connections.find((c) => c.runtimeKind === kind && !c.revoked);
+
+              return (
+                <div
+                  key={kind}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "0.5rem 0.75rem",
+                    backgroundColor: "var(--bg-surface)",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--border-color)",
+                    fontSize: "0.8rem",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span style={{ fontWeight: 600 }}>{label}</span>
+                    {status?.detected ? (
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                        v{status.version || status.pinnedVersion}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Not installed</span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {conn ? (
+                      <span className="badge badge-ready">Connected</span>
+                    ) : status?.detected ? (
+                      status.authReady === false ? (
+                        <span className="badge badge-warning">Auth Required</span>
+                      ) : (
+                        <Link href="/runtimes" className="btn btn-sm btn-secondary" style={{ padding: "0.15rem 0.45rem", fontSize: "0.7rem" }}>
+                          Connect
+                        </Link>
+                      )
+                    ) : (
+                      <span className="badge badge-neutral">Missing</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Workspaces Card */}
+        <div className="card">
+          <div className="card-header">
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <FolderGit2 size={16} color="var(--accent-blue)" />
+              <h2 className="card-title">Workspaces</h2>
+            </div>
+            <Link href="/workspaces" style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.2rem" }}>
+              Manage <ChevronRight size={12} />
+            </Link>
+          </div>
+          {workspaces.length === 0 ? (
+            <div style={{ padding: "1rem 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+              No repositories configured yet.
+              <div style={{ marginTop: "0.5rem" }}>
+                <Link href="/workspaces" className="btn btn-sm btn-secondary">
+                  + Add Workspace
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+              {workspaces.slice(0, 3).map((ws) => (
+                <div
+                  key={ws.workspaceId}
+                  style={{
+                    padding: "0.5rem 0.75rem",
+                    backgroundColor: "var(--bg-surface)",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--border-color)",
+                    fontSize: "0.8rem",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600 }}>
+                    <span>{ws.name}</span>
+                    {ws.snapshot?.branch && (
+                      <span style={{ color: "var(--accent-blue)", fontSize: "0.75rem" }}>
+                        {ws.snapshot.branch}
+                        {ws.snapshot?.headSha ? ` @ ${ws.snapshot.headSha.slice(0, 7)}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "0.7rem",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      marginTop: "0.15rem",
+                    }}
+                  >
+                    {ws.path}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Active & Recent Runs Section */}
+      <div className="card">
+        <div className="card-header">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <Activity size={16} color="var(--accent-blue)" />
+            <h2 className="card-title">Recent Team Runs</h2>
+          </div>
+          {executions.length > 0 && (
+            <Link href="/runs" style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.2rem" }}>
+              View all ({executions.length}) <ChevronRight size={12} />
+            </Link>
+          )}
+        </div>
+
+        {loading ? (
+          <LoadingSpinner text="Loading executions…" />
+        ) : executions.length === 0 ? (
+          <EmptyState
+            icon={PlayCircle}
+            title="No team runs yet"
+            description="Start your first supervised team run to watch Planner, Workers, and Verifier collaborate on a code objective."
+            actionText="Start Team Run"
+            actionHref="/runs/new"
+          />
+        ) : (
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Execution</th>
+                  <th>Status</th>
+                  <th>Loop Phase</th>
+                  <th>Iteration</th>
+                  <th>Steps</th>
+                  <th>Created</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {executions.slice(0, 8).map((run) => (
+                  <tr key={run.id}>
+                    <td>
+                      <Link
+                        href={`/runs/${encodeURIComponent(run.id)}`}
+                        style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}
+                      >
+                        {run.id.slice(0, 8)}
+                      </Link>
+                    </td>
+                    <td>
+                      <StatusBadge status={run.status} />
+                    </td>
+                    <td>
+                      {run.coordinationPhase ? (
+                        <StatusBadge status={run.coordinationPhase} />
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      )}
+                    </td>
+                    <td>
+                      {run.iterationNumber !== null ? (
+                        <span style={{ fontWeight: 600 }}>{run.iterationNumber}</span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      )}
+                    </td>
+                    <td>{run.stepCount}</td>
+                    <td style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                      {new Date(run.createdAt).toLocaleTimeString()}
+                    </td>
+                    <td>
+                      <Link
+                        href={`/runs/${encodeURIComponent(run.id)}`}
+                        className="btn btn-sm btn-secondary"
+                      >
+                        Inspect
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

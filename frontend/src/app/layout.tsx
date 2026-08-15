@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AppShell } from "../components/app-shell/AppShell.tsx";
 
 export const metadata: Metadata = {
-  title: "Tenvyr — Agent Execution Control Plane",
+  title: "Tenvyr Operator Workbench",
   description:
-    "A framework-neutral execution control plane that runs outside agent processes to dispatch, supervise, and orchestrate durable work.",
+    "Framework-neutral Agent Execution Control Plane for supervised AI agent work.",
 };
 
 export default function RootLayout({
@@ -15,11 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <div className="gradient-bg">
-          <div className="gradient-circle-1"></div>
-          <div className="gradient-circle-2"></div>
-        </div>
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

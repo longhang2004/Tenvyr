@@ -1,5 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { Consumer, EachMessagePayload, Kafka, Producer } from 'kafkajs';
+import { Injectable } from "@nestjs/common";
+import {
+  Consumer,
+  EachMessagePayload,
+  Kafka,
+  Partitioners,
+  Producer,
+} from "kafkajs";
 
 export type KafkaPublishMessage = {
   topic: string;
@@ -7,7 +13,9 @@ export type KafkaPublishMessage = {
   value: string;
 };
 
-export type KafkaMessageHandler = (payload: EachMessagePayload) => Promise<void>;
+export type KafkaMessageHandler = (
+  payload: EachMessagePayload,
+) => Promise<void>;
 
 @Injectable()
 export class KafkaService {
@@ -15,13 +23,15 @@ export class KafkaService {
   private readonly consumer: Consumer;
 
   constructor() {
-    const brokers = (process.env.KAFKA_BROKERS || 'localhost:9092').split(',');
-    const clientId = process.env.KAFKA_CLIENT_ID || 'agentweave-orchestrator';
+    const brokers = (process.env.KAFKA_BROKERS || "localhost:9092").split(",");
+    const clientId = process.env.KAFKA_CLIENT_ID || "agentweave-orchestrator";
     const kafka = new Kafka({ clientId, brokers });
 
-    this.producer = kafka.producer();
+    this.producer = kafka.producer({
+      createPartitioner: Partitioners.LegacyPartitioner,
+    });
     this.consumer = kafka.consumer({
-      groupId: 'agentweave-orchestrator-group',
+      groupId: "agentweave-orchestrator-group",
     });
   }
 
@@ -42,7 +52,10 @@ export class KafkaService {
     });
   }
 
-  async subscribe(topics: string[], handler: KafkaMessageHandler): Promise<void> {
+  async subscribe(
+    topics: string[],
+    handler: KafkaMessageHandler,
+  ): Promise<void> {
     for (const topic of topics) {
       await this.consumer.subscribe({ topic, fromBeginning: false });
     }

@@ -7,6 +7,7 @@
   "scripts": {
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
+    "dev": "sh ./scripts/dev.sh",
     "dev:orchestrator": "pnpm --filter orchestrator run start:dev",
     "dev:gateway": "pnpm --filter gateway run start:dev",
     "dev:reviewer": "pnpm --filter agent-code-reviewer run start:dev",

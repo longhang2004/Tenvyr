@@ -3,7 +3,7 @@ title: Local Development
 status: current
 audience:
   - developer
-last_verified: 2026-07-28
+last_verified: 2026-08-15
 sources:
   - package.json
   - docker-compose.yml
@@ -41,14 +41,15 @@ The portfolio golden path is the shortest complete local run:
 ```bash
 pnpm setup:check
 pnpm showcase:up
-pnpm showcase:seed
 pnpm showcase:smoke
 ```
 
-Open <http://localhost:4000/dashboard>. The seed command is idempotent. Smoke
-runs `success` and `retry-once` through the Python `echo-analyzer` Worker and the
-Kafka/Java-backed `quality-gate`, verifies status/runtime/attempt metadata, and
-prints execution URLs. The default mock provider requires no key.
+Open <http://localhost:4000/dashboard>. `showcase:smoke` seeds the demo data
+automatically (the seed is idempotent); run `pnpm showcase:seed` separately
+only to pre-seed before a smoke run. Smoke runs `success` and `retry-once`
+through the Python `echo-analyzer` Worker and the Kafka/Java-backed
+`quality-gate`, verifies status/runtime/attempt metadata, and prints execution
+URLs. The default mock provider requires no key.
 
 `showcase:up` ignores a provider value that Compose only auto-loads from `.env`.
 It activates a real provider only when `LLM_PROVIDER` is explicitly exported in
@@ -67,6 +68,26 @@ optional manual provider run. Live-provider calls are never part of the default
 startup or smoke command.
 
 ### General development stack
+
+The one-command dev stack starts the infrastructure (Postgres, Redis,
+Zookeeper, Kafka, Kafka UI) plus the operational services — orchestrator,
+gateway, and frontend — in parallel watch mode:
+
+```bash
+pnpm dev
+```
+
+Stop everything with `Ctrl-C` — the watch services **and** the Compose
+stack are shut down (named volumes are kept, so dev data survives). Run
+`pnpm dev:infra:down` only after a hard kill (SIGKILL), which bypasses the
+cleanup. If you previously started the full Compose stack
+(`pnpm dev:infra`), stop it first (`pnpm dev:infra:down`) — its app containers
+hold the host ports the watch services need. `pnpm dev` runs the HTTP Worker
+path (orchestrator + gateway + dashboard); the Kafka-path agents
+(`pnpm dev:reviewer`, `pnpm dev:observability`) are not included because a
+host-run Kafka client cannot reach the Compose broker (it advertises its
+docker-internal hostname). Run those agents inside the full Compose stack
+(`pnpm dev:infra`).
 
 The root `dev:infra` name is historical: its current implementation starts every service in the default Compose file, not only Postgres, Redis, and Kafka.
 
@@ -102,6 +123,21 @@ If Postgres, Redis, or Kafka host ports are already occupied, the checked-in ove
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.no-host-ports.yml up -d --build
 ```
+
+When only the Postgres port is taken by another project (for example a
+second dev database), keep host access instead: the dev Compose Postgres
+port is parameterized as `TENVYR_POSTGRES_PORT` (default `5432`). `pnpm dev`
+sources `.env` and propagates the value to the watch services automatically:
+
+```bash
+# in .env (gitignored) or exported in the shell:
+TENVYR_POSTGRES_PORT=5433
+pnpm dev
+```
+
+Standalone watch services (`pnpm dev:orchestrator`, `pnpm dev:gateway`, ...)
+read `POSTGRES_PORT` directly from the shell — export it there when not using
+`pnpm dev`.
 
 ## Worker examples
 

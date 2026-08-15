@@ -7,7 +7,13 @@ import {
   parseAgentInvocation,
   parseAgentResult,
 } from "@tenvyr/contracts";
-import { Kafka, Producer, Consumer, EachMessagePayload } from "kafkajs";
+import {
+  Kafka,
+  Partitioners,
+  Producer,
+  Consumer,
+  EachMessagePayload,
+} from "kafkajs";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -24,7 +30,9 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
       clientId: "agent-code-reviewer",
       brokers,
     });
-    this.producer = this.kafka.producer();
+    this.producer = this.kafka.producer({
+      createPartitioner: Partitioners.LegacyPartitioner,
+    });
     this.consumer = this.kafka.consumer({
       groupId: "agentweave-reviewer-group",
     });
