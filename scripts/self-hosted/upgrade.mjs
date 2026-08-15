@@ -378,14 +378,14 @@ export const main = () => {
     return false;
   };
   const orchestratorReady = waitForHealth(
-    "http://127.0.0.1:3001/health",
+    `http://127.0.0.1:${process.env.TENVYR_ORCHESTRATOR_PORT ?? 3001}/health`,
     '"ready":true',
   );
   if (!orchestratorReady) {
     console.error("[upgrade] FAIL: orchestrator not ready after upgrade; run `pnpm self-hosted:invariants` and restore from the preserved backup");
     exit(1);
   }
-  const gatewayReady = waitForHealth("http://127.0.0.1:3000/health", "UP");
+  const gatewayReady = waitForHealth(`http://127.0.0.1:${process.env.TENVYR_GATEWAY_PORT ?? 3000}/health`, "UP");
   if (!gatewayReady) {
     console.error("[upgrade] FAIL: gateway not ready after upgrade; run `pnpm self-hosted:invariants` and restore from the preserved backup");
     exit(1);
