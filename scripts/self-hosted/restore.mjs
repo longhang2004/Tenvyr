@@ -732,7 +732,10 @@ const rollbackAfterGateFailure = (gateFailure) => {
     throw new Error("post-promotion rollback restored the database but invariants failed — see CRITICAL state above");
   }
   clearJournal();
-  psql(`DROP DATABASE IF EXISTS ${failedName}`);
+  const dropResult = psql(`DROP DATABASE IF EXISTS ${failedName}`);
+  if (dropResult.status !== 0) {
+    console.error(`[restore] note: could not drop the rollback's own candidate ${failedName}: ${(dropResult.stderr ?? "").slice(0, 300)}`);
+  }
   throw new Error(
     `post-promotion gate failed (${gateFailure}) — automatic rollback restored the original authority; services are ready and invariants pass`,
   );
