@@ -529,9 +529,13 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     assert.ok(dbs.includes("tenvyr_failed_promotion"), "the unproven candidate must be preserved as tenvyr_failed_promotion");
     assert.ok(!dbs.includes("tenvyr_pre_restore"), "the safety copy was consumed by the rename-back, not dropped");
     assert.ok(pipelines().includes("crash-f2-state"), "the ORIGINAL marker data must be present (never deleted)");
-    assertServicesReady("after candidate-promotion crash reconciliation");
+    assertServicesReady("after rollback-candidate reconciliation");
     const postRecovery = createPipeline("crash-f2-recovery-write");
     assert.ok(postRecovery, "new write after reconciliation must succeed");
+    // The reconcile preserved this test's own candidate as evidence — drop
+    // it so a later test's manual repair never collides with it.
+    const dropCandidate = psql("DROP DATABASE IF EXISTS tenvyr_failed_promotion", "postgres");
+    assert.equal(dropCandidate.status, 0, `dropping this test's own preserved candidate failed: ${dropCandidate.stderr}`);
   });
 
   it("F3: concurrent backups — exactly one owns the maintenance lock; the PASSing artifact drills PASS", async () => {
@@ -782,6 +786,10 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     assertServicesReady("after crash-after-rollback-renames reconcile");
     const postRecovery = createPipeline("crash-g2-recovery-write");
     assert.ok(postRecovery, "new write after --reconcile must succeed");
+    // The crashed rollback preserved this test's own candidate before the
+    // SIGKILL — drop it so a later test's manual repair never collides.
+    const dropCandidate = psql("DROP DATABASE IF EXISTS tenvyr_failed_promotion", "postgres");
+    assert.equal(dropCandidate.status, 0, `dropping this test's own preserved candidate failed: ${dropCandidate.stderr}`);
   });
 
   it("F9: existing tenvyr_failed_promotion never collides with a later rollback (non-colliding preserve)", () => {
@@ -798,7 +806,14 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     writeFileSync(journalPath, "{truncated garbage", "utf8");
     const blocked = promote(dumpPath);
     assert.notEqual(blocked.status, 0, "the ambiguous state must fail closed");
-    let preserve = psql("ALTER DATABASE tenvyr RENAME TO tenvyr_failed_promotion", "postgres");
+    // Execute the EXACT printed preserve command (the instructions name a
+    // NON-COLLIDING bounded candidate name for the observed state).
+    const blockedOutput = blocked.stdout + blocked.stderr;
+    const preserveMatch = blockedOutput.match(
+      /ALTER DATABASE tenvyr RENAME TO (tenvyr_failed_promotion(?:_\d+)?)/,
+    );
+    assert.ok(preserveMatch, `the blocked output must print the preserve command: ${blockedOutput.slice(-600)}`);
+    let preserve = psql(`ALTER DATABASE tenvyr RENAME TO ${preserveMatch[1]}`, "postgres");
     assert.equal(preserve.status, 0, `preserve command failed: ${preserve.stderr}`);
     const restoreOriginal = psql("ALTER DATABASE tenvyr_pre_restore RENAME TO tenvyr", "postgres");
     assert.equal(restoreOriginal.status, 0, `restore command failed: ${restoreOriginal.stderr}`);

@@ -794,9 +794,12 @@ const reconcileMode = () => {
     const outcome = reconcileInterruptedState();
     if (outcome.action === "blocked") {
       process.exitCode = 1;
-    } else if (outcome.action === "proceed") {
+    } else if (outcome.action === "proceed" && !outcome.restartServices) {
       console.log("[restore] reconcile: no interrupted promotion detected — the recovery journal is clear");
     } else {
+      // restart-original / restore-original / rollback-candidate, or a
+      // proceed that had to finish an interrupted restart: the state was
+      // NOT clean — report the actual reconciliation.
       console.log(`[restore] reconcile: ${outcome.message}`);
     }
   } catch (error) {
