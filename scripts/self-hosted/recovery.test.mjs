@@ -203,6 +203,8 @@ TENVYR_ORCHESTRATOR_PORT=${E2E_ORCHESTRATOR_PORT}
 TENVYR_GATEWAY_PORT=${E2E_GATEWAY_PORT}
 TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
 `;
+    // (backups/ is gitignored — ensure it exists on a fresh checkout)
+    mkdirSync(join(ROOT, "backups"), { recursive: true });
     writeFileSync(E2E_DEPLOY_ENV, disposable);
 
     // ---- 1. SAFETY GUARD: refuse when real infrastructure is present
