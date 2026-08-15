@@ -434,7 +434,7 @@ const writeProof = () => {
   }
   const execution = spawnSync(
     "curl",
-    ["-s", "-X", "POST", "http://127.0.0.1:3001/executions", "-H", "Content-Type: application/json", "-d", JSON.stringify({ pipelineId })],
+    ["-s", "-X", "POST", `${orchestratorUrl()}/executions`, "-H", "Content-Type: application/json", "-d", JSON.stringify({ pipelineId })],
     { cwd: ROOT, encoding: "utf8", timeout: 30_000 },
   );
   const executionBody = (() => {
