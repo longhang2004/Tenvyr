@@ -566,6 +566,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     await sleep(2_000);
     const second = run(process.execPath, ["scripts/self-hosted/restore.mjs", dumpPath, "--promote"], {
       timeout: 120_000,
+      env: e2eEnv(),
     });
     assert.notEqual(second.status, 0, "the overlapping promotion must fail");
     assert.match(second.stdout + second.stderr, /maintenance operation already active/);
