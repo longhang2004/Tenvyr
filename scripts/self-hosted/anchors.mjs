@@ -55,13 +55,16 @@ export const TABLES = [
   "delegation_observation_conflicts",
   "runtime_connections",
   "connection_revisions",
+  "model_sources",
   "coordination_runs",
   "coordination_iterations",
   "operator_actions",
 ];
 
 export const fingerprint = (value) =>
-  createHash("sha256").update(value ?? "").digest("hex");
+  createHash("sha256")
+    .update(value ?? "")
+    .digest("hex");
 
 /** The structural anchor keys a VERIFIED backup manifest guarantees are
  *  non-null (null means the restored snapshot was not structurally
@@ -208,8 +211,7 @@ export const snapshotAnchors = (run, db, tables = TABLES) => {
   const countsLine = parseSingle(run(tableCountsSql(tables), db));
   const planHashes = parseSingle(run(planHashLedgerSql(), db));
   const executionAnchor = parseSingle(run(executionAnchorSql(), db)) || null;
-  const terminalExecution =
-    parseSingle(run(capsuleExecutionSql(), db)) || null;
+  const terminalExecution = parseSingle(run(capsuleExecutionSql(), db)) || null;
   const exportsLine = terminalExecution
     ? parseSingle(run(capsuleExportSql(terminalExecution), db))
     : null;
@@ -224,8 +226,7 @@ export const snapshotAnchors = (run, db, tables = TABLES) => {
           exportIds: exportsLine ? exportsLine.split("|") : [],
         };
   return {
-    migrationLedgerFingerprint:
-      ledger === null ? null : fingerprint(ledger),
+    migrationLedgerFingerprint: ledger === null ? null : fingerprint(ledger),
     tableCountFingerprint: countsComplete
       ? fingerprint(tables.map((table, i) => `${table}:${counts[i]}`).join(","))
       : null,

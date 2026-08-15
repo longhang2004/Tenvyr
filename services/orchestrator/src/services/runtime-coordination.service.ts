@@ -1,9 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import {
-  DataSource,
-  EntityManager,
-  QueryFailedError,
-} from "typeorm";
+import { DataSource, EntityManager, QueryFailedError } from "typeorm";
 import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
 import { CoordinationRunEntity } from "../entities/coordination-run.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
@@ -76,7 +72,9 @@ function boundedFields(result: unknown): Record<string, unknown> {
     return {};
   }
   const fields: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(
+    result as Record<string, unknown>,
+  )) {
     if (key === "artifactRefs") continue;
     fields[key] = value;
   }
@@ -349,13 +347,12 @@ export class RuntimeCoordinationService {
   ): Promise<void> {
     for (const task of proposal.tasks) {
       const executorId = task.connectionId
-        ? (
-            manager
-              ? await this.connections.claimRevisionWithManager(
-                  manager,
-                  task.connectionId,
-                )
-              : await this.connections.claimRevision(task.connectionId)
+        ? (manager
+            ? await this.connections.claimRevisionWithManager(
+                manager,
+                task.connectionId,
+              )
+            : await this.connections.claimRevision(task.connectionId)
           ).profile.executorId
         : `agent:${task.agent}`;
       if (!config.allowedExecutors.includes(executorId)) {
@@ -491,11 +488,11 @@ export class RuntimeCoordinationService {
         .where('execution."id" = :id', { id: run.executionId })
         .getOne();
       const activeRevisionNumber = executionRow?.activePlanRevisionId
-        ? (
+        ? ((
             await manager
               .getRepository(ExecutionPlanRevisionEntity)
               .findOne({ where: { id: executionRow.activePlanRevisionId } })
-          )?.revisionNumber ?? 1
+          )?.revisionNumber ?? 1)
         : 1;
       const plannerFrozenRevision = activeRevisionNumber + 1;
       const step: Record<string, unknown> = {
@@ -521,6 +518,12 @@ export class RuntimeCoordinationService {
           );
         }
         step.metadata = { tenvyrConnectionId: run.config.planner.name };
+        // P2: freeze the operator-selected Planner model on the step; the
+        // attempt claim then freezes exactly this model.
+        if (run.config.plannerTarget?.modelId !== undefined) {
+          (step.metadata as Record<string, unknown>).tenvyrModelId =
+            run.config.plannerTarget.modelId;
+        }
       }
       const patch = {
         schemaVersion: 1 as const,
@@ -806,10 +809,7 @@ export class RuntimeCoordinationService {
   }
 
   /** M9-S4: is the given logical step a Coordinator-owned Verifier step? */
-  async isVerifierStep(
-    executionId: string,
-    stepId: string,
-  ): Promise<boolean> {
+  async isVerifierStep(executionId: string, stepId: string): Promise<boolean> {
     const run = await this.dataSource
       .getRepository(CoordinationRunEntity)
       .findOne({ where: { executionId }, select: ["id"] });
@@ -849,15 +849,11 @@ export class RuntimeCoordinationService {
       const step = await this.dataSource
         .getRepository(LogicalStepEntity)
         .findOne({ where: { id: entry.logicalStepId } });
-      const attempt = step
-        ? await this.terminalAttempt(step.id)
-        : null;
+      const attempt = step ? await this.terminalAttempt(step.id) : null;
       const outcome: WorkerOutcomeSummaryV1 = {
         taskId: entry.taskId,
         status: attemptStatus(attempt),
-        ...(attempt?.error
-          ? { failureCode: attempt.error.slice(0, 255) }
-          : {}),
+        ...(attempt?.error ? { failureCode: attempt.error.slice(0, 255) } : {}),
         ...(attempt?.result !== null && attempt?.result !== undefined
           ? { selectedFields: boundedFields(attempt.result) }
           : {}),
@@ -997,8 +993,7 @@ export class RuntimeCoordinationService {
           statuses.set(entry.taskId, status);
         }
         const requiredFailed = iteration.workerManifest.some(
-          (entry) =>
-            entry.required && statuses.get(entry.taskId) === "FAILED",
+          (entry) => entry.required && statuses.get(entry.taskId) === "FAILED",
         );
         if (requiredFailed) {
           await this.transitionRun(run.id, "fail");
@@ -1071,53 +1066,53 @@ export class RuntimeCoordinationService {
     runId: string,
     approve: boolean,
   ): Promise<CoordinationPhase> {
-      const runs = manager.getRepository(CoordinationRunEntity);
-      const run = await lockRun(manager, runId);
-      if (run.phase !== "WAITING_FOR_HUMAN") {
-        throw new CoordinationRunError(
-          "RUN_NOT_FOUND",
-          `Coordination run "${runId}" is not WAITING_FOR_HUMAN`,
-        );
+    const runs = manager.getRepository(CoordinationRunEntity);
+    const run = await lockRun(manager, runId);
+    if (run.phase !== "WAITING_FOR_HUMAN") {
+      throw new CoordinationRunError(
+        "RUN_NOT_FOUND",
+        `Coordination run "${runId}" is not WAITING_FOR_HUMAN`,
+      );
+    }
+    let next: CoordinationPhase;
+    if (!approve) {
+      next = applyPhaseTransition(run.phase, "approvalDenied");
+      run.activeIterationId = null;
+    } else {
+      const allowed = continueAllowed(
+        run.config,
+        run.currentIterationNumber,
+        run.cumulativeWorkers,
+        1,
+      );
+      // M9-S5/S7 + P1: approval rechecks current authority — wall clock,
+      // budget account, role connections (revoked planner/verifier
+      // connections deny the next iteration) and the frozen executor
+      // allowlist for the role selections.
+      const exhausted =
+        this.deadlineExceeded(run) || (await this.budgetExhausted(run));
+      let rolesOk = true;
+      try {
+        await this.assertRoleConnectionsClaimable(run.config, manager);
+        await this.assertRoleExecutorsAllowed(run.config, manager);
+      } catch (error) {
+        rolesOk = false;
+        void error;
       }
-      let next: CoordinationPhase;
-      if (!approve) {
-        next = applyPhaseTransition(run.phase, "approvalDenied");
+      if (!allowed || exhausted || !rolesOk) {
+        next = applyPhaseTransition(run.phase, "limitReached");
         run.activeIterationId = null;
       } else {
-        const allowed = continueAllowed(
-          run.config,
-          run.currentIterationNumber,
-          run.cumulativeWorkers,
-          1,
-        );
-        // M9-S5/S7 + P1: approval rechecks current authority — wall clock,
-        // budget account, role connections (revoked planner/verifier
-        // connections deny the next iteration) and the frozen executor
-        // allowlist for the role selections.
-        const exhausted =
-          this.deadlineExceeded(run) || (await this.budgetExhausted(run));
-        let rolesOk = true;
-        try {
-          await this.assertRoleConnectionsClaimable(run.config, manager);
-          await this.assertRoleExecutorsAllowed(run.config, manager);
-        } catch (error) {
-          rolesOk = false;
-          void error;
-        }
-        if (!allowed || exhausted || !rolesOk) {
-          next = applyPhaseTransition(run.phase, "limitReached");
-          run.activeIterationId = null;
-        } else {
-          await this.createNextIterationLocked(manager, run);
-          next = applyPhaseTransition(run.phase, "approvalGranted");
-          next = applyPhaseTransition(next, "continue");
-        }
+        await this.createNextIterationLocked(manager, run);
+        next = applyPhaseTransition(run.phase, "approvalGranted");
+        next = applyPhaseTransition(next, "continue");
       }
-      run.phase = next;
-      run.waitReason = null;
-      run.version += 1;
-      await runs.save(run);
-      return next;
+    }
+    run.phase = next;
+    run.waitReason = null;
+    run.version += 1;
+    await runs.save(run);
+    return next;
   }
 
   private async activeIteration(
@@ -1146,7 +1141,9 @@ export class RuntimeCoordinationService {
   /** Creates the next iteration row under the run lock (used for iteration 1
    *  at loop start and re-exposed for tests/slices; CONTINUE reuses the
    *  locked internal path). Exactly-once via UNIQUE (run, number). */
-  async createNextIteration(runId: string): Promise<CoordinationIterationEntity> {
+  async createNextIteration(
+    runId: string,
+  ): Promise<CoordinationIterationEntity> {
     return this.dataSource.transaction((manager) =>
       this.createNextIterationWithManager(manager, runId),
     );
@@ -1157,14 +1154,14 @@ export class RuntimeCoordinationService {
     manager: EntityManager,
     runId: string,
   ): Promise<CoordinationIterationEntity> {
-      const run = await lockRun(manager, runId);
-      if (TERMINAL_COORDINATION_PHASES.includes(run.phase)) {
-        throw new CoordinationRunError(
-          "RUN_NOT_FOUND",
-          `Coordination run "${runId}" is terminal; no new iteration`,
-        );
-      }
-      return this.createNextIterationLocked(manager, run);
+    const run = await lockRun(manager, runId);
+    if (TERMINAL_COORDINATION_PHASES.includes(run.phase)) {
+      throw new CoordinationRunError(
+        "RUN_NOT_FOUND",
+        `Coordination run "${runId}" is terminal; no new iteration`,
+      );
+    }
+    return this.createNextIterationLocked(manager, run);
   }
 
   private async createNextIterationLocked(
@@ -1175,13 +1172,11 @@ export class RuntimeCoordinationService {
     const created = await manager
       .getRepository(CoordinationIterationEntity)
       .save(
-        manager
-          .getRepository(CoordinationIterationEntity)
-          .create({
-            coordinationRunId: run.id,
-            iterationNumber: next,
-            workerManifest: [],
-          }),
+        manager.getRepository(CoordinationIterationEntity).create({
+          coordinationRunId: run.id,
+          iterationNumber: next,
+          workerManifest: [],
+        }),
       );
     run.currentIterationNumber = next;
     run.activeIterationId = created.id;
@@ -1447,14 +1442,12 @@ export class RuntimeCoordinationService {
         `Iteration ${iteration.iterationNumber} has no Coordinator-owned Planner step`,
       );
     }
-    const plannerStep = await manager
-      .getRepository(LogicalStepEntity)
-      .findOne({
-        where: {
-          executionId: run.executionId,
-          stepId: iteration.plannerStepId,
-        },
-      });
+    const plannerStep = await manager.getRepository(LogicalStepEntity).findOne({
+      where: {
+        executionId: run.executionId,
+        stepId: iteration.plannerStepId,
+      },
+    });
     if (
       !plannerStep ||
       plannerStep.executionId !== run.executionId ||
@@ -1575,7 +1568,10 @@ async function lockRun(
     .where('run."id" = :runId', { runId })
     .getOne();
   if (!run) {
-    throw new CoordinationRunError("RUN_NOT_FOUND", `Coordination run "${runId}" does not exist`);
+    throw new CoordinationRunError(
+      "RUN_NOT_FOUND",
+      `Coordination run "${runId}" does not exist`,
+    );
   }
   return run;
 }
@@ -1583,11 +1579,12 @@ async function lockRun(
 function isUniqueViolation(error: unknown): boolean {
   return (
     error instanceof QueryFailedError &&
-    (error as { driverError?: { code?: string } }).driverError?.code ===
-      "23505"
+    (error as { driverError?: { code?: string } }).driverError?.code === "23505"
   );
 }
 
-export function isCoordinationError(error: unknown): error is CoordinationError {
+export function isCoordinationError(
+  error: unknown,
+): error is CoordinationError {
   return error instanceof CoordinationError;
 }

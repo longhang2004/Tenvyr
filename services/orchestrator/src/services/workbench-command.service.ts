@@ -12,9 +12,13 @@ import { ExecutionCapsuleService } from "./execution-capsule.service";
 import { DelegationService } from "./delegation.service";
 import { RuntimeConnectionService } from "./runtime-connection.service";
 import { WorkspaceService } from "./workspace.service";
+import { ModelSourceService } from "./model-source.service";
 import type { ConnectionProfileV1 } from "../executors/runtime-connection";
 import { sha256Json } from "../domain/canonical-json";
-import { parseCoordinationConfig, type CoordinationConfigV1 } from "../domain/coordination";
+import {
+  parseCoordinationConfig,
+  type CoordinationConfigV1,
+} from "../domain/coordination";
 import {
   parseAcceptanceEvidence,
   type AcceptanceEvidenceV1,
@@ -83,7 +87,8 @@ export class WorkbenchCommandService {
         this.dataSource.getRepository(ExecutionPlanRevisionEntity),
         this.dataSource,
       );
-    this.coordination = coordination ?? new RuntimeCoordinationService(this.dataSource);
+    this.coordination =
+      coordination ?? new RuntimeCoordinationService(this.dataSource);
     this.capsules =
       capsules ??
       new ExecutionCapsuleService(
@@ -91,9 +96,9 @@ export class WorkbenchCommandService {
         new DelegationService(this.dataSource, this.executionService),
         this.executionService,
       );
-    this.connections = connections ?? new RuntimeConnectionService(this.dataSource);
-    this.workspaces =
-      workspaces ?? new WorkspaceService(this.dataSource);
+    this.connections =
+      connections ?? new RuntimeConnectionService(this.dataSource);
+    this.workspaces = workspaces ?? new WorkspaceService(this.dataSource);
   }
 
   private readonly executionService: ExecutionService;
@@ -101,6 +106,7 @@ export class WorkbenchCommandService {
   private readonly capsules: ExecutionCapsuleService;
   private readonly connections: RuntimeConnectionService;
   private readonly workspaces: WorkspaceService;
+  private readonly modelSources: ModelSourceService;
 
   private boundedKey(idempotencyKey: string): string {
     if (
@@ -117,10 +123,7 @@ export class WorkbenchCommandService {
   }
 
   private boundedGoal(goal: unknown): string {
-    const raw =
-      typeof goal === "string"
-        ? goal
-        : JSON.stringify(goal ?? {});
+    const raw = typeof goal === "string" ? goal : JSON.stringify(goal ?? {});
     if (raw.length > COMMAND_BOUNDS.goalMaxChars) {
       throw new WorkbenchCommandError(
         "GOAL_TOO_LARGE",
@@ -232,9 +235,8 @@ export class WorkbenchCommandService {
     const name = input.name.slice(0, COMMAND_BOUNDS.runNameMax);
     const goal = this.boundedGoal(input.goal);
     const config = parseCoordinationConfig(input.config);
-    const acceptanceEvidence: AcceptanceEvidenceV1 | null = parseAcceptanceEvidence(
-      input.acceptanceEvidence,
-    );
+    const acceptanceEvidence: AcceptanceEvidenceV1 | null =
+      parseAcceptanceEvidence(input.acceptanceEvidence);
     // Freeze the workspace snapshot BEFORE the authority transaction: the
     // snapshot is deterministic run context, never operator-controlled
     // after this point.
@@ -258,15 +260,13 @@ export class WorkbenchCommandService {
       null,
       { name, config: summarizeConfig(config), workspace, acceptanceEvidence },
       async (manager) => {
-        const pipeline = await manager
-          .getRepository(PipelineEntity)
-          .save(
-            manager.getRepository(PipelineEntity).create({
-              name: name || "team-run",
-              version: "1.0",
-              steps: [],
-            }),
-          );
+        const pipeline = await manager.getRepository(PipelineEntity).save(
+          manager.getRepository(PipelineEntity).create({
+            name: name || "team-run",
+            version: "1.0",
+            steps: [],
+          }),
+        );
         const execution =
           await this.executionService.materializeExecutionWithManager(
             manager,
@@ -282,7 +282,10 @@ export class WorkbenchCommandService {
           acceptanceEvidence,
         );
         const iteration =
-          await this.coordination.createNextIterationWithManager(manager, run.id);
+          await this.coordination.createNextIterationWithManager(
+            manager,
+            run.id,
+          );
         return {
           executionId: execution.id,
           runId: run.id,
@@ -402,7 +405,10 @@ export class WorkbenchCommandService {
           input.connectionId,
           profile,
         );
-        return { connectionId: input.connectionId, revisionNumber: revision.revisionNumber };
+        return {
+          connectionId: input.connectionId,
+          revisionNumber: revision.revisionNumber,
+        };
       },
     );
   }
@@ -425,7 +431,10 @@ export class WorkbenchCommandService {
           input.connectionId,
           profile,
         );
-        return { connectionId: input.connectionId, revisionNumber: revision.revisionNumber };
+        return {
+          connectionId: input.connectionId,
+          revisionNumber: revision.revisionNumber,
+        };
       },
     );
   }
@@ -472,7 +481,9 @@ export class WorkbenchCommandService {
         `onboarding supports codex/claude/opencode, got "${input.runtimeKind}"`,
       );
     }
-    const status = await new RuntimeOnboardingService().status(input.runtimeKind);
+    const status = await new RuntimeOnboardingService().status(
+      input.runtimeKind,
+    );
     if (!status.detected || !status.connectPayload) {
       throw new WorkbenchCommandError(
         "RUNTIME_NOT_DETECTED",
@@ -601,6 +612,101 @@ export class WorkbenchCommandService {
     );
   }
 
+  // P2: audited Model Source commands. Catalogs are bounded on-demand
+  // projections returned to the caller — never persisted as authority.
+  // Credential env REFERENCES only; values never cross this layer.
+
+  async createModelSource(input: {
+    idempotencyKey: string;
+    source: unknown;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "model-source-create",
+      input.idempotencyKey,
+      null,
+      { source: input.source as Record<string, unknown> },
+      async (manager) => {
+        const source = await this.modelSources.create(input.source);
+        return { source };
+      },
+    );
+  }
+
+  async updateModelSource(input: {
+    idempotencyKey: string;
+    sourceId: string;
+    patch: unknown;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "model-source-update",
+      input.idempotencyKey,
+      input.sourceId,
+      {
+        sourceId: input.sourceId,
+        patch: input.patch as Record<string, unknown>,
+      },
+      async (manager) => {
+        const source = await this.modelSources.update(
+          input.sourceId,
+          input.patch,
+        );
+        return { source };
+      },
+    );
+  }
+
+  async deleteModelSource(input: {
+    idempotencyKey: string;
+    sourceId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "model-source-delete",
+      input.idempotencyKey,
+      input.sourceId,
+      { sourceId: input.sourceId },
+      async (manager) => {
+        await this.modelSources.delete(input.sourceId);
+        return { sourceId: input.sourceId, deleted: true };
+      },
+    );
+  }
+
+  /** Test Model Source (endpoint/auth/catalog — never inference). */
+  async testModelSource(input: {
+    idempotencyKey: string;
+    sourceId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "model-source-test",
+      input.idempotencyKey,
+      input.sourceId,
+      { sourceId: input.sourceId },
+      async (manager) => {
+        const source = await this.modelSources.test(input.sourceId);
+        return { source };
+      },
+    );
+  }
+
+  /** Refresh Models: bounded on-demand catalog projection. */
+  async refreshModelSource(input: {
+    idempotencyKey: string;
+    sourceId: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "model-source-refresh",
+      input.idempotencyKey,
+      input.sourceId,
+      { sourceId: input.sourceId },
+      async (manager) => {
+        const { source, catalog } = await this.modelSources.refresh(
+          input.sourceId,
+        );
+        return { source, catalog };
+      },
+    );
+  }
+
   private boundedProfile(profile: ConnectionProfileV1): ConnectionProfileV1 {
     const rendered = JSON.stringify(profile);
     if (rendered.length > COMMAND_BOUNDS.payloadMaxBytes) {
@@ -613,7 +719,10 @@ export class WorkbenchCommandService {
   }
 
   /** Audit trail (bounded, newest first). */
-  async auditTrail(action?: string, limit = 50): Promise<{
+  async auditTrail(
+    action?: string,
+    limit = 50,
+  ): Promise<{
     items: Array<{
       id: string;
       action: string;
@@ -626,11 +735,13 @@ export class WorkbenchCommandService {
     truncated: boolean;
   }> {
     const take = Math.min(Math.max(limit, 1), 100);
-    const rows = await this.dataSource.getRepository(OperatorActionEntity).find({
-      where: action ? { action } : {},
-      order: { createdAt: "DESC" },
-      take: take + 1,
-    });
+    const rows = await this.dataSource
+      .getRepository(OperatorActionEntity)
+      .find({
+        where: action ? { action } : {},
+        order: { createdAt: "DESC" },
+        take: take + 1,
+      });
     const truncated = rows.length > take;
     return {
       items: rows.slice(0, take).map((row) => ({
@@ -651,7 +762,9 @@ export class WorkbenchCommandService {
 }
 
 /** Redacted config summary for the audit payload (never secrets). */
-function summarizeConfig(config: CoordinationConfigV1): Record<string, unknown> {
+function summarizeConfig(
+  config: CoordinationConfigV1,
+): Record<string, unknown> {
   return {
     planner: config.planner,
     verifier: config.verifier,

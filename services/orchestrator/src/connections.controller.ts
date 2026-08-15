@@ -58,6 +58,8 @@ export class ConnectionsController {
         pinnedVersion: template.pinnedVersion,
         sourceUrl: template.sourceUrl,
         accessedAt: template.accessedAt,
+        loginCommand: template.loginCommand,
+        modelArgvPrefix: template.modelArgvPrefix,
         runArgs: template.runArgs,
         probe: template.probe,
         ...(template.authProbe ? { authProbe: template.authProbe } : {}),

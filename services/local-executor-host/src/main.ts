@@ -6,11 +6,8 @@ import {
 } from "./config";
 export type { HostAgentConfig, HostConfig } from "./config";
 import { superviseProcess, type ProcessOutcome } from "./supervisor";
-import {
-  clearRunState,
-  terminateOrphan,
-  writeRunState,
-} from "./state";
+import { MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from "./supervisor";
+import { clearRunState, terminateOrphan, writeRunState } from "./state";
 
 /**
  * M3-S3: trusted-code-only local process executor host.
@@ -46,9 +43,7 @@ export function main(): Promise<void> {
  * Exported so integration tests exercise the REAL host wiring (config ->
  * worker -> supervisor -> canonical result) in-process.
  */
-export async function startHostWorkers(
-  config: HostConfig,
-): Promise<
+export async function startHostWorkers(config: HostConfig): Promise<
   Array<{
     agent: string;
     address: { host: string; port: number };
@@ -93,6 +88,10 @@ export async function startHostWorkers(
               profile,
               env: resolvedEnvironment(profile),
               input: invocation,
+              requestedModelId:
+                typeof invocation.requestedModelId === "string"
+                  ? invocation.requestedModelId
+                  : undefined,
               signal: context.signal,
               invocationDeadlineAt: invocation.deadlineAt,
               onSpawn: (pid) => {
@@ -108,11 +107,15 @@ export async function startHostWorkers(
                     ).toISOString(),
                   });
                 } catch (error) {
-                  console.error("Run state write failed; orphan protection degraded", {
-                    agent: profile.agent,
-                    invocationId: invocation.invocationId,
-                    reason: error instanceof Error ? error.message : String(error),
-                  });
+                  console.error(
+                    "Run state write failed; orphan protection degraded",
+                    {
+                      agent: profile.agent,
+                      invocationId: invocation.invocationId,
+                      reason:
+                        error instanceof Error ? error.message : String(error),
+                    },
+                  );
                 }
               },
             });
@@ -137,7 +140,10 @@ export async function startHostWorkers(
       },
       events: {
         enabled: true,
-        heartbeatIntervalMs: Math.min(60_000, Math.max(1_000, Math.floor(profile.wallTimeMs / 3))),
+        heartbeatIntervalMs: Math.min(
+          60_000,
+          Math.max(1_000, Math.floor(profile.wallTimeMs / 3)),
+        ),
       },
       logger: {
         debug: () => undefined,
@@ -150,7 +156,10 @@ export async function startHostWorkers(
       },
     });
 
-    const address = await worker.start({ host: "127.0.0.1", port: profile.port });
+    const address = await worker.start({
+      host: "127.0.0.1",
+      port: profile.port,
+    });
     workers.push({ worker, profile, address });
     started.push({
       agent: profile.agent,
@@ -173,11 +182,20 @@ export async function startHostWorkers(
  * must equal the invocation's frozen connection reference. Returns a
  * deterministic error message when the invocation must NOT run; null when it
  * may. Never consults pipeline input for anything executable.
+ *
+ * P2: the same fail-closed discipline applies to the requested model — an
+ * invocation carrying a requestedModelId requires the agent to declare a
+ * fixed modelArgvPrefix, and the model id must be a bounded data value.
  */
 export function validateInvocationBinding(
   profile: HostAgentConfig,
   invocation: {
-    connection?: { connectionId: string; revisionNumber: number; configHash: string };
+    connection?: {
+      connectionId: string;
+      revisionNumber: number;
+      configHash: string;
+    };
+    requestedModelId?: unknown;
     invocationId: string;
   },
 ): string | null {
@@ -192,10 +210,28 @@ export function validateInvocationBinding(
     if (carried.configHash !== profile.configHash) {
       return `Invocation ${invocation.invocationId} selects connection revision hash "${carried.configHash}" but agent "${profile.agent}" is configured for hash "${profile.configHash}" — refusing to run (fail closed)`;
     }
-    return null;
-  }
-  if (carried) {
+  } else if (carried) {
     return `Invocation ${invocation.invocationId} carries connection "${carried.connectionId}" but agent "${profile.agent}" declares no connection binding — refusing to run (fail closed)`;
+  }
+  // P2: model argument support is fixed operator configuration. A requested
+  // model can never be composed without a declared argv prefix, and a model
+  // id is never trusted as anything but bounded data.
+  if (invocation.requestedModelId !== undefined) {
+    if (
+      profile.modelArgvPrefix === undefined ||
+      profile.modelArgvPrefix.length === 0
+    ) {
+      return `Invocation ${invocation.invocationId} requests model "${String(invocation.requestedModelId)}" but agent "${profile.agent}" declares no modelArgvPrefix — refusing to run (fail closed)`;
+    }
+    const modelId = invocation.requestedModelId;
+    if (
+      typeof modelId !== "string" ||
+      modelId.length === 0 ||
+      modelId.length > MODEL_ID_MAX_LENGTH ||
+      !MODEL_ID_PATTERN.test(modelId)
+    ) {
+      return `Invocation ${invocation.invocationId} requests an invalid model id — refusing to run (fail closed)`;
+    }
   }
   return null;
 }
@@ -228,10 +264,9 @@ function materializeResult(
         } catch (error) {
           return context.fail({
             code: "EXECUTOR_HOST_INVALID_STRUCTURED_RESULT",
-            message:
-              `Structured result from "${profile.agent}" is not valid JSON: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
+            message: `Structured result from "${profile.agent}" is not valid JSON: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
             retryable: false,
           });
         }
@@ -249,7 +284,9 @@ function materializeResult(
     case "failed":
       return context.fail({
         code: "EXECUTOR_HOST_PROCESS_FAILED",
-        message: boundedTail(outcome.stderr, 1024) || `Process exited with code ${outcome.exitCode}`,
+        message:
+          boundedTail(outcome.stderr, 1024) ||
+          `Process exited with code ${outcome.exitCode}`,
         retryable: false,
       });
     case "spawn_failed":

@@ -243,17 +243,22 @@
       "id": "frontend-dashboard",
       "status": "implemented",
       "sources": [
-        "frontend/src/app"
+        "frontend/src/app",
+        "frontend/src/components",
+        "frontend/src/lib/tenvyr-api"
       ],
       "tests": [
-        "frontend/src/app/dashboard/safe-preview.test.mjs"
+        "frontend/src/app/dashboard/safe-preview.test.mjs",
+        "frontend/src/lib/tenvyr-api/client.test.mjs"
       ],
       "docs": [
+        "docs/architecture/workbench.md",
         "docs/architecture/overview.md",
+        "docs/user-manual.md",
         "docs/showcase/demo-guide.md"
       ],
       "limitations": [
-        "Safe-preview logic has a focused test; end-to-end UI behavior is exercised through showcase smoke URLs"
+        "Next.js operator workbench on port 4000 is canonical product UI; safe-preview logic and API client layers have unit test suites; UI build verified in production pipeline"
       ]
     },
     {
@@ -835,7 +840,7 @@
         "Milestone closure is Sol's decision; M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
         "External Production Exposure Gate stays OPEN: the workbench surface is loopback/private trusted-operator only",
         "Design-partner interviews: 0 this cycle; no discovery-gated program is promoted without real evidence",
-        "M10 closure hardening (implementer): Runtime Connection create/revise/test/revoke run through the audited idempotent command layer \u2014 operator-action evidence commits in the same transaction as the authority mutation; same idempotency key with a conflicting payload is rejected (IDEMPOTENCY_CONFLICT); repeated revoke commands produce one effective transition; gateway proxies and the Workbench page send idempotency keys"
+        "M10 closure hardening (implementer): Runtime Connection create/revise/test/revoke run through the audited idempotent command layer — operator-action evidence commits in the same transaction as the authority mutation; same idempotency key with a conflicting payload is rejected (IDEMPOTENCY_CONFLICT); repeated revoke commands produce one effective transition; gateway proxies and the Workbench page send idempotency keys"
       ]
     },
     {
@@ -899,7 +904,7 @@
       ],
       "limitations": [
         "Executor kinds cover Kafka/HTTP transports plus the trusted-code-only local host; Codex/Claude stay inside runtime applications and A2A remains deferred",
-        "Closure hardening: LocalExecutorProfileV1 freezes secret-free CLI execution data (command/argv/cwd/env REFERENCES \u2014 never values) into the attempt snapshot at claim for connection-selected steps",
+        "Closure hardening: LocalExecutorProfileV1 freezes secret-free CLI execution data (command/argv/cwd/env REFERENCES — never values) into the attempt snapshot at claim for connection-selected steps",
         "Capabilities are conservative and negotiated per configured executor; remote cancellation remains best-effort where supported",
         "Cancel notification is best-effort post-commit evidence; it never guarantees the runtime stopped opaque work",
         "No public executor administration API while the external exposure gate is open",
@@ -949,6 +954,62 @@
         "Live runtime gates are opt-in and non-billable; deterministic fake-CLI conformance always runs",
         "Connection health status is projection, not dispatch authority; only REVOKED denies claims and pending delivery",
         "M8 closure hardening (implementer): claimRevision is linearizable under the authority-row lock (manager-aware claimRevisionWithManager for caller-owned transactions); a revoke committed before the claim lock denies the claim, a claim that locks first returns its immutable frozen revision and the later revoke applies at dispatch; Python Worker schema re-synced to canonical (AgentInvocationV1 optional connection identity) with both acceptance paths proven"
+      ]
+    },
+    {
+      "id": "runtime-target-model-selection",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/domain/coordination.ts",
+        "services/orchestrator/src/executors/executor-descriptor.ts",
+        "services/orchestrator/src/services/execution.service.ts",
+        "services/orchestrator/src/services/runtime-coordination.service.ts",
+        "services/local-executor-host/src/supervisor.ts",
+        "services/local-executor-host/src/main.ts",
+        "packages/contracts/src/types.ts",
+        "contracts/schemas/agent-invocation.v1.schema.json"
+      ],
+      "tests": [
+        "services/orchestrator/src/domain/coordination-p2-model-targets.spec.ts",
+        "services/orchestrator/src/executors/executor-descriptor.spec.ts",
+        "services/orchestrator/src/executors/runtime-profiles.spec.ts",
+        "services/orchestrator/src/phase2-model-targets-dogfood.spec.ts",
+        "services/local-executor-host/test/config.spec.ts",
+        "services/local-executor-host/test/supervisor.spec.ts"
+      ],
+      "docs": [
+        "docs/architecture/model-sources.md",
+        "docs/architecture/executors/runtime-connections.md"
+      ],
+      "limitations": [
+        "Runtime Target models are frozen data identifiers; external runtimes/routers may resolve them differently and may implement their own fallback (outside Tenvyr's model-selection authority)",
+        "observedModelId is recorded only when the runtime/worker itself reports it inside the bounded structured result; Tenvyr never fabricates an observed model",
+        "A Test Runtime Target (bounded end-to-end invocation) is operator-explicit and out of scope for this slice"
+      ]
+    },
+    {
+      "id": "model-sources",
+      "status": "implemented",
+      "sources": [
+        "services/orchestrator/src/executors/model-source.ts",
+        "services/orchestrator/src/services/model-source.service.ts",
+        "services/orchestrator/src/services/model-discovery.service.ts",
+        "services/orchestrator/src/entities/model-source.entity.ts",
+        "services/orchestrator/src/database/migrations/1722270019000-ModelSources.ts",
+        "services/orchestrator/src/model-sources.controller.ts",
+        "services/gateway/src/app.controller.ts"
+      ],
+      "tests": [
+        "services/orchestrator/src/model-source-p2.spec.ts",
+        "scripts/self-hosted/contract.test.mjs"
+      ],
+      "docs": [
+        "docs/architecture/model-sources.md"
+      ],
+      "limitations": [
+        "Catalogs are bounded on-demand projections, never persisted as authority; modelCount is projection metadata of the last refresh",
+        "9Router integration is optional and reads only the OpenAI-compatible /models catalog; Tenvyr is not a router and never sends inference requests through sources",
+        "External Production Exposure Gate stays open: model sources are a single-owner operator feature (SSRF threat documented)"
       ]
     }
   ]

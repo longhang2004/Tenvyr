@@ -10,8 +10,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const COMPOSE = readFileSync(join(ROOT, "docker-compose.self-hosted.yml"), "utf8");
-const ENV_EXAMPLE = readFileSync(join(ROOT, ".env.self-hosted.example"), "utf8");
+const COMPOSE = readFileSync(
+  join(ROOT, "docker-compose.self-hosted.yml"),
+  "utf8",
+);
+const ENV_EXAMPLE = readFileSync(
+  join(ROOT, ".env.self-hosted.example"),
+  "utf8",
+);
 
 /** Dynamic import of a self-hosted module (lazy — the modules carry
  *  entry guards and must not execute at contract-suite load time). A
@@ -21,27 +27,46 @@ function awaitImport(relative) {
 }
 
 test("self-hosted profile binds loopback only (no public ports by default)", () => {
-  const portLines = COMPOSE.split("\n").filter((line) => line.includes('"127.0.0.1:'));
-  assert.ok(portLines.length >= 3, "expected postgres/orchestrator/gateway loopback bindings");
-  const publicLines = COMPOSE.split("\n").filter((line) => /^\s+- "\d+:\d+"\s*$/.test(line));
-  assert.equal(publicLines.length, 0, `public bindings present: ${publicLines.join(", ")}`);
+  const portLines = COMPOSE.split("\n").filter((line) =>
+    line.includes('"127.0.0.1:'),
+  );
+  assert.ok(
+    portLines.length >= 3,
+    "expected postgres/orchestrator/gateway loopback bindings",
+  );
+  const publicLines = COMPOSE.split("\n").filter((line) =>
+    /^\s+- "\d+:\d+"\s*$/.test(line),
+  );
+  assert.equal(
+    publicLines.length,
+    0,
+    `public bindings present: ${publicLines.join(", ")}`,
+  );
 });
 
 test("self-hosted profile pins versions (no :latest floats)", () => {
-  assert.ok(!COMPOSE.includes(":latest"), "floating :latest tag in the profile");
+  assert.ok(
+    !COMPOSE.includes(":latest"),
+    "floating :latest tag in the profile",
+  );
   assert.match(COMPOSE, /postgres:15-alpine/);
 });
 
 test("named volumes exist and hold the authority", () => {
   assert.match(COMPOSE, /tenvyr_postgres_data:/);
-  assert.match(COMPOSE, /- "\$\{TENVYR_POSTGRES_VOLUME:-tenvyr_postgres_data\}:\/var\/lib\/postgresql\/data"/);
+  assert.match(
+    COMPOSE,
+    /- "\$\{TENVYR_POSTGRES_VOLUME:-tenvyr_postgres_data\}:\/var\/lib\/postgresql\/data"/,
+  );
   // The disposable recovery-E2E volume is DECLARED but never created by
   // the production profile (the E2E mounts it under its own project).
   assert.match(COMPOSE, /recovery_e2e_postgres_data:/);
 });
 
 test("orchestrator/gateway consume ORCHESTRATOR_PORT/GATEWAY_PORT (never PORT)", () => {
-  const orchestratorBlock = COMPOSE.split("\n").find((line) => line.includes("ORCHESTRATOR_PORT"));
+  const orchestratorBlock = COMPOSE.split("\n").find((line) =>
+    line.includes("ORCHESTRATOR_PORT"),
+  );
   assert.ok(orchestratorBlock, "ORCHESTRATOR_PORT missing from the profile");
   assert.match(COMPOSE, /GATEWAY_PORT: "3000"/);
   for (const line of COMPOSE.split("\n")) {
@@ -55,20 +80,43 @@ test("orchestrator consumes the POSTGRES_* contract with interpolated password",
   // The container names are parameterized so the disposable recovery-E2E
   // stack is physically separate (unique project/containers/volume/ports).
   const containerDelimiter = (service) =>
-    COMPOSE.indexOf(`container_name: ${"${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}"}-${service}`);
+    COMPOSE.indexOf(
+      `container_name: ${"${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}"}-${service}`,
+    );
   const orchestratorIndex = containerDelimiter("orchestrator");
   const gatewayIndex = containerDelimiter("gateway");
   const orchestratorBlock = COMPOSE.slice(orchestratorIndex, gatewayIndex);
-  assert.ok(orchestratorBlock.includes("POSTGRES_HOST: postgres"), "POSTGRES_HOST missing");
-  assert.ok(orchestratorBlock.includes("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD"), "password not interpolated");
-  assert.ok(!orchestratorBlock.includes("DATABASE_URL"), "dead DATABASE_URL in the profile");
-  assert.ok(!orchestratorBlock.includes("REDIS_URL"), "unused REDIS_URL in the profile");
-  assert.ok(!/^\s+PORT: /m.test(orchestratorBlock), "legacy PORT assignment in orchestrator env");
+  assert.ok(
+    orchestratorBlock.includes("POSTGRES_HOST: postgres"),
+    "POSTGRES_HOST missing",
+  );
+  assert.ok(
+    orchestratorBlock.includes("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD"),
+    "password not interpolated",
+  );
+  assert.ok(
+    !orchestratorBlock.includes("DATABASE_URL"),
+    "dead DATABASE_URL in the profile",
+  );
+  assert.ok(
+    !orchestratorBlock.includes("REDIS_URL"),
+    "unused REDIS_URL in the profile",
+  );
+  assert.ok(
+    !/^\s+PORT: /m.test(orchestratorBlock),
+    "legacy PORT assignment in orchestrator env",
+  );
 });
 
 test("no unused redis service in the self-hosted profile", () => {
-  assert.ok(!COMPOSE.includes("container_name: tenvyr-self-hosted-redis"), "unused redis still shipped");
-  assert.ok(!COMPOSE.includes("tenvyr_redis_data"), "unused redis volume still shipped");
+  assert.ok(
+    !COMPOSE.includes("container_name: tenvyr-self-hosted-redis"),
+    "unused redis still shipped",
+  );
+  assert.ok(
+    !COMPOSE.includes("tenvyr_redis_data"),
+    "unused redis volume still shipped",
+  );
 });
 
 test("compose consumes secret REFERENCES only — no live values", () => {
@@ -79,7 +127,11 @@ test("compose consumes secret REFERENCES only — no live values", () => {
       !line.includes("#") &&
       line.includes(":"),
   );
-  assert.equal(suspicious.length, 0, `inline secrets in the profile: ${suspicious.join(", ")}`);
+  assert.equal(
+    suspicious.length,
+    0,
+    `inline secrets in the profile: ${suspicious.join(", ")}`,
+  );
   assert.match(COMPOSE, /\$\{POSTGRES_PASSWORD:?/);
   assert.match(COMPOSE, /\$\{HTTP_AGENT_CALLBACK_KEYS:?/);
 });
@@ -89,7 +141,10 @@ test(".env.self-hosted.example is references-only with no values", () => {
     if (!line || line.startsWith("#") || !line.includes("=")) continue;
     const value = line.split("=").slice(1).join("=").trim();
     assert.ok(
-      value === "" || value.startsWith("{") || value.startsWith("http") || value.startsWith("#"),
+      value === "" ||
+        value.startsWith("{") ||
+        value.startsWith("http") ||
+        value.startsWith("#"),
       `placeholder value leaked into example line: ${line}`,
     );
   }
@@ -97,8 +152,14 @@ test(".env.self-hosted.example is references-only with no values", () => {
 });
 
 test("data inventory matches the backup script's table list", () => {
-  const anchors = readFileSync(join(ROOT, "scripts", "self-hosted", "anchors.mjs"), "utf8");
-  const backup = readFileSync(join(ROOT, "scripts", "self-hosted", "backup.mjs"), "utf8");
+  const anchors = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "anchors.mjs"),
+    "utf8",
+  );
+  const backup = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "backup.mjs"),
+    "utf8",
+  );
   for (const table of [
     "executions",
     "execution_plan_revisions",
@@ -123,8 +184,14 @@ test("data inventory matches the backup script's table list", () => {
 });
 
 test("restore verifies checksum and version before touching the target", () => {
-  const restore = readFileSync(join(ROOT, "scripts", "self-hosted", "restore.mjs"), "utf8");
-  const anchors = readFileSync(join(ROOT, "scripts", "self-hosted", "anchors.mjs"), "utf8");
+  const restore = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "restore.mjs"),
+    "utf8",
+  );
+  const anchors = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "anchors.mjs"),
+    "utf8",
+  );
   // The fail-closed manifest contract lives in anchors.mjs and is invoked
   // by restore's pre-quiesce verifyBackup.
   assert.match(anchors, /checksum mismatch — refusing to restore/);
@@ -136,20 +203,30 @@ test("restore verifies checksum and version before touching the target", () => {
 
 test("clean checkout is bootable: orchestrator and gateway declare build contexts", () => {
   const containerDelimiter = (service) =>
-    COMPOSE.indexOf(`container_name: ${"${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}"}-${service}`);
+    COMPOSE.indexOf(
+      `container_name: ${"${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}"}-${service}`,
+    );
   const orchestratorIndex = containerDelimiter("orchestrator");
   const gatewayIndex = containerDelimiter("gateway");
   const orchestratorBlock = COMPOSE.slice(0, orchestratorIndex);
-  assert.match(orchestratorBlock, /build:\n\s+context: \.\n\s+dockerfile: services\/orchestrator\/Dockerfile\n\s+target: production/);
+  assert.match(
+    orchestratorBlock,
+    /build:\n\s+context: \.\n\s+dockerfile: services\/orchestrator\/Dockerfile\n\s+target: production/,
+  );
   const gatewayBlock = COMPOSE.slice(orchestratorIndex, gatewayIndex);
-  assert.match(gatewayBlock, /build:\n\s+context: \.\n\s+dockerfile: services\/gateway\/Dockerfile\n\s+target: production/);
+  assert.match(
+    gatewayBlock,
+    /build:\n\s+context: \.\n\s+dockerfile: services\/gateway\/Dockerfile\n\s+target: production/,
+  );
   // The Dockerfiles the build contract points at exist.
   assert.ok(existsSync(join(ROOT, "services", "orchestrator", "Dockerfile")));
   assert.ok(existsSync(join(ROOT, "services", "gateway", "Dockerfile")));
 });
 
 test("upgrade validates target versions executably (supported shape, no downgrade, no no-op)", async () => {
-  const { validateTargetVersion } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { validateTargetVersion } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
   assert.equal(validateTargetVersion("v0.4.2", "v0.3.1").ok, true);
   assert.equal(validateTargetVersion("v0.4.2", undefined).ok, true);
   assert.equal(validateTargetVersion("0.4.2", "v0.3.1").ok, false);
@@ -159,7 +236,9 @@ test("upgrade validates target versions executably (supported shape, no downgrad
 });
 
 test("upgrade compares versions NUMERICALLY (major, then minor, then patch)", async () => {
-  const { compareVersions, validateTargetVersion } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { compareVersions, validateTargetVersion } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
   assert.equal(compareVersions("v1.10.0", "v1.2.0"), 1);
   assert.equal(compareVersions("v10.0.0", "v2.0.0"), 1);
   assert.equal(compareVersions("v1.2.0", "v1.10.0"), -1);
@@ -174,7 +253,8 @@ test("upgrade compares versions NUMERICALLY (major, then minor, then patch)", as
 });
 
 test("upgrade propagates the target into the resolved deployment and fails closed on mismatch", async () => {
-  const { expectedImageTags, resolvedTagsMatch, applyDeployedMetadata } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { expectedImageTags, resolvedTagsMatch, applyDeployedMetadata } =
+    await awaitImport("../self-hosted/upgrade.mjs");
   const expected = expectedImageTags("v1.10.0");
   assert.equal(expected.orchestrator, "tenvyr-orchestrator:v1.10.0");
   assert.equal(expected.gateway, "tenvyr-gateway:v1.10.0");
@@ -195,25 +275,41 @@ services:
   gateway:
     image: tenvyr-gateway:v1.10.0
 `;
-  assert.ok(resolvedTagsMatch(stale, "v1.10.0").length > 0, "stale orchestrator image must fail closed");
-  assert.ok(resolvedTagsMatch("", "v1.10.0").length > 0, "missing images must fail closed");
+  assert.ok(
+    resolvedTagsMatch(stale, "v1.10.0").length > 0,
+    "stale orchestrator image must fail closed",
+  );
+  assert.ok(
+    resolvedTagsMatch("", "v1.10.0").length > 0,
+    "missing images must fail closed",
+  );
   // Deployed-version metadata is written ONLY by the success path helper,
   // and it records BOTH the release version and the immutable source
   // revision — an image tag alone is never the deployed identity.
-  const before = "# deploy comment\nTENVYR_VERSION=v1.2.0\nPOSTGRES_PASSWORD=ref\n";
+  const before =
+    "# deploy comment\nTENVYR_VERSION=v1.2.0\nPOSTGRES_PASSWORD=ref\n";
   const after = applyDeployedMetadata(before, "v1.10.0", "a".repeat(40));
   assert.match(after, /TENVYR_VERSION=v1\.10\.0/);
-  assert.ok(!after.includes("TENVYR_VERSION=v1.2.0"), "old deployed version must be replaced");
+  assert.ok(
+    !after.includes("TENVYR_VERSION=v1.2.0"),
+    "old deployed version must be replaced",
+  );
   assert.match(after, /TENVYR_SOURCE_REVISION=a{40}/);
   assert.match(after, /POSTGRES_PASSWORD=ref/);
   assert.match(after, /# deploy comment/);
-  const added = applyDeployedMetadata("# no version yet\n", "v0.4.0", "b".repeat(40));
+  const added = applyDeployedMetadata(
+    "# no version yet\n",
+    "v0.4.0",
+    "b".repeat(40),
+  );
   assert.ok(added.includes("TENVYR_VERSION=v0.4.0"));
   assert.ok(added.includes(`TENVYR_SOURCE_REVISION=${"b".repeat(40)}`));
 });
 
 test("upgrade PROVES the checkout is the exact clean release commit before anything is built", async () => {
-  const { proveSourceIdentity } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { proveSourceIdentity } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
   const tagCommit = "c".repeat(40);
   // A fake git runner: record the calls, answer per argument vector.
   const fakeGit = (calls) => (args) => {
@@ -236,18 +332,30 @@ test("upgrade PROVES the checkout is the exact clean release commit before anyth
   assert.equal(ok.sourceRevision, tagCommit);
   // The tag is resolved BEFORE the checkout is trusted: HEAD and dirtiness
   // are only meaningful against the tag's commit.
-  assert.deepEqual(calls[0], ["rev-parse", "--verify", "--quiet", "v1.10.0^{commit}"]);
+  assert.deepEqual(calls[0], [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    "v1.10.0^{commit}",
+  ]);
 });
 
 test("upgrade refuses a target with NO release tag (fails closed; tag is the prerequisite)", async () => {
-  const { proveSourceIdentity } = await awaitImport("../self-hosted/upgrade.mjs");
-  const noTag = proveSourceIdentity("v9.9.9", () => ({ status: 1, stdout: "" }));
+  const { proveSourceIdentity } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
+  const noTag = proveSourceIdentity("v9.9.9", () => ({
+    status: 1,
+    stdout: "",
+  }));
   assert.equal(noTag.ok, false);
   assert.match(noTag.reason, /no release tag "v9\.9\.9" exists/);
 });
 
 test("upgrade refuses a checkout that is not the approved release commit (old source under a newer tag)", async () => {
-  const { proveSourceIdentity } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { proveSourceIdentity } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
   const tagCommit = "c".repeat(40);
   const fakeGit = (args) => {
     const [cmd, ...rest] = args;
@@ -262,11 +370,16 @@ test("upgrade refuses a checkout that is not the approved release commit (old so
   const mismatch = proveSourceIdentity("v1.10.0", fakeGit);
   assert.equal(mismatch.ok, false);
   assert.match(mismatch.reason, /not the approved release commit/);
-  assert.match(mismatch.reason, /refusing to build old source under a newer target tag/);
+  assert.match(
+    mismatch.reason,
+    /refusing to build old source under a newer target tag/,
+  );
 });
 
 test("upgrade refuses a dirty working tree", async () => {
-  const { proveSourceIdentity } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { proveSourceIdentity } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
   const tagCommit = "c".repeat(40);
   const fakeGit = (args) => {
     const [cmd, ...rest] = args;
@@ -277,7 +390,10 @@ test("upgrade refuses a dirty working tree", async () => {
       return { status: 0, stdout: `${tagCommit}\n` };
     }
     if (cmd === "status") {
-      return { status: 0, stdout: " M services/orchestrator/src/app.controller.ts\n" };
+      return {
+        status: 0,
+        stdout: " M services/orchestrator/src/app.controller.ts\n",
+      };
     }
     return { status: 0, stdout: "" };
   };
@@ -287,22 +403,48 @@ test("upgrade refuses a dirty working tree", async () => {
 });
 
 test("upgrade verifies the RUNNING containers' baked source revision — image tag alone is insufficient proof", async () => {
-  const { runningSourceMatches, expectedImageTags } = await awaitImport("../self-hosted/upgrade.mjs");
+  const { runningSourceMatches, expectedImageTags } = await awaitImport(
+    "../self-hosted/upgrade.mjs",
+  );
   const revision = "c".repeat(40);
-  assert.equal(runningSourceMatches(`[NODE_ENV=production TENVYR_SOURCE_REVISION=${revision}]`, revision), true);
+  assert.equal(
+    runningSourceMatches(
+      `[NODE_ENV=production TENVYR_SOURCE_REVISION=${revision}]`,
+      revision,
+    ),
+    true,
+  );
   assert.equal(runningSourceMatches(`[NODE_ENV=production]`, revision), false);
-  assert.equal(runningSourceMatches(`[TENVYR_SOURCE_REVISION=${"d".repeat(40)}]`, revision), false);
+  assert.equal(
+    runningSourceMatches(
+      `[TENVYR_SOURCE_REVISION=${"d".repeat(40)}]`,
+      revision,
+    ),
+    false,
+  );
   // The Dockerfiles bake the build arg into the production image.
-  const orchestratorDockerfile = readFileSync(join(ROOT, "services", "orchestrator", "Dockerfile"), "utf8");
-  const gatewayDockerfile = readFileSync(join(ROOT, "services", "gateway", "Dockerfile"), "utf8");
+  const orchestratorDockerfile = readFileSync(
+    join(ROOT, "services", "orchestrator", "Dockerfile"),
+    "utf8",
+  );
+  const gatewayDockerfile = readFileSync(
+    join(ROOT, "services", "gateway", "Dockerfile"),
+    "utf8",
+  );
   for (const dockerfile of [orchestratorDockerfile, gatewayDockerfile]) {
     assert.match(dockerfile, /ARG TENVYR_SOURCE_REVISION/);
-    assert.match(dockerfile, /ENV TENVYR_SOURCE_REVISION=\$\{TENVYR_SOURCE_REVISION\}/);
+    assert.match(
+      dockerfile,
+      /ENV TENVYR_SOURCE_REVISION=\$\{TENVYR_SOURCE_REVISION\}/,
+    );
   }
   // The upgrade flow: tag identity is checked in the compose resolution
   // AND the baked source revision is verified on the running containers;
   // the persisted metadata records the immutable source revision too.
-  const upgrade = readFileSync(join(ROOT, "scripts", "self-hosted", "upgrade.mjs"), "utf8");
+  const upgrade = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "upgrade.mjs"),
+    "utf8",
+  );
   assert.match(upgrade, /image tag alone is never/);
   assert.match(upgrade, /expectedImageTags\(target\)/);
   assert.match(upgrade, /runningSourceMatches/);
@@ -310,22 +452,34 @@ test("upgrade verifies the RUNNING containers' baked source revision — image t
 });
 
 test("upgrade proves source identity BEFORE any stack mutation (source check precedes build/up)", async () => {
-  const upgrade = readFileSync(join(ROOT, "scripts", "self-hosted", "upgrade.mjs"), "utf8");
+  const upgrade = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "upgrade.mjs"),
+    "utf8",
+  );
   const proveIndex = upgrade.indexOf("proveSourceIdentity(target)");
   const buildIndex = upgrade.indexOf('"build"');
   const upIndex = upgrade.indexOf('"up", "-d"');
   assert.ok(proveIndex >= 0, "proveSourceIdentity call missing");
   assert.ok(buildIndex >= 0 && upIndex >= 0, "build/up commands missing");
-  assert.ok(proveIndex < buildIndex, "source identity must be proven before build");
+  assert.ok(
+    proveIndex < buildIndex,
+    "source identity must be proven before build",
+  );
   assert.ok(proveIndex < upIndex, "source identity must be proven before up");
 });
 
 test("restore explicitly separates drill from recovery/promotion", async () => {
-  const restore = readFileSync(join(ROOT, "scripts", "self-hosted", "restore.mjs"), "utf8");
+  const restore = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "restore.mjs"),
+    "utf8",
+  );
   assert.match(restore, /--drill/);
   assert.match(restore, /--promote/);
   assert.match(restore, /DRILL mode: the ACTIVE authority is never touched/);
-  assert.match(restore, /PROMOTE mode: this REPLACES the active authority after verification/);
+  assert.match(
+    restore,
+    /PROMOTE mode: this REPLACES the active authority after verification/,
+  );
   assert.match(restore, /ALTER DATABASE .* RENAME TO/);
   assert.match(restore, /psqlRename\(ACTIVE_DB, SAFETY_DB\)/);
   assert.match(restore, /psqlRename\(ISOLATED_DB, ACTIVE_DB\)/);
@@ -345,7 +499,10 @@ test("restore explicitly separates drill from recovery/promotion", async () => {
 });
 
 test("backup manifest records release AND source identity plus bounded snapshot anchors", async () => {
-  const backup = readFileSync(join(ROOT, "scripts", "self-hosted", "backup.mjs"), "utf8");
+  const backup = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "backup.mjs"),
+    "utf8",
+  );
   const { buildManifest } = await awaitImport("../self-hosted/backup.mjs");
   // The backup requires the immutable source revision — a backup without
   // source provenance cannot attest what it is.
@@ -379,8 +536,13 @@ test("backup manifest records release AND source identity plus bounded snapshot 
 });
 
 test("backup verifies the dump BEFORE labeling it a verified backup (dump-derived anchors, never live-DB anchors)", async () => {
-  const backup = readFileSync(join(ROOT, "scripts", "self-hosted", "backup.mjs"), "utf8");
-  const { VERIFY_DB, REQUIRED_ANCHOR_KEYS } = await awaitImport("../self-hosted/backup.mjs");
+  const backup = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "backup.mjs"),
+    "utf8",
+  );
+  const { VERIFY_DB, REQUIRED_ANCHOR_KEYS } = await awaitImport(
+    "../self-hosted/backup.mjs",
+  );
   assert.equal(VERIFY_DB, "tenvyr_backup_verify");
   assert.deepEqual(REQUIRED_ANCHOR_KEYS, [
     "migrationLedgerFingerprint",
@@ -396,31 +558,48 @@ test("backup verifies the dump BEFORE labeling it a verified backup (dump-derive
   // ONLY after the restored dump is proven structurally valid.
   assert.match(backup, /renameSync\(stagingPath, finalPath\)/);
   const finalizeIndex = backup.indexOf("renameSync(stagingPath, finalPath)");
-  const anchorsIndex = backup.indexOf("snapshotAnchors(psqlFor(VERIFY_DB), VERIFY_DB)");
-  assert.ok(anchorsIndex >= 0 && anchorsIndex < finalizeIndex, "anchors must be computed before finalizing");
+  const anchorsIndex = backup.indexOf(
+    "snapshotAnchors(psqlFor(VERIFY_DB), VERIFY_DB)",
+  );
+  assert.ok(
+    anchorsIndex >= 0 && anchorsIndex < finalizeIndex,
+    "anchors must be computed before finalizing",
+  );
   // A failed verification removes the staging artifact and never prints PASS.
   assert.match(backup, /rmSync\(stagingPath/);
   assert.match(backup, /never labeled/);
   assert.match(backup, /reports PASS/);
   // The old live-DB-anchors-before-dump flow is gone.
-  assert.ok(!backup.includes("captured immediately before"), "live-DB anchor capture must be gone");
+  assert.ok(
+    !backup.includes("captured immediately before"),
+    "live-DB anchor capture must be gone",
+  );
 });
 
 test("snapshot anchors are deterministic and manifest-relative comparison fails closed on tamper", async () => {
-  const { fingerprint, snapshotAnchors, compareAnchors, TABLES } = await awaitImport("../self-hosted/anchors.mjs");
+  const { fingerprint, snapshotAnchors, compareAnchors, TABLES } =
+    await awaitImport("../self-hosted/anchors.mjs");
   assert.equal(fingerprint("same"), fingerprint("same"));
   assert.ok(fingerprint("same") !== fingerprint("different"));
   // Fake runner over a canned database: one line per query result.
   const run = (sql) => {
-    if (sql.includes("string_agg(name")) return { status: 0, stdout: "m1|m2\n" };
+    if (sql.includes("string_agg(name"))
+      return { status: 0, stdout: "m1|m2\n" };
     if (sql.includes("count(*) FROM")) {
       // One count per inventory table, in order.
-      return { status: 0, stdout: `${TABLES.map((_, i) => i + 1).join("|")}\n` };
+      return {
+        status: 0,
+        stdout: `${TABLES.map((_, i) => i + 1).join("|")}\n`,
+      };
     }
-    if (sql.includes('string_agg("planHash"')) return { status: 0, stdout: "h1|h2\n" };
-    if (sql.includes('ORDER BY "createdAt"')) return { status: 0, stdout: "exec-1\n" };
-    if (sql.includes('ORDER BY "updatedAt"')) return { status: 0, stdout: "exec-9\n" };
-    if (sql.includes("execution_exports")) return { status: 0, stdout: "exp-1:abc|exp-2:def\n" };
+    if (sql.includes('string_agg("planHash"'))
+      return { status: 0, stdout: "h1|h2\n" };
+    if (sql.includes('ORDER BY "createdAt"'))
+      return { status: 0, stdout: "exec-1\n" };
+    if (sql.includes('ORDER BY "updatedAt"'))
+      return { status: 0, stdout: "exec-9\n" };
+    if (sql.includes("execution_exports"))
+      return { status: 0, stdout: "exp-1:abc|exp-2:def\n" };
     return { status: 1, stdout: "" };
   };
   const anchors = snapshotAnchors(run, "tenvyr");
@@ -448,11 +627,17 @@ test("snapshot anchors are deterministic and manifest-relative comparison fails 
   assert.match(violations.join(" "), /tableCountFingerprint mismatch/);
   assert.match(violations.join(" "), /executionAnchor mismatch/);
   // A manifest without anchors fails closed (old backup).
-  assert.match(compareAnchors({ version: "v0.0.1" }, anchors)[0], /predates snapshot anchors/);
+  assert.match(
+    compareAnchors({ version: "v0.0.1" }, anchors)[0],
+    /predates snapshot anchors/,
+  );
 });
 
 test("restore verifies the RESTORED snapshot against the BACKUP MANIFEST — the current active database is not the authority", async () => {
-  const raw = readFileSync(join(ROOT, "scripts", "self-hosted", "restore.mjs"), "utf8");
+  const raw = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "restore.mjs"),
+    "utf8",
+  );
   // Normalize block-comment prefixes so prose assertions are line-break tolerant.
   const restore = raw.replace(/^\s*\*\s?/gm, "");
   // The manifest anchors are the authority; drift vs the current authority
@@ -464,15 +649,30 @@ test("restore verifies the RESTORED snapshot against the BACKUP MANIFEST — the
   assert.match(restore, /predates snapshot anchors/);
   // The old authority model is gone: no active-vs-restored row-count
   // equality, no active-vs-restored plan-hash comparison.
-  assert.ok(!restore.includes("row count mismatch for"), "active-vs-restored row counts must not be a restore requirement");
-  assert.ok(!restore.includes("activeHashes"), "active-vs-restored plan hashes must not be a restore requirement");
-  assert.ok(!restore.includes("activeExecution"), "active-vs-restored execution identity must not be a restore requirement");
+  assert.ok(
+    !restore.includes("row count mismatch for"),
+    "active-vs-restored row counts must not be a restore requirement",
+  );
+  assert.ok(
+    !restore.includes("activeHashes"),
+    "active-vs-restored plan hashes must not be a restore requirement",
+  );
+  assert.ok(
+    !restore.includes("activeExecution"),
+    "active-vs-restored execution identity must not be a restore requirement",
+  );
 });
 
 test("the disposable recovery E2E is wired and refuses real infrastructure", async () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  assert.match(pkg.scripts["self-hosted:recovery-test"], /scripts\/self-hosted\/recovery\.test\.mjs/);
-  const recovery = readFileSync(join(ROOT, "scripts", "self-hosted", "recovery.test.mjs"), "utf8");
+  assert.match(
+    pkg.scripts["self-hosted:recovery-test"],
+    /scripts\/self-hosted\/recovery\.test\.mjs/,
+  );
+  const recovery = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "recovery.test.mjs"),
+    "utf8",
+  );
   // The test must refuse to run against a real deployment.
   assert.match(recovery, /refus|must not be running|already running/);
   // It must exercise the full historical-recovery loop.
@@ -490,7 +690,9 @@ test("the canonical backup inventory matches the authoritative entity/schema inv
   // Authoritative source 1: the TypeORM entity inventory.
   const entitiesDir = join(ROOT, "services", "orchestrator", "src", "entities");
   const entityTables = [];
-  for (const file of readdirSync(entitiesDir).filter((name) => name.endsWith(".entity.ts"))) {
+  for (const file of readdirSync(entitiesDir).filter((name) =>
+    name.endsWith(".entity.ts"),
+  )) {
     const source = readFileSync(join(entitiesDir, file), "utf8");
     const match = source.match(/@Entity\("([a-z_]+)"\)/);
     assert.ok(match, `entity ${file} must declare a table name`);
@@ -498,43 +700,80 @@ test("the canonical backup inventory matches the authoritative entity/schema inv
   }
   // Authoritative source 2: the migration CREATE TABLE inventory (spec
   // files in the migrations directory are fixtures, not schema).
-  const migrationsDir = join(ROOT, "services", "orchestrator", "src", "database", "migrations");
+  const migrationsDir = join(
+    ROOT,
+    "services",
+    "orchestrator",
+    "src",
+    "database",
+    "migrations",
+  );
   const migrationTables = new Set();
-  for (const file of readdirSync(migrationsDir).filter((name) => name.endsWith(".ts") && !name.endsWith(".spec.ts"))) {
+  for (const file of readdirSync(migrationsDir).filter(
+    (name) => name.endsWith(".ts") && !name.endsWith(".spec.ts"),
+  )) {
     const source = readFileSync(join(migrationsDir, file), "utf8");
-    for (const match of source.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?"([a-z_]+)"/g)) {
+    for (const match of source.matchAll(
+      /CREATE TABLE (?:IF NOT EXISTS )?"([a-z_]+)"/g,
+    )) {
       migrationTables.add(match[1]);
     }
   }
   const entitySet = new Set(entityTables);
-  assert.equal(entitySet.size, entityTables.length, "duplicate entity table names");
+  assert.equal(
+    entitySet.size,
+    entityTables.length,
+    "duplicate entity table names",
+  );
   const backupSet = new Set(TABLES);
   // The backup inventory must equal the entity inventory exactly — a
   // future application authority table cannot silently be omitted.
-  const missingFromBackup = [...entitySet].filter((table) => !backupSet.has(table));
-  assert.deepEqual(missingFromBackup, [], "entity tables missing from the backup inventory");
+  const missingFromBackup = [...entitySet].filter(
+    (table) => !backupSet.has(table),
+  );
+  assert.deepEqual(
+    missingFromBackup,
+    [],
+    "entity tables missing from the backup inventory",
+  );
   const extraInBackup = [...backupSet].filter((table) => !entitySet.has(table));
-  assert.deepEqual(extraInBackup, [], "backup inventory entries with no entity");
+  assert.deepEqual(
+    extraInBackup,
+    [],
+    "backup inventory entries with no entity",
+  );
   // The migration schema must contain exactly the same Tenvyr-owned tables
   // (the `migrations` framework table is created by TypeORM at runtime,
   // never in the migration files, and is not Tenvyr-owned coverage).
-  const migrationEntityOnly = [...migrationTables].filter((table) => !entitySet.has(table));
-  assert.deepEqual(migrationEntityOnly, [], "unexpected non-entity schema tables");
+  const migrationEntityOnly = [...migrationTables].filter(
+    (table) => !entitySet.has(table),
+  );
+  assert.deepEqual(
+    migrationEntityOnly,
+    [],
+    "unexpected non-entity schema tables",
+  );
   // Spot-check the two tables this closure added.
   assert.ok(backupSet.has("pipelines"));
   assert.ok(backupSet.has("plan_proposals"));
-  assert.equal(TABLES.length, 32);
+  assert.equal(TABLES.length, 33);
 });
 
 test("restore verifies BEFORE quiescing and swaps via a rollback-capable state machine", async () => {
-  const restore = readFileSync(join(ROOT, "scripts", "self-hosted", "restore.mjs"), "utf8");
+  const restore = readFileSync(
+    join(ROOT, "scripts", "self-hosted", "restore.mjs"),
+    "utf8",
+  );
   // Deep manifest-relative verification is a pre-quiesce step in promote
   // (the quiesce() FUNCTION DEFINITION appears earlier in the file, so the
   // assertion anchors on the promote call site).
   const deepIndex = restore.indexOf("deepIntegrityChecks(manifest)");
   const quiesceIndex = restore.indexOf("// 3. Quiesce writers");
   assert.ok(deepIndex >= 0 && quiesceIndex >= 0);
-  assert.ok(deepIndex < quiesceIndex, "deep verification must run BEFORE quiescing");
+  assert.ok(
+    deepIndex < quiesceIndex,
+    "deep verification must run BEFORE quiescing",
+  );
   assert.match(restore, /verified backup \(pre-quiesce\)/);
   // The swap is a deterministic state machine with automatic rollback.
   assert.match(restore, /swapAuthority/);
@@ -547,7 +786,10 @@ test("restore verifies BEFORE quiescing and swaps via a rollback-capable state m
   // Malformed manifests fail cleanly BEFORE quiescing.
   assert.match(restore, /malformed backup manifest/);
   const malformedIndex = restore.indexOf("malformed backup manifest");
-  assert.ok(malformedIndex < quiesceIndex, "manifest corruption must fail before quiescing");
+  assert.ok(
+    malformedIndex < quiesceIndex,
+    "manifest corruption must fail before quiescing",
+  );
 });
 
 test("swapAuthority state machine: deterministic rollback on second-rename failure", async () => {
@@ -593,12 +835,17 @@ test("swapAuthority state machine: deterministic rollback on second-rename failu
 });
 
 test("rollbackPostPromotion state machine: restored active -> failed state, safety -> active", async () => {
-  const { rollbackPostPromotion } = await awaitImport("../self-hosted/restore.mjs");
+  const { rollbackPostPromotion } = await awaitImport(
+    "../self-hosted/restore.mjs",
+  );
   const okSteps = {
     renameActiveToFailed: () => ({ ok: true }),
     renameSafetyToActive: () => ({ ok: true }),
   };
-  assert.deepEqual(rollbackPostPromotion(okSteps), { ok: true, phase: "rolled-back" });
+  assert.deepEqual(rollbackPostPromotion(okSteps), {
+    ok: true,
+    phase: "rolled-back",
+  });
   const firstFail = rollbackPostPromotion({
     ...okSteps,
     renameActiveToFailed: () => ({ ok: false, error: "boom" }),
@@ -615,7 +862,8 @@ test("rollbackPostPromotion state machine: restored active -> failed state, safe
 
 test("upgrade refuses deployment mutation after backup verification failure", async () => {
   const { spawnSync } = await import("node:child_process");
-  const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
+  const { mkdtempSync, writeFileSync, chmodSync, rmSync } =
+    await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "tenvyr-upgrade-regression-"));
   try {
@@ -652,37 +900,69 @@ test("upgrade refuses deployment mutation after backup verification failure", as
       },
     );
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    assert.notEqual(result.status, 0, "upgrade must fail when the verified backup fails");
+    assert.notEqual(
+      result.status,
+      0,
+      "upgrade must fail when the verified backup fails",
+    );
     assert.match(output, /verified backup did not complete/);
-    assert.ok(!output.includes("[upgrade] building"), "compose build must never be reached");
-    assert.ok(!output.includes("resolving compose"), "compose resolution must never be reached");
-    assert.ok(!output.includes("upgrade] OK"), "no success output after backup failure");
+    assert.ok(
+      !output.includes("[upgrade] building"),
+      "compose build must never be reached",
+    );
+    assert.ok(
+      !output.includes("resolving compose"),
+      "compose resolution must never be reached",
+    );
+    assert.ok(
+      !output.includes("upgrade] OK"),
+      "no success output after backup failure",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("hosted CI wires real PostgreSQL twice, the self-hosted contract gate, and the recovery E2E", async () => {
-  const ci = readFileSync(join(ROOT, ".github", "workflows", "release-ci.yml"), "utf8");
+  const ci = readFileSync(
+    join(ROOT, ".github", "workflows", "release-ci.yml"),
+    "utf8",
+  );
   // Real PostgreSQL job on disposable infrastructure: env set + suite TWICE.
   assert.match(ci, /postgres-integration:/);
-  assert.match(ci, /TEST_DATABASE_URL: postgres:\/\/postgres:postgres@localhost:5432\/tenvyr_roadmap_test/);
+  assert.match(
+    ci,
+    /TEST_DATABASE_URL: postgres:\/\/postgres:postgres@localhost:5432\/tenvyr_roadmap_test/,
+  );
   const suiteRuns = ci.match(/pnpm --filter orchestrator test -- --runInBand/g);
-  assert.ok(suiteRuns && suiteRuns.length >= 2, "the real PostgreSQL suite must run TWICE");
+  assert.ok(
+    suiteRuns && suiteRuns.length >= 2,
+    "the real PostgreSQL suite must run TWICE",
+  );
   // The no-silent-skip guard is wired and exists.
   assert.match(ci, /assert-jest-run/);
-  assert.ok(existsSync(join(ROOT, "scripts", "assert-jest-run.mjs")), "assert-jest-run.mjs must exist");
+  assert.ok(
+    existsSync(join(ROOT, "scripts", "assert-jest-run.mjs")),
+    "assert-jest-run.mjs must exist",
+  );
   // Self-hosted contract + recovery E2E jobs are required (no opt-outs).
   assert.match(ci, /self-hosted:contract-test/);
   assert.match(ci, /self-hosted:recovery-test/);
-  assert.ok(!ci.includes("continue-on-error"), "required closure tests must not continue-on-error");
+  assert.ok(
+    !ci.includes("continue-on-error"),
+    "required closure tests must not continue-on-error",
+  );
   // Live provider/CLI gates stay opt-in in hosted CI.
   assert.match(ci, /TENVYR_LIVE_RUNTIME_GATES: "0"/);
 });
 
 test("maintenance lock: exclusive ownership, fail-fast live contention, and FAIL-CLOSED stale/uncertain state", async () => {
-  const { acquireMaintenanceLock, releaseMaintenanceLock, clearStaleMaintenanceLock, journalPath } =
-    await awaitImport("../self-hosted/maintenance.mjs");
+  const {
+    acquireMaintenanceLock,
+    releaseMaintenanceLock,
+    clearStaleMaintenanceLock,
+    journalPath,
+  } = await awaitImport("../self-hosted/maintenance.mjs");
   const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   // Isolate this test's maintenance state: the maintenance module resolves
@@ -696,15 +976,28 @@ test("maintenance lock: exclusive ownership, fail-fast live contention, and FAIL
     const first = acquireMaintenanceLock();
     assert.equal(first.owned, true, "first acquisition must own the lock");
     assert.ok(
-      existsSync(lockPath) && !existsSync(join(ROOT, "backups", ".maintenance.lock")),
+      existsSync(lockPath) &&
+        !existsSync(join(ROOT, "backups", ".maintenance.lock")),
       "the lock must be created ONLY inside TENVYR_MAINTENANCE_DIR",
     );
     // A second acquisition while the owner is ALIVE fails fast.
     const second = acquireMaintenanceLock();
-    assert.equal(second.owned, false, "second acquisition must not own the lock");
+    assert.equal(
+      second.owned,
+      false,
+      "second acquisition must not own the lock",
+    );
     assert.equal(second.held, true);
-    assert.equal(second.owner?.pid, process.pid, "the held lock must name the live owner");
-    assert.equal(second.denied, undefined, "live contention is not a stale-state denial");
+    assert.equal(
+      second.owner?.pid,
+      process.pid,
+      "the held lock must name the live owner",
+    );
+    assert.equal(
+      second.denied,
+      undefined,
+      "live contention is not a stale-state denial",
+    );
     releaseMaintenanceLock(first);
     // After release, acquisition succeeds again.
     const third = acquireMaintenanceLock();
@@ -718,16 +1011,30 @@ test("maintenance lock: exclusive ownership, fail-fast live contention, and FAIL
       { flag: "wx" },
     );
     const stale = acquireMaintenanceLock();
-    assert.equal(stale.owned, false, "a stale lock must NEVER be auto-reclaimed");
+    assert.equal(
+      stale.owned,
+      false,
+      "a stale lock must NEVER be auto-reclaimed",
+    );
     assert.match(stale.denied ?? "", /stale-maintenance-state/);
-    assert.ok((stale.instructions ?? []).length >= 4, "stale state must carry bounded operator instructions");
-    assert.ok(existsSync(lockPath), "the stale lock must still exist (never deleted)");
+    assert.ok(
+      (stale.instructions ?? []).length >= 4,
+      "stale state must carry bounded operator instructions",
+    );
+    assert.ok(
+      existsSync(lockPath),
+      "the stale lock must still exist (never deleted)",
+    );
     // Explicit operator clear refuses a LIVE owner...
     rmSync(lockPath, { force: true });
     const live = acquireMaintenanceLock();
     assert.equal(live.owned, true);
     const liveClear = clearStaleMaintenanceLock();
-    assert.equal(liveClear.cleared, false, "the clear must refuse a live owner");
+    assert.equal(
+      liveClear.cleared,
+      false,
+      "the clear must refuse a live owner",
+    );
     releaseMaintenanceLock(live);
     // ...and the explicit clear works for a dead owner.
     writeFileSync(
@@ -736,15 +1043,30 @@ test("maintenance lock: exclusive ownership, fail-fast live contention, and FAIL
       { flag: "wx" },
     );
     const cleared = clearStaleMaintenanceLock();
-    assert.equal(cleared.cleared, true, "explicit stale-lock clear must succeed for a dead owner");
-    assert.ok(!existsSync(lockPath), "the stale lock must be gone after the explicit clear");
+    assert.equal(
+      cleared.cleared,
+      true,
+      "explicit stale-lock clear must succeed for a dead owner",
+    );
+    assert.ok(
+      !existsSync(lockPath),
+      "the stale lock must be gone after the explicit clear",
+    );
     const after = acquireMaintenanceLock();
-    assert.equal(after.owned, true, "acquisition must succeed after the explicit clear");
+    assert.equal(
+      after.owned,
+      true,
+      "acquisition must succeed after the explicit clear",
+    );
     releaseMaintenanceLock(after);
     // UNREADABLE owner record: FAIL CLOSED.
     writeFileSync(lockPath, "\x00\x01broken", "utf8");
     const unreadable = acquireMaintenanceLock();
-    assert.equal(unreadable.owned, false, "an unreadable lock must never be acquired");
+    assert.equal(
+      unreadable.owned,
+      false,
+      "an unreadable lock must never be acquired",
+    );
     assert.ok(existsSync(lockPath), "the unreadable lock must still exist");
     rmSync(lockPath, { force: true });
   } finally {
@@ -770,7 +1092,8 @@ test("maintenance lock: exclusive ownership, fail-fast live contention, and FAIL
 
 test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO destructive cleanup, production maintenance state BYTE-IDENTICAL", async () => {
   const { spawnSync } = await import("node:child_process");
-  const { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } = await import("node:fs");
+  const { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } =
+    await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "tenvyr-fake-docker-"));
   const logPath = join(dir, "docker.log");
@@ -780,8 +1103,17 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
   // them BYTE-IDENTICAL (never deleted, never overwritten).
   const productionLock = join(ROOT, "backups", ".maintenance.lock");
   const productionJournal = join(ROOT, "backups", ".recovery-journal.json");
-  const lockSentinel = JSON.stringify({ pid: 999_999_999, startedAt: "sentinel-lock" });
-  const journalSentinel = JSON.stringify({ operation: "promote", phase: "complete", backup: "sentinel-journal", startedAt: "sentinel", updatedAt: "sentinel" });
+  const lockSentinel = JSON.stringify({
+    pid: 999_999_999,
+    startedAt: "sentinel-lock",
+  });
+  const journalSentinel = JSON.stringify({
+    operation: "promote",
+    phase: "complete",
+    backup: "sentinel-journal",
+    startedAt: "sentinel",
+    updatedAt: "sentinel",
+  });
   try {
     writeFileSync(productionLock, lockSentinel, "utf8");
     writeFileSync(productionJournal, journalSentinel, "utf8");
@@ -815,7 +1147,11 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
         },
       },
     );
-    assert.notEqual(suite.status, 0, `the suite must refuse to run when real infrastructure is present: status=${suite.status} out=${(suite.stdout ?? "").slice(-600)} err=${(suite.stderr ?? "").slice(-600)}`);
+    assert.notEqual(
+      suite.status,
+      0,
+      `the suite must refuse to run when real infrastructure is present: status=${suite.status} out=${(suite.stdout ?? "").slice(-600)} err=${(suite.stderr ?? "").slice(-600)}`,
+    );
     assert.match(suite.stdout + suite.stderr, /refusing to run/);
     const log = readFileSync(logPath, "utf8");
     assert.ok(
@@ -823,7 +1159,9 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
       `the teardown must NEVER run compose against the production project: ${log}`,
     );
     assert.ok(
-      !log.includes("down") && !log.includes("volume rm") && !log.includes("rm "),
+      !log.includes("down") &&
+        !log.includes("volume rm") &&
+        !log.includes("rm "),
       `no destructive cleanup may run after a guard failure: ${log}`,
     );
     // Production maintenance state: UNTOUCHED (byte-identical).
@@ -845,7 +1183,11 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
     writeFileSync(psOutput2, "", "utf8");
     writeFileSync(
       volumeOutput2,
-      JSON.stringify({ Name: "tenvyr-self-hosted_tenvyr_postgres_data", Driver: "local", Scope: "local" }) + "\n",
+      JSON.stringify({
+        Name: "tenvyr-self-hosted_tenvyr_postgres_data",
+        Driver: "local",
+        Scope: "local",
+      }) + "\n",
       "utf8",
     );
     const logPath2 = join(dir, "docker2.log");
@@ -865,10 +1207,17 @@ test("recovery E2E guard: FAKE docker reporting real infrastructure -> ZERO dest
         },
       },
     );
-    assert.notEqual(suite2.status, 0, "the suite must refuse when the real production volume exists");
+    assert.notEqual(
+      suite2.status,
+      0,
+      "the suite must refuse when the real production volume exists",
+    );
     assert.match(suite2.stdout + suite2.stderr, /refusing to run/);
     const log2 = readFileSync(logPath2, "utf8");
-    assert.ok(!log2.includes("compose"), `zero compose actions after a volume guard failure: ${log2}`);
+    assert.ok(
+      !log2.includes("compose"),
+      `zero compose actions after a volume guard failure: ${log2}`,
+    );
     assert.equal(
       readFileSync(productionLock, "utf8"),
       lockSentinel,
@@ -897,13 +1246,19 @@ test("freeFailedPromotionName: a preserved candidate is never overwritten; rollb
     "a colliding preserved candidate must yield a non-colliding name",
   );
   assert.equal(
-    freeFailedPromotionName([FAILED_PROMOTION_DB, `${FAILED_PROMOTION_DB}_1`, `${FAILED_PROMOTION_DB}_2`]),
+    freeFailedPromotionName([
+      FAILED_PROMOTION_DB,
+      `${FAILED_PROMOTION_DB}_1`,
+      `${FAILED_PROMOTION_DB}_2`,
+    ]),
     `${FAILED_PROMOTION_DB}_3`,
   );
   assert.throws(
     () =>
       freeFailedPromotionName(
-        Array.from({ length: 101 }, (_, i) => (i === 0 ? FAILED_PROMOTION_DB : `${FAILED_PROMOTION_DB}_${i}`)),
+        Array.from({ length: 101 }, (_, i) =>
+          i === 0 ? FAILED_PROMOTION_DB : `${FAILED_PROMOTION_DB}_${i}`,
+        ),
       ),
     /no free failed-promotion name available/,
   );
@@ -911,7 +1266,8 @@ test("freeFailedPromotionName: a preserved candidate is never overwritten; rollb
 
 test("stale-owner FAIL-CLOSED process tree: owner SIGKILL with a live docker child → DENIED until the child is gone and the lock is explicitly cleared", async () => {
   const { spawn, spawnSync } = await import("node:child_process");
-  const { mkdtempSync, writeFileSync, chmodSync, rmSync, readFileSync } = await import("node:fs");
+  const { mkdtempSync, writeFileSync, chmodSync, rmSync, readFileSync } =
+    await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "tenvyr-proc-tree-"));
   const isPidAlive = (pid) => {
@@ -961,8 +1317,13 @@ test("stale-owner FAIL-CLOSED process tree: owner SIGKILL with a live docker chi
         ],
         { cwd: ROOT, encoding: "utf8", env },
       );
-      const line = (result.stdout ?? "").split("\n").find((l) => l.startsWith("RESULT "));
-      assert.ok(line, `${label}: the acquire child must report a result: ${result.stdout}\n${result.stderr}`);
+      const line = (result.stdout ?? "")
+        .split("\n")
+        .find((l) => l.startsWith("RESULT "));
+      assert.ok(
+        line,
+        `${label}: the acquire child must report a result: ${result.stdout}\n${result.stderr}`,
+      );
       return JSON.parse(line.slice("RESULT ".length));
     };
     // 1. The REAL backup process acquires the REAL maintenance lock and
@@ -977,23 +1338,40 @@ test("stale-owner FAIL-CLOSED process tree: owner SIGKILL with a live docker chi
     backup.stdout.on("data", (d) => (backupOutput += d));
     backup.stderr.on("data", (d) => (backupOutput += d));
     const spawnDeadline = Date.now() + 30_000;
-    while (!existsSync(pidFile) && Date.now() < spawnDeadline && backup.exitCode === null) {
+    while (
+      !existsSync(pidFile) &&
+      Date.now() < spawnDeadline &&
+      backup.exitCode === null
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    assert.ok(existsSync(pidFile), `the fake docker child must have been spawned by the real backup; output: ${backupOutput.slice(-400)}`);
+    assert.ok(
+      existsSync(pidFile),
+      `the fake docker child must have been spawned by the real backup; output: ${backupOutput.slice(-400)}`,
+    );
     const dockerPid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-    assert.ok(Number.isInteger(dockerPid) && dockerPid > 0, "the fake docker must record a real PID");
+    assert.ok(
+      Number.isInteger(dockerPid) && dockerPid > 0,
+      "the fake docker must record a real PID",
+    );
     // 2. SIGKILL the maintenance owner (the backup Node process).
     backup.kill("SIGKILL");
     await new Promise((resolve) => backup.once("close", resolve));
     // 3. The docker child SURVIVES the owner's death (kill does not
     //    propagate to the external child).
-    assert.ok(isPidAlive(dockerPid), "the docker child must remain alive after the owner's SIGKILL");
+    assert.ok(
+      isPidAlive(dockerPid),
+      "the docker child must remain alive after the owner's SIGKILL",
+    );
     // 4. A second REAL acquisition is DENIED — stale/uncertain
     //    maintenance state (the dead owner does not prove the docker
     //    descendant is dead).
     const denied = acquireResult("second acquisition");
-    assert.equal(denied.owned, false, "the second acquisition MUST be denied while the docker child survives");
+    assert.equal(
+      denied.owned,
+      false,
+      "the second acquisition MUST be denied while the docker child survives",
+    );
     assert.match(denied.denied ?? "", /stale-maintenance-state/);
     assert.ok(
       existsSync(join(maintenanceDir, ".maintenance.lock")),
@@ -1011,15 +1389,26 @@ test("stale-owner FAIL-CLOSED process tree: owner SIGKILL with a live docker chi
     while (isPidAlive(dockerPid) && Date.now() < goneDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    assert.ok(!isPidAlive(dockerPid), "the docker child must be terminated before the explicit clear");
+    assert.ok(
+      !isPidAlive(dockerPid),
+      "the docker child must be terminated before the explicit clear",
+    );
     const clear = spawnSync(
       process.execPath,
       ["scripts/self-hosted/maintenance.mjs", "--clear-stale-lock"],
       { cwd: ROOT, encoding: "utf8", env },
     );
-    assert.equal(clear.status, 0, `the explicit stale-lock clear must succeed: ${clear.stdout}\n${clear.stderr}`);
+    assert.equal(
+      clear.status,
+      0,
+      `the explicit stale-lock clear must succeed: ${clear.stdout}\n${clear.stderr}`,
+    );
     const acquired = acquireResult("post-clear acquisition");
-    assert.equal(acquired.owned, true, "acquisition must succeed after the explicit clear");
+    assert.equal(
+      acquired.owned,
+      true,
+      "acquisition must succeed after the explicit clear",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1027,7 +1416,8 @@ test("stale-owner FAIL-CLOSED process tree: owner SIGKILL with a live docker chi
 
 test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL → stale lock is DENIED until the explicit clear", async () => {
   const { spawn } = await import("node:child_process");
-  const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
+  const { mkdtempSync, writeFileSync, chmodSync, rmSync } =
+    await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "tenvyr-upgrade-real-backup-"));
   const maintenanceDir = join(dir, "maint");
@@ -1094,18 +1484,33 @@ test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL → stale 
     if (killDone.timedOut) {
       // The backup failed before the kill landed — the upgrade exited
       // normally; the ORPHAN-PROOF still holds (nothing was ever forked).
-      assert.notEqual(exit.code, 0, "the upgrade must fail (the real backup cannot reach the postgres)");
+      assert.notEqual(
+        exit.code,
+        0,
+        "the upgrade must fail (the real backup cannot reach the postgres)",
+      );
       assert.match(output, /verified backup did not complete/);
     } else {
-      assert.equal(exit.signal, "SIGKILL", "the owner must die by SIGKILL mid-backup");
+      assert.equal(
+        exit.signal,
+        "SIGKILL",
+        "the owner must die by SIGKILL mid-backup",
+      );
     }
     // FAIL-CLOSED STALE-OWNER POLICY: the dead owner's lock is NEVER
     // auto-reclaimed — a dead JS owner does not prove its external
     // maintenance children (docker/DB) are dead.
-    const { acquireMaintenanceLock, releaseMaintenanceLock, clearStaleMaintenanceLock } =
-      await awaitImport("../self-hosted/maintenance.mjs");
+    const {
+      acquireMaintenanceLock,
+      releaseMaintenanceLock,
+      clearStaleMaintenanceLock,
+    } = await awaitImport("../self-hosted/maintenance.mjs");
     const after = acquireMaintenanceLock();
-    assert.equal(after.owned, false, "the stale lock from the dead owner must NOT be auto-reclaimed");
+    assert.equal(
+      after.owned,
+      false,
+      "the stale lock from the dead owner must NOT be auto-reclaimed",
+    );
     assert.match(after.denied ?? "", /stale-maintenance-state/);
     assert.ok(
       existsSync(lockPath),
@@ -1113,9 +1518,17 @@ test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL → stale 
     );
     // The explicit operator clear (dead owner) then allows acquisition.
     const cleared = clearStaleMaintenanceLock();
-    assert.equal(cleared.cleared, true, "the explicit stale-lock clear must succeed for the dead owner");
+    assert.equal(
+      cleared.cleared,
+      true,
+      "the explicit stale-lock clear must succeed for the dead owner",
+    );
     const afterwards = acquireMaintenanceLock();
-    assert.equal(afterwards.owned, true, "acquisition must succeed after the explicit clear");
+    assert.equal(
+      afterwards.owned,
+      true,
+      "acquisition must succeed after the explicit clear",
+    );
     releaseMaintenanceLock(afterwards);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1133,30 +1546,45 @@ test("upgrade runs the REAL verified backup IN-PROCESS; owner SIGKILL → stale 
 });
 
 test("planReconciliation: every crash phase maps to a deterministic, never-destructive action", async () => {
-  const { planReconciliation, ACTIVE_DB, SAFETY_DB, ISOLATED_DB } = await awaitImport(
-    "../self-hosted/maintenance.mjs",
-  );
+  const { planReconciliation, ACTIVE_DB, SAFETY_DB, ISOLATED_DB } =
+    await awaitImport("../self-hosted/maintenance.mjs");
   const dbs = (extra) => [ACTIVE_DB, SAFETY_DB, ISOLATED_DB, ...extra];
   // VALID journal, complete -> proceed (durable completion evidence: the
   // retained safety copy is a completed-recovery artifact).
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "complete", databases: dbs([]) }).action,
+    planReconciliation({
+      journalState: "valid",
+      phase: "complete",
+      databases: dbs([]),
+    }).action,
     "proceed",
   );
   // VALID journal, crash after the first rename: original is the safety
   // copy; active is missing -> restore-original (NEVER dropped).
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }).action,
+    planReconciliation({
+      journalState: "valid",
+      phase: "swap-verified-to-active",
+      databases: [SAFETY_DB, ISOLATED_DB],
+    }).action,
     "restore-original",
   );
   // VALID journal, crash after candidate promotion: tenvyr holds the
   // unproven candidate, safety holds the original -> rollback-candidate.
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "post-gates", databases: dbs([]) }).action,
+    planReconciliation({
+      journalState: "valid",
+      phase: "post-gates",
+      databases: dbs([]),
+    }).action,
     "rollback-candidate",
   );
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: dbs([]) }).action,
+    planReconciliation({
+      journalState: "valid",
+      phase: "swap-verified-to-active",
+      databases: dbs([]),
+    }).action,
     "rollback-candidate",
   );
   // VALID journal, crash before the first rename: "verify-done" (quiesce
@@ -1164,17 +1592,26 @@ test("planReconciliation: every crash phase maps to a deterministic, never-destr
   // "swap-active-to-safety" (writers may be stopped, original active) ->
   // restart-original (availability is never left broken).
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "verify-done", databases: dbs([]) }).action,
+    planReconciliation({
+      journalState: "valid",
+      phase: "verify-done",
+      databases: dbs([]),
+    }).action,
     "proceed",
   );
   for (const phase of ["quiescing", "swap-active-to-safety"]) {
     assert.equal(
-      planReconciliation({ journalState: "valid", phase, databases: dbs([]) }).action,
+      planReconciliation({ journalState: "valid", phase, databases: dbs([]) })
+        .action,
       "restart-original",
       `valid phase ${phase} with active+safety must restart-original`,
     );
     assert.equal(
-      planReconciliation({ journalState: "valid", phase, databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+      planReconciliation({
+        journalState: "valid",
+        phase,
+        databases: [ACTIVE_DB, ISOLATED_DB],
+      }).action,
       "restart-original",
       `valid phase ${phase} with active+no-safety must restart-original`,
     );
@@ -1191,12 +1628,20 @@ test("planReconciliation: every crash phase maps to a deterministic, never-destr
   assert.equal(midReconciliation.action, "proceed");
   assert.equal(midReconciliation.restartServices, true);
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "post-gates", databases: [ACTIVE_DB, ISOLATED_DB] }).restartServices,
+    planReconciliation({
+      journalState: "valid",
+      phase: "post-gates",
+      databases: [ACTIVE_DB, ISOLATED_DB],
+    }).restartServices,
     true,
   );
   // VALID journal, no active AND no safety -> blocked.
   assert.equal(
-    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [ISOLATED_DB] }).action,
+    planReconciliation({
+      journalState: "valid",
+      phase: "swap-verified-to-active",
+      databases: [ISOLATED_DB],
+    }).action,
     "blocked",
   );
 
@@ -1207,7 +1652,8 @@ test("planReconciliation: every crash phase maps to a deterministic, never-destr
   //    path that can DROP safety.
   for (const journalState of ["absent", "malformed"]) {
     assert.equal(
-      planReconciliation({ journalState, databases: [SAFETY_DB, ISOLATED_DB] }).action,
+      planReconciliation({ journalState, databases: [SAFETY_DB, ISOLATED_DB] })
+        .action,
       "restore-original",
       `${journalState} journal with original-only-under-safety must restore-original`,
     );
@@ -1226,7 +1672,8 @@ test("planReconciliation: every crash phase maps to a deterministic, never-destr
     );
     //  - active + no safety -> clean state -> proceed.
     assert.equal(
-      planReconciliation({ journalState, databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+      planReconciliation({ journalState, databases: [ACTIVE_DB, ISOLATED_DB] })
+        .action,
       "proceed",
       `${journalState} journal with clean active layout must proceed`,
     );
@@ -1234,13 +1681,26 @@ test("planReconciliation: every crash phase maps to a deterministic, never-destr
   // The original authority must never be dropped by any plan: every
   // non-proceed action renames the safety copy back or blocks.
   for (const outcome of [
-    planReconciliation({ journalState: "valid", phase: "post-gates", databases: dbs([]) }),
-    planReconciliation({ journalState: "valid", phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }),
-    planReconciliation({ journalState: "absent", databases: [SAFETY_DB, ISOLATED_DB] }),
+    planReconciliation({
+      journalState: "valid",
+      phase: "post-gates",
+      databases: dbs([]),
+    }),
+    planReconciliation({
+      journalState: "valid",
+      phase: "swap-verified-to-active",
+      databases: [SAFETY_DB, ISOLATED_DB],
+    }),
+    planReconciliation({
+      journalState: "absent",
+      databases: [SAFETY_DB, ISOLATED_DB],
+    }),
     planReconciliation({ journalState: "malformed", databases: dbs([]) }),
   ]) {
     assert.ok(
-      ["restore-original", "rollback-candidate", "blocked"].includes(outcome.action),
+      ["restore-original", "rollback-candidate", "blocked"].includes(
+        outcome.action,
+      ),
     );
   }
 });
@@ -1276,7 +1736,11 @@ test("recovery journal: atomic writes never fail open; completion evidence survi
       const { state, journal } = readJournalState();
       assert.equal(state, "valid", `phase ${phase} must be read back as valid`);
       assert.equal(journal.phase, phase);
-      assert.equal(readJournal().startedAt, journal.startedAt, "startedAt must be stable");
+      assert.equal(
+        readJournal().startedAt,
+        journal.startedAt,
+        "startedAt must be stable",
+      );
     }
     // A leftover temp file (simulating a crash between the temp write and
     // the rename) must NEVER corrupt reads: the last valid record wins.
@@ -1320,10 +1784,8 @@ test("recovery journal: atomic writes never fail open; completion evidence survi
 });
 
 test("validateManifestContract fails closed on every corruption/tamper class", async () => {
-  const {
-    validateManifestContract,
-    inventoryFingerprintValue,
-  } = await awaitImport("../self-hosted/anchors.mjs");
+  const { validateManifestContract, inventoryFingerprintValue } =
+    await awaitImport("../self-hosted/anchors.mjs");
   const hash = (char) => char.repeat(64);
   const validManifest = {
     version: "v0.1.0",
@@ -1350,11 +1812,13 @@ test("validateManifestContract fails closed on every corruption/tamper class", a
   assert.equal(validateManifestContract(context).version, "v0.1.0");
   // Checksum triple: ANY copy mismatch fails.
   assert.throws(
-    () => validateManifestContract({ ...context, dumpChecksum: "d".repeat(64) }),
+    () =>
+      validateManifestContract({ ...context, dumpChecksum: "d".repeat(64) }),
     /checksum mismatch/,
   );
   assert.throws(
-    () => validateManifestContract({ ...context, sidecarChecksum: "d".repeat(64) }),
+    () =>
+      validateManifestContract({ ...context, sidecarChecksum: "d".repeat(64) }),
     /checksum mismatch/,
   );
   assert.throws(
@@ -1401,19 +1865,33 @@ test("validateManifestContract fails closed on every corruption/tamper class", a
     "non-lowercase checksum must fail",
   );
   // Missing manifest / missing verified marker.
-  assert.throws(() => validateManifestContract({ ...context, manifest: null }), /manifest is missing/);
   assert.throws(
-    () => validateManifestContract({ ...context, manifest: { ...validManifest, verified: undefined } }),
+    () => validateManifestContract({ ...context, manifest: null }),
+    /manifest is missing/,
+  );
+  assert.throws(
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, verified: undefined },
+      }),
     /not a VERIFIED backup/,
   );
   // Required structural anchors: null and malformed shapes fail; optional
   // anchors may be null (empty database).
-  for (const key of ["migrationLedgerFingerprint", "tableCountFingerprint", "planRevisionHashFingerprint"]) {
+  for (const key of [
+    "migrationLedgerFingerprint",
+    "tableCountFingerprint",
+    "planRevisionHashFingerprint",
+  ]) {
     assert.throws(
       () =>
         validateManifestContract({
           ...context,
-          manifest: { ...validManifest, anchors: { ...validManifest.anchors, [key]: null } },
+          manifest: {
+            ...validManifest,
+            anchors: { ...validManifest.anchors, [key]: null },
+          },
         }),
       /required anchor/,
       `${key} null must fail`,
@@ -1422,7 +1900,10 @@ test("validateManifestContract fails closed on every corruption/tamper class", a
       () =>
         validateManifestContract({
           ...context,
-          manifest: { ...validManifest, anchors: { ...validManifest.anchors, [key]: "not-hex" } },
+          manifest: {
+            ...validManifest,
+            anchors: { ...validManifest.anchors, [key]: "not-hex" },
+          },
         }),
       /required anchor/,
       `${key} malformed must fail`,
@@ -1430,25 +1911,43 @@ test("validateManifestContract fails closed on every corruption/tamper class", a
   }
   // Version / algorithm / sourceRevision / inventory shape.
   assert.throws(
-    () => validateManifestContract({ ...context, manifest: { ...validManifest, version: "v9.9.9" } }),
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, version: "v9.9.9" },
+      }),
     /does not match deployment/,
   );
   assert.throws(
-    () => validateManifestContract({ ...context, manifest: { ...validManifest, algorithm: "md5" } }),
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, algorithm: "md5" },
+      }),
     /unsupported backup checksum algorithm/,
   );
   assert.throws(
-    () => validateManifestContract({ ...context, manifest: { ...validManifest, sourceRevision: "short" } }),
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, sourceRevision: "short" },
+      }),
     /sourceRevision must be a full git commit SHA/,
   );
   assert.throws(
-    () => validateManifestContract({ ...context, manifest: { ...validManifest, tables: "some, other" } }),
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, tables: "some, other" },
+      }),
     /inventory does not match/,
   );
 });
 
 test("invariants checks are executable: environment contract and pinned images", async () => {
-  const { checkEnvironmentContract, checkPinnedImages } = await awaitImport("../self-hosted/invariants.mjs");
+  const { checkEnvironmentContract, checkPinnedImages } = await awaitImport(
+    "../self-hosted/invariants.mjs",
+  );
   assert.deepEqual(checkEnvironmentContract(COMPOSE), []);
   assert.deepEqual(checkPinnedImages(COMPOSE), []);
   // A floating tag is always flagged.
@@ -1457,12 +1956,20 @@ test("invariants checks are executable: environment contract and pinned images",
   ]);
   // A legacy DATABASE_URL in the orchestrator block is always flagged.
   assert.ok(
-    checkEnvironmentContract("  orchestrator:\n    environment:\n      DATABASE_URL: postgres://x\n      ORCHESTRATOR_PORT: \"3001\"\n  gateway:\n").length > 0,
+    checkEnvironmentContract(
+      '  orchestrator:\n    environment:\n      DATABASE_URL: postgres://x\n      ORCHESTRATOR_PORT: "3001"\n  gateway:\n',
+    ).length > 0,
   );
 });
 
 test("package.json wires the advertised upgrade and invariants commands", () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  assert.match(pkg.scripts["self-hosted:upgrade"], /scripts\/self-hosted\/upgrade\.mjs/);
-  assert.match(pkg.scripts["self-hosted:invariants"], /scripts\/self-hosted\/invariants\.mjs/);
+  assert.match(
+    pkg.scripts["self-hosted:upgrade"],
+    /scripts\/self-hosted\/upgrade\.mjs/,
+  );
+  assert.match(
+    pkg.scripts["self-hosted:invariants"],
+    /scripts\/self-hosted\/invariants\.mjs/,
+  );
 });

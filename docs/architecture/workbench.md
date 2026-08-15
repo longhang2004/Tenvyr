@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-12
+last_verified: 2026-08-15
 sources:
   - services/orchestrator/src/services/workbench-projection.service.ts
   - services/orchestrator/src/workbench.controller.ts
@@ -137,4 +137,47 @@ logs, chain of thought, or artifact bytes.
   never bytes), delegation, Capsule view, compare form, operator action
   audit trail — all bounded and truncated with explicit notes.
 
-## Not yet implemented (M10 slices 5–6)
+## Implemented (slice 5 — Canonical Next.js Operator Workbench)
+
+- Canonical Operator Workbench UI hosted via Next.js on port 4000:
+  - `/dashboard`: System readiness, runtime connection summary, active/recent runs, pending approvals attention, New Team Run CTA.
+  - `/runtimes`: Two tabs — **Agent Runtimes** (guided onboarding for Codex, Claude Code, OpenCode: CLI auth guidance, connection testing, revision, revocation) and **Model Sources** (P2).
+  - `/workspaces`: Workspace repository management, frozen snapshot views, mutable working tree contract clarity.
+  - `/runs/new`: Progressive team run wizard (Goal -> Workspace -> Team selection with template defaults -> Guardrails -> Acceptance evidence -> Client-side UUID idempotency launch).
+  - `/runs/[executionId]`: Supervised loop visibility (phase pipeline, iteration history, planner proposal cards, worker manifests, verifier decision outcome/reason/recommendation, WAITING_FOR_HUMAN approval/denial banner, Capsule drawer/tab, replay/cancel actions).
+  - `/runs`: All executions table with filter and pagination.
+  - `/approvals`: Dedicated human approval queue with one-click decision resolution.
+  - `/advanced/pipelines`: Migrated legacy pipeline YAML registration, execution triggering with reliable local default payload, DAG visualizer.
+  - `/advanced/audit`: Operator action audit log and execution comparison.
+  - `/workbench`: Canonical route parity redirecting to `/dashboard`.
+- Strongly-typed API client in `frontend/src/lib/tenvyr-api/` with typed DTOs, normalized error handling, and unit test coverage.
+- Bounded planner proposal, decision reason, and recommendation projection fields in `WorkbenchExecutionProjectionV1`.
+- Gateway proxying and Next.js route rewrites for seamless local and production operations.
+
+## Implemented (P2 — runtime model sources + auth UX)
+
+- `/runtimes` is now two tabs:
+  - **Agent Runtimes** — guided runtime cards per CLI (Codex, Claude Code,
+    OpenCode): Installed / Version / Authentication / Connection status /
+    Default Model, with **Test Runtime**, **Models**, and **Manage** actions.
+    Sign-in is a guided official flow: the page renders `Run: <command>`
+    with **Copy Command** and **Check Again** — Tenvyr never collects
+    provider credentials, never executes the command itself, and only
+    re-probes after the operator reports they ran it.
+  - **Model Sources** — source cards with Endpoint, Credential ref (an
+    environment variable NAME only — values never persist, never return to
+    the frontend, never log), Models count, and Last refreshed, plus
+    **Refresh Models**, **Test Source**, **Open 9Router** (ninerouter kind
+    only), and delete actions. The **Add Model Source** form offers three
+    kinds: 9Router / OpenAI-compatible / OpenCode Providers.
+
+- New audited Workbench command actions — `model-source-create/update/
+delete/test/refresh` — idempotent and audit-recorded exactly like the M10
+  connection commands (create / revise / test / revoke): one transaction for
+  the evidence row + authority mutation, same idempotency-key replay and
+  `IDEMPOTENCY_CONFLICT` handling. Catalogs are bounded on-demand
+  projections and are never persisted.
+- Connection-test contract: the test receipt is nested under
+  `data.result.receipt`; the frontend parses it with typed guards and never
+  fabricates readiness — a malformed or missing receipt renders
+  `Unknown / malformed response`, never `READY`.

@@ -353,14 +353,17 @@ describe("validateInvocationBinding", () => {
 
   it("accepts an invocation carrying the exact bound reference", () => {
     expect(
-      validateInvocationBinding(bound, { invocationId: "i-1", connection: reference }),
+      validateInvocationBinding(bound, {
+        invocationId: "i-1",
+        connection: reference,
+      }),
     ).toBeNull();
   });
 
   it("fails closed when the invocation carries NO reference for a bound agent", () => {
-    expect(
-      validateInvocationBinding(bound, { invocationId: "i-2" }),
-    ).toMatch(/no connection reference/);
+    expect(validateInvocationBinding(bound, { invocationId: "i-2" })).toMatch(
+      /no connection reference/,
+    );
   });
 
   it("fails closed on connectionId mismatch and on configHash mismatch (revision not authoritative)", () => {
@@ -388,6 +391,59 @@ describe("validateInvocationBinding", () => {
   });
 
   it("accepts connection-free invocations for unbound agents (legacy path)", () => {
-    expect(validateInvocationBinding(legacy, { invocationId: "i-6" })).toBeNull();
+    expect(
+      validateInvocationBinding(legacy, { invocationId: "i-6" }),
+    ).toBeNull();
+  });
+
+  // P2: requested model binding — fixed modelArgvPrefix is operator
+  // configuration; a model request without it (or an invalid model id)
+  // fails closed BEFORE spawn.
+
+  it("accepts a bounded requested model when the agent declares modelArgvPrefix", () => {
+    const withModel = { ...bound, modelArgvPrefix: ["--model"] };
+    expect(
+      validateInvocationBinding(withModel, {
+        invocationId: "i-7",
+        connection: reference,
+        requestedModelId: "gpt-5.5",
+      }),
+    ).toBeNull();
+    expect(
+      validateInvocationBinding(withModel, {
+        invocationId: "i-8",
+        connection: reference,
+        requestedModelId: "opencode-go/deepseek-v4-flash",
+      }),
+    ).toBeNull();
+  });
+
+  it("fails closed when a model is requested but the agent declares no modelArgvPrefix", () => {
+    expect(
+      validateInvocationBinding(bound, {
+        invocationId: "i-9",
+        connection: reference,
+        requestedModelId: "gpt-5.5",
+      }),
+    ).toMatch(/declares no modelArgvPrefix/);
+  });
+
+  it("fails closed on invalid model ids (hostile data never reaches argv)", () => {
+    const withModel = { ...bound, modelArgvPrefix: ["--model"] };
+    for (const bad of [
+      "gpt 5.5",
+      "",
+      `x${"a".repeat(300)}`,
+      "-leading",
+      "a;rm -rf /",
+    ]) {
+      expect(
+        validateInvocationBinding(withModel, {
+          invocationId: "i-10",
+          connection: reference,
+          requestedModelId: bad,
+        }),
+      ).toMatch(/invalid model id/);
+    }
   });
 });

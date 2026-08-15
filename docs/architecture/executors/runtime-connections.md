@@ -147,15 +147,42 @@ in `RESEARCH_REGISTER.md` and in the templates themselves):
   Claude Code is 2.1.97 while the pin is 2.1.228 — detected version is
   evidence, the pin is what the operator tested against.
 
+## Runtime Targets and model selection (P2 — implemented)
+
+A Runtime Connection answers "which runtime executes the work?". A **Model
+Source** (see [model sources and runtime targets](../model-sources.md))
+answers "where may Tenvyr safely discover model identifiers?". A **Runtime
+Target** `{ connectionId, modelId? }` is the usable unit selected for
+Planner / Worker / Verifier roles.
+
+Model selection is execution provenance (P2):
+
+- The frozen coordination configuration carries `plannerTarget` /
+  `verifierTarget` / `allowedTargets`; a Planner task may select only an
+  exact allowed target (`MODEL_NOT_ALLOWED` otherwise) and a
+  connection-only emission resolves deterministically only when that
+  connection has exactly one allowed model.
+- Steps freeze `metadata.tenvyrModelId`; the attempt claim freezes
+  `ExecutorDescriptorV1.requestedModelId`; the invocation carries
+  `requestedModelId` (wire contract); the executor host composes the FIXED
+  argv `[...args, ...modelArgvPrefix, modelId]` and fails closed when it
+  cannot.
+- Retries reuse the frozen descriptor; later catalog refreshes or source
+  changes never rewrite historical attempts; `observedModelId` is recorded
+  only when the runtime itself reports it. Tenvyr performs NO silent model
+  fallback.
+
 ## Remaining product surface (M8 slice 5 / M10 workbench)
 
 - Implemented: the local connection administration API (`POST/PATCH
   /connections`, `GET /api/connections`, test, revoke) with gateway proxies,
   guarded behind the open External Production Exposure Gate (loopback/private
   trusted-operator only).
-- Not yet implemented: the Workbench onboarding UI (create/revise/test/revoke
-  controls and connection-kind role selection in `workbench-page.html`) and
-  the public README/feature/terminology truth refresh.
+- Implemented (P2): the Workbench `/runtimes` UI with Agent Runtimes and
+  Model Sources tabs, guided official sign-in commands, and the
+  RuntimeTargetPicker for team runs.
+- Not yet implemented: a public README/feature/terminology truth refresh
+  beyond this document set.
 
 ## Guarantees
 

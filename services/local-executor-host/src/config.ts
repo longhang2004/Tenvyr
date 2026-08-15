@@ -62,6 +62,16 @@ export type HostAgentConfig = {
    * deterministic EXECUTOR_HOST_INVALID_STRUCTURED_RESULT failure.
    */
   structuredResult?: boolean;
+  /**
+   * P2: fixed argv elements inserted before the invocation's requested
+   * model id (e.g. ["--model"]), composing
+   * `[...args, ...modelArgvPrefix, modelId]`. The prefix is FIXED operator
+   * configuration — the model id is the only variable part, appended as a
+   * separate argv element (never concatenated, never shell-interpreted).
+   * Absent = the agent never composes a model argument (an invocation that
+   * carries a requestedModelId is REFUSED — fail closed).
+   */
+  modelArgvPrefix?: string[];
 };
 
 export type HostConfig = {
@@ -269,6 +279,9 @@ function parseAgentConfig(
     ...(connectionId !== undefined ? { connectionId } : {}),
     ...(configHash !== undefined ? { configHash } : {}),
     ...(structuredResult !== undefined ? { structuredResult } : {}),
+    ...(value.modelArgvPrefix !== undefined
+      ? { modelArgvPrefix: parseArgs(agent, value.modelArgvPrefix) }
+      : {}),
   };
 }
 

@@ -42,6 +42,8 @@ contracts.
 | Execution Capsule, export, replay, comparison, provenance | implemented | Service-level only; replay is a new execution and does not promise deterministic model output |
 | W3C context propagation                                   | implemented | Outbound `traceparent` only; no trusted inbound parentage or `tracestate`                     |
 | Product identity and package verification                 | implemented | Publication remains separately blocked                                                        |
+| Runtime Target model selection (P2)                       | implemented | Models freeze into execution provenance: allowedTargets authorization (MODEL_NOT_ALLOWED otherwise), deterministic single-model resolution, step metadata.tenvyrModelId -> ExecutorDescriptorV1.requestedModelId -> invocation -> fixed host argv (--model <id>); retries keep the model; catalog changes never rewrite history; observedModelId only when the runtime reports it; no Tenvyr-side fallback engine |
+| Model Sources (P2)                                        | implemented | Authoritative model_sources (33rd backup table) with credential env REFERENCES only; bounded on-demand catalogs never persisted; OpenCode first-class CLI discovery (auth file never read), Codex experimental best-effort, Claude manual, 9Router optional (default candidate http://localhost:20128/v1) + generic OpenAI-compatible client (http/https only, no userinfo, strict timeouts, bounded bytes/count/ids, redirect re-validation); audited source commands; guided official login commands in the UI |
 
 ## Partial capabilities
 

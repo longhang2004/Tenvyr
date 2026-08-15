@@ -27,6 +27,32 @@ import type { HostAgentConfig } from "./config";
 
 export const ESCALATION_GRACE_MS = 5_000;
 
+/** P2: bounded model identifier contract (mirrors the orchestrator's
+ *  MODEL_ID_PATTERN). Model IDs are DATA: pattern + length checked here,
+ *  composed as a separate argv element, never shell-interpreted. */
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/\-:@+]*$/;
+export const MODEL_ID_MAX_LENGTH = 256;
+
+/** P2: fixed argv separation. When the agent declares a fixed
+ *  `modelArgvPrefix` (e.g. ["--model"]) and the invocation carries a
+ *  validated requested model id, the composed argv is
+ *  `[...args, ...modelArgvPrefix, modelId]` — the prefix is fixed operator
+ *  configuration and the model id is one bounded data element. Without a
+ *  model, argv is exactly the configured args (Runtime default). */
+export function composeArgv(
+  profile: Pick<HostAgentConfig, "args" | "modelArgvPrefix">,
+  requestedModelId: string | undefined,
+): string[] {
+  if (
+    requestedModelId === undefined ||
+    profile.modelArgvPrefix === undefined ||
+    profile.modelArgvPrefix.length === 0
+  ) {
+    return profile.args;
+  }
+  return [...profile.args, ...profile.modelArgvPrefix, requestedModelId];
+}
+
 export type KillTrigger = "wall_time" | "invocation_deadline" | "shutdown";
 
 export type ProcessOutcome =
@@ -66,6 +92,9 @@ export type SupervisorInput = {
   env: Record<string, string>;
   /** Opaque canonical input delivered on the child's bounded stdin. */
   input: unknown;
+  /** Bounded requested model id (validated before spawn); composed behind
+   *  the agent's fixed modelArgvPrefix when both exist. */
+  requestedModelId?: string;
   /** Aborts on worker shutdown / SDK run timeout; escalates the group kill. */
   signal: AbortSignal;
   /** ISO deadline from the invocation, when present. */
@@ -81,13 +110,17 @@ export async function superviseProcess(
 ): Promise<ProcessOutcome> {
   return new Promise<ProcessOutcome>((resolve) => {
     const { profile, env, signal } = input;
-    const child = spawn(profile.command, profile.args, {
-      cwd: profile.cwd,
-      env,
-      shell: false,
-      detached: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(
+      profile.command,
+      composeArgv(profile, input.requestedModelId),
+      {
+        cwd: profile.cwd,
+        env,
+        shell: false,
+        detached: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
 
     let stdout = "";
     let stderr = "";
@@ -165,6 +198,9 @@ export async function superviseProcess(
     child.stderr?.on("data", (chunk: Buffer) => boundStream("stderr", chunk));
 
     // Opaque bounded canonical input on stdin, then EOF.
+    child.stdin?.on("error", () => {
+      // Ignored: child exited before reading stdin (EPIPE/ERR_STREAM_WRITE_AFTER_END)
+    });
     try {
       child.stdin?.write(JSON.stringify(input.input));
     } catch {

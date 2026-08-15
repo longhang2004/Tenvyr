@@ -17,6 +17,18 @@ Kafka Worker connections. Every claimed attempt freezes a secret-free
 connection revision and conservative capability set; provider selection and
 authentication stay inside the runtime.
 
+Runtime Targets (P2) make model choice execution provenance: the operator
+picks a model per Planner / Worker / Verifier role (or Runtime default),
+Tenvyr validates it against the frozen target allowlist, and the exact
+requested model is frozen into every attempt, invocation, and Capsule —
+retries never silently switch models and later catalog refreshes never
+rewrite history. Model Sources (P2) provide bounded, credential-free
+discovery: the OpenCode CLI catalog (the auth file is never read), an
+optional 9Router endpoint (Tenvyr is not a router and only reads its
+OpenAI-compatible `/models` catalog), and generic OpenAI-compatible
+endpoints (credential env-var references only, never values). Tenvyr
+performs no automatic model fallback.
+
 ## Why it exists
 
 Agent code is easy to start and hard to operate. A production workflow needs a

@@ -50,6 +50,8 @@ import { MilestoneNineCoordination1722270015000 } from "./migrations/17222700150
 import { MilestoneTenOperatorActions1722270016000 } from "./migrations/1722270016000-MilestoneTenOperatorActions";
 import { WorkspaceIdentity1722270018000 } from "./migrations/1722270018000-WorkspaceIdentity";
 import { CoordinationApprovalResume1722270017000 } from "./migrations/1722270017000-CoordinationApprovalResume";
+import { ModelSources1722270019000 } from "./migrations/1722270019000-ModelSources";
+import { ModelSourceEntity } from "../entities/model-source.entity";
 
 export function databaseOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -99,6 +101,7 @@ export function databaseOptions(
       CoordinationIterationEntity,
       WorkspaceEntity,
       OperatorActionEntity,
+      ModelSourceEntity,
     ],
     migrations: [
       MilestoneZeroFoundation1722270000000,
@@ -120,6 +123,7 @@ export function databaseOptions(
       MilestoneTenOperatorActions1722270016000,
       CoordinationApprovalResume1722270017000,
       WorkspaceIdentity1722270018000,
+      ModelSources1722270019000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

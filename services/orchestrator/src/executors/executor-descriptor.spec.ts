@@ -14,7 +14,10 @@ const httpConfiguration: AgentTransportConfiguration = {
   kind: "http",
   submitUrl: "https://security-agent.internal/v1/runs",
   outboundAuthentication: { type: "bearer", token: "bearer-secret" },
-  callbackAuthentication: { keyId: "security-agent-v1", secret: "callback-secret" },
+  callbackAuthentication: {
+    keyId: "security-agent-v1",
+    secret: "callback-secret",
+  },
   requestTimeoutMs: 5000,
   maxResponseBytes: 1024,
   delegationModes: ["opaque", "observed"],
@@ -64,7 +67,10 @@ describe("buildExecutorDescriptor", () => {
   });
 
   it("freezes the Kafka executor without a profile", () => {
-    const descriptor = buildExecutorDescriptor("code-reviewer", kafkaConfiguration);
+    const descriptor = buildExecutorDescriptor(
+      "code-reviewer",
+      kafkaConfiguration,
+    );
 
     expect(descriptor).toMatchObject({
       schemaVersion: "1",
@@ -105,7 +111,10 @@ describe("buildExecutorDescriptor", () => {
 });
 
 describe("parseExecutorDescriptor", () => {
-  const valid = buildExecutorDescriptor("remote-security-reviewer", httpConfiguration);
+  const valid = buildExecutorDescriptor(
+    "remote-security-reviewer",
+    httpConfiguration,
+  );
 
   it("round-trips a built descriptor", () => {
     expect(parseExecutorDescriptor(valid)).toEqual(valid);
@@ -204,6 +213,34 @@ describe("parseExecutorDescriptor", () => {
     expect(parsed).toEqual(valid);
     expect(parsed.schemaVersion).toBe(EXECUTOR_DESCRIPTOR_SCHEMA_VERSION);
   });
+
+  // P2: frozen requested model — data value with strict bounds; hostile
+  // model ids can never enter a persisted descriptor.
+
+  it("round-trips a frozen requestedModelId", () => {
+    const withModel = {
+      ...valid,
+      requestedModelId: "opencode-go/deepseek-v4-flash",
+    };
+    expect(parseExecutorDescriptor(withModel)).toEqual(withModel);
+  });
+
+  it("rejects malformed or oversized requestedModelId values", () => {
+    for (const bad of [
+      "gpt 5.5",
+      "",
+      "-leading",
+      "a;rm -rf /",
+      `x${"a".repeat(300)}`,
+      42,
+      { modelId: "gpt-5.5" },
+    ]) {
+      expectRejected(
+        () => parseExecutorDescriptor({ ...valid, requestedModelId: bad }),
+        "EXECUTOR_DESCRIPTOR_INVALID",
+      );
+    }
+  });
 });
 
 describe("readExecutorDescriptor (compatibility reader)", () => {
@@ -235,7 +272,10 @@ describe("readExecutorDescriptor (compatibility reader)", () => {
       "https://security-agent.internal/v1/runs",
     );
 
-    const kafkaCompat = readExecutorDescriptor({ agent: "code-reviewer" }, live);
+    const kafkaCompat = readExecutorDescriptor(
+      { agent: "code-reviewer" },
+      live,
+    );
     expect(kafkaCompat).toMatchObject({ schemaVersion: "1", kind: "kafka" });
     expect(kafkaCompat.httpProfile).toBeUndefined();
   });
@@ -253,9 +293,18 @@ describe("readExecutorDescriptor (compatibility reader)", () => {
       () => readExecutorDescriptor({ schemaVersion: "2", agent: "x" }, live),
       "EXECUTOR_SNAPSHOT_INVALID",
     );
-    expectRejected(() => readExecutorDescriptor({}, live), "EXECUTOR_SNAPSHOT_INVALID");
-    expectRejected(() => readExecutorDescriptor(null, live), "EXECUTOR_SNAPSHOT_INVALID");
-    expectRejected(() => readExecutorDescriptor("agent", live), "EXECUTOR_SNAPSHOT_INVALID");
+    expectRejected(
+      () => readExecutorDescriptor({}, live),
+      "EXECUTOR_SNAPSHOT_INVALID",
+    );
+    expectRejected(
+      () => readExecutorDescriptor(null, live),
+      "EXECUTOR_SNAPSHOT_INVALID",
+    );
+    expectRejected(
+      () => readExecutorDescriptor("agent", live),
+      "EXECUTOR_SNAPSHOT_INVALID",
+    );
     expectRejected(
       () => readExecutorDescriptor({ agent: "a".repeat(256) }, live),
       "EXECUTOR_SNAPSHOT_INVALID",
@@ -274,9 +323,10 @@ describe("readExecutorDescriptor (compatibility reader)", () => {
         throw new Error("expected rejection");
       } catch (error) {
         expect(error).toMatchObject({ retryable: false });
-        expect(["EXECUTOR_DESCRIPTOR_INVALID", "EXECUTOR_SNAPSHOT_INVALID"]).toContain(
-          (error as { code: string }).code,
-        );
+        expect([
+          "EXECUTOR_DESCRIPTOR_INVALID",
+          "EXECUTOR_SNAPSHOT_INVALID",
+        ]).toContain((error as { code: string }).code);
       }
     }
   });
@@ -340,7 +390,9 @@ describe("local executor profile (M8-S6 frozen CLI data)", () => {
       ...cliRevision(),
       profile: { ...cliRevision().profile, cli: undefined },
     } as ConnectionRevisionV1;
-    expect(attachLocalExecutorProfile(descriptor, noCli).localProfile).toBeUndefined();
+    expect(
+      attachLocalExecutorProfile(descriptor, noCli).localProfile,
+    ).toBeUndefined();
   });
 
   it("round-trips the frozen local profile through the strict parser", () => {

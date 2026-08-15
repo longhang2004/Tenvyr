@@ -98,7 +98,7 @@ describe("schema identity", () => {
       ),
     ).toEqual({
       "agent-invocation.v1.schema.json":
-        "49ae7795b067970cc4c12453bb159900daafcdafb9a83728fff923cb7b9a3cd9",
+        "9362353567e8e867e514955f326290cb83ea08a6d7176b6474db88a5f58ad0ad",
       "agent-result.v1.schema.json":
         "a3c46c4310d9305af2136fe8075ffd2f3fc6e36754c0e3c8323fe6c5786dbc39",
       "agent-event.v1.schema.json":

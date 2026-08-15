@@ -1,0 +1,147 @@
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import {
+  MalformedResponseError,
+  parseConnectionTestReceipt,
+  parseConnectionTestResult,
+} from "./guards.ts";
+
+/**
+ * P2 contract regression: the connection test receipt is nested under the
+ * Workbench command result (`data.result.receipt`). Server state is
+ * authoritative — "READY" is NEVER fabricated when state is absent,
+ * unknown, or malformed.
+ */
+
+const receiptFixture = (overrides = {}) => ({
+  connectionId: "conn:codex",
+  revisionNumber: 3,
+  testedAt: "2026-08-15T00:00:00.000Z",
+  state: "AUTH_REQUIRED",
+  reasonCode: "auth-required",
+  durationMs: 42,
+  ...overrides,
+});
+
+const envelopeFixture = (overrides = {}) => ({
+  action: "test-connection",
+  idempotencyKey: "key-1",
+  outcome: "executed",
+  result: {
+    connectionId: "conn:codex",
+    receipt: receiptFixture(),
+  },
+  ...overrides,
+});
+
+describe("parseConnectionTestReceipt", () => {
+  test("backend AUTH_REQUIRED receipt parses to AUTH_REQUIRED — never READY", () => {
+    const receipt = parseConnectionTestReceipt(receiptFixture());
+    assert.equal(receipt.state, "AUTH_REQUIRED");
+    assert.equal(receipt.reasonCode, "auth-required");
+    assert.notEqual(receipt.state, "READY");
+  });
+
+  test("AVAILABLE receipt with testedVersion parses", () => {
+    const receipt = parseConnectionTestReceipt(
+      receiptFixture({
+        state: "AVAILABLE",
+        reasonCode: "none",
+        testedVersion: "0.147.0",
+      }),
+    );
+    assert.equal(receipt.state, "AVAILABLE");
+    assert.equal(receipt.testedVersion, "0.147.0");
+  });
+
+  test("unknown state string is rejected as malformed (never coerced to READY)", () => {
+    assert.throws(
+      () => parseConnectionTestReceipt(receiptFixture({ state: "READY" })),
+      MalformedResponseError,
+    );
+    assert.throws(
+      () =>
+        parseConnectionTestReceipt(receiptFixture({ state: "SOMETHING_NEW" })),
+      (err) =>
+        err instanceof MalformedResponseError &&
+        /receipt\.state/.test(err.message),
+    );
+  });
+
+  test("missing or malformed fields are rejected", () => {
+    for (const overrides of [
+      { state: undefined },
+      { reasonCode: undefined },
+      { revisionNumber: "3" },
+      { durationMs: -1 },
+      { testedAt: "" },
+      { testedVersion: 42 },
+    ]) {
+      assert.throws(
+        () => parseConnectionTestReceipt(receiptFixture(overrides)),
+        MalformedResponseError,
+        JSON.stringify(overrides),
+      );
+    }
+    assert.throws(
+      () => parseConnectionTestReceipt(null),
+      MalformedResponseError,
+    );
+    assert.throws(
+      () => parseConnectionTestReceipt("READY"),
+      MalformedResponseError,
+    );
+  });
+});
+
+describe("parseConnectionTestResult (Workbench command envelope)", () => {
+  test("nested receipt under result.receipt is the authoritative state", () => {
+    const result = parseConnectionTestResult(envelopeFixture());
+    assert.equal(result.result.receipt.state, "AUTH_REQUIRED");
+    assert.equal(result.result.connectionId, "conn:codex");
+    // Regression: the page previously read res.data.status || res.data.state
+    // (both undefined at the top level) and fell through to "READY".
+    const envelope = envelopeFixture();
+    assert.equal(envelope.status, undefined);
+    assert.equal(envelope.state, undefined);
+  });
+
+  test("receipt missing entirely → malformed (never READY)", () => {
+    const envelope = envelopeFixture();
+    delete envelope.result.receipt;
+    assert.throws(
+      () => parseConnectionTestResult(envelope),
+      (err) =>
+        err instanceof MalformedResponseError && /receipt/.test(err.message),
+    );
+  });
+
+  test("result missing → malformed", () => {
+    assert.throws(
+      () => parseConnectionTestResult(envelopeFixture({ result: undefined })),
+      MalformedResponseError,
+    );
+  });
+
+  test("non test-connection action or unknown outcome → malformed", () => {
+    assert.throws(
+      () =>
+        parseConnectionTestResult(
+          envelopeFixture({ action: "revoke-connection" }),
+        ),
+      MalformedResponseError,
+    );
+    assert.throws(
+      () => parseConnectionTestResult(envelopeFixture({ outcome: "pending" })),
+      MalformedResponseError,
+    );
+  });
+
+  test("duplicate outcome still carries the stored receipt", () => {
+    const result = parseConnectionTestResult(
+      envelopeFixture({ outcome: "duplicate" }),
+    );
+    assert.equal(result.outcome, "duplicate");
+    assert.equal(result.result.receipt.state, "AUTH_REQUIRED");
+  });
+});

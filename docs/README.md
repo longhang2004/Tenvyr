@@ -44,6 +44,7 @@ prose. The conflict must still be corrected rather than ignored.
   [HTTP adapter v1](architecture/transports/http-agent-adapter-v1.md)
 - Executors: [local executor host](architecture/executors/local-executor-host.md),
   [runtime connections](architecture/executors/runtime-connections.md),
+  [model sources and runtime targets](architecture/model-sources.md),
   and the [native integration matrix](architecture/executors/native-integrations.md)
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md), and the
@@ -51,6 +52,8 @@ prose. The conflict must still be corrected rather than ignored.
 
 ## Operations
 
+- [User manual (English)](user-manual.md)
+- [Sổ tay người dùng (Tiếng Việt)](user-manual.vi.md)
 - [Local development](operations/local-development.md)
 - [Configuration reference](operations/configuration.md)
 - [Testing and verification](operations/testing-and-verification.md)
@@ -85,6 +88,7 @@ Developer tooling is not a Tenvyr production runtime feature.
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
+  the [P2 runtime model sources + model selection slice](plans/active/tenvyr-productization-roadmap/P2-runtime-model-sources/GOAL.md),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take

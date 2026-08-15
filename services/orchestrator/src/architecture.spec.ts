@@ -57,10 +57,7 @@ describe("application transport boundary", () => {
     ];
     let exposed = 0;
     for (const file of controllers) {
-      const source = fs.readFileSync(
-        path.resolve(__dirname, file),
-        "utf8",
-      );
+      const source = fs.readFileSync(path.resolve(__dirname, file), "utf8");
       if (
         /ExecutionCapsuleService|createExport|ExecutionReplay|provenance|projectTelemetry|\.compare\(/.test(
           source,

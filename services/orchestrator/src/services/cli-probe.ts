@@ -155,8 +155,7 @@ export async function runCliProbe(
       if (code !== 0) {
         const authExitCodes = profile.probe.authExitCodes ?? [];
         const authAnyNonZero = profile.probe.authAnyNonZero === true;
-        const authRequired =
-          authAnyNonZero || authExitCodes.includes(code);
+        const authRequired = authAnyNonZero || authExitCodes.includes(code);
         settle({
           ok: false,
           reasonCode: authRequired ? "auth-required" : "command-failed",
@@ -199,6 +198,151 @@ export async function runCliProbe(
 }
 
 /**
+ * P2: bounded CLI execution for DISCOVERY commands (opencode models,
+ * opencode auth list, codex debug models). Unlike the connection probe,
+ * this returns a bounded stdout so the caller can parse catalog data —
+ * but with the same safety contract: no shell, detached process group,
+ * wall-clock SIGTERM -> SIGKILL escalation, per-stream byte bounds,
+ * and stderr never returned (auth output can never leak). stdout is
+ * truncated at the bound and reported as `outputLimit` (fail-closed, never
+ * a partial parse of hostile output).
+ */
+export type BoundedCliCommandOutcome = {
+  ok: boolean;
+  exitCode: number | null;
+  stdout: string;
+  reasonCode:
+    | "none"
+    | "missing-executable"
+    | "command-failed"
+    | "timeout"
+    | "malformed-output";
+};
+
+export async function runBoundedCliCommand(input: {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  wallTimeMs?: number;
+  maxOutputBytes?: number;
+}): Promise<BoundedCliCommandOutcome> {
+  const wallTimeMs = input.wallTimeMs ?? CLI_BOUNDS.probeWallTimeMsDefault;
+  const maxOutputBytes =
+    input.maxOutputBytes ?? CLI_BOUNDS.probeOutputBytesDefault;
+  return new Promise<BoundedCliCommandOutcome>((resolve) => {
+    const child = spawn(input.command, input.args, {
+      cwd: input.cwd,
+      env: input.env ?? process.env,
+      shell: false,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdoutBytes = 0;
+    let stdoutChunks: Buffer[] = [];
+    let outputLimit = false;
+    let timedOut = false;
+    let spawnFailed = false;
+    let settled = false;
+    const timers: NodeJS.Timeout[] = [];
+
+    const settle = (outcome: BoundedCliCommandOutcome): void => {
+      if (settled) return;
+      settled = true;
+      for (const timer of timers) clearTimeout(timer);
+      resolve(outcome);
+    };
+
+    const killGroup = (signalName: "SIGTERM" | "SIGKILL"): void => {
+      if (child.pid === undefined || child.exitCode !== null) return;
+      try {
+        process.kill(-child.pid, signalName);
+      } catch {
+        // ESRCH: the group is already gone — the exit handler settles.
+      }
+    };
+
+    const escalate = (): void => {
+      timedOut = true;
+      killGroup("SIGTERM");
+      timers.push(
+        setTimeout(() => {
+          killGroup("SIGKILL");
+        }, PROBE_ESCALATION_GRACE_MS),
+      );
+    };
+
+    const deadline = setTimeout(escalate, wallTimeMs);
+    timers.push(deadline);
+
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      spawnFailed = true;
+      settle({
+        ok: false,
+        exitCode: null,
+        stdout: "",
+        reasonCode:
+          error.code === "ENOENT" ? "missing-executable" : "command-failed",
+      });
+    });
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (outputLimit) return;
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maxOutputBytes) {
+        outputLimit = true;
+        stdoutChunks = [];
+        escalate();
+        return;
+      }
+      stdoutChunks.push(chunk);
+    });
+
+    child.stderr?.on("data", () => {
+      // Drained but never captured: stderr can carry auth/session output.
+    });
+
+    child.on("close", (code) => {
+      if (settled) return;
+      if (spawnFailed) return;
+      if (outputLimit) {
+        settle({
+          ok: false,
+          exitCode: code,
+          stdout: "",
+          reasonCode: "malformed-output",
+        });
+        return;
+      }
+      if (timedOut) {
+        settle({
+          ok: false,
+          exitCode: code,
+          stdout: "",
+          reasonCode: "timeout",
+        });
+        return;
+      }
+      if (code !== 0) {
+        settle({
+          ok: false,
+          exitCode: code,
+          stdout: "",
+          reasonCode: "command-failed",
+        });
+        return;
+      }
+      settle({
+        ok: true,
+        exitCode: 0,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        reasonCode: "none",
+      });
+    });
+  });
+}
+
+/**
  * Extracts a bounded version from probe stdout: the first version-like token
  * of the first non-empty line (real CLIs append suffixes, e.g. Claude Code's
  * "2.1.97 (Claude Code)"). A token must start with a digit (or `v` + digit)
@@ -214,10 +358,7 @@ function extractVersion(stdout: Buffer): string | undefined | null {
   if (firstLine === undefined) return null;
   const token = firstLine.split(/\s+/).find((part) => /^v?\d/.test(part));
   if (token === undefined) return null;
-  if (
-    token.length > 128 ||
-    !/^[A-Za-z0-9._+\-]+$/.test(token)
-  ) {
+  if (token.length > 128 || !/^[A-Za-z0-9._+\-]+$/.test(token)) {
     return null;
   }
   return token;

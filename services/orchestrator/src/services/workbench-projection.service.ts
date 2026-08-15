@@ -93,6 +93,17 @@ export type WorkbenchExecutionProjectionV1 = {
     iterations: Array<{
       iterationNumber: number;
       plannerStepId: string | null;
+      plannerProposal: {
+        reason: string;
+        tasks: Array<{
+          taskId: string;
+          agent: string;
+          connectionId?: string;
+          required: boolean;
+          dependsOn: string[];
+          reason: string;
+        }>;
+      } | null;
       workerManifest: Array<{
         taskId: string;
         logicalStepId: string;
@@ -101,6 +112,11 @@ export type WorkbenchExecutionProjectionV1 = {
       }>;
       verifierStepId: string | null;
       decisionAction: string | null;
+      decisionReason: string | null;
+      decisionRecommendation: {
+        reason: string;
+        focus: string[];
+      } | null;
       decisionHash: string | null;
       outcome: string | null;
     }>;
@@ -150,9 +166,13 @@ export class WorkbenchProjectionService {
         this.dataSource,
       );
     this.delegation =
-      delegation ?? new DelegationService(this.dataSource, this.executionService);
-    this.capsules =
-      new ExecutionCapsuleService(this.dataSource, this.delegation, this.executionService);
+      delegation ??
+      new DelegationService(this.dataSource, this.executionService);
+    this.capsules = new ExecutionCapsuleService(
+      this.dataSource,
+      this.delegation,
+      this.executionService,
+    );
   }
 
   private readonly connections: RuntimeConnectionService;
@@ -222,8 +242,8 @@ export class WorkbenchProjectionService {
                 ? value
                 : Boolean(
                     value &&
-                      typeof value === "object" &&
-                      (value as { supported?: boolean }).supported,
+                    typeof value === "object" &&
+                    (value as { supported?: boolean }).supported,
                   ),
             source: "declared",
           })),
@@ -352,6 +372,31 @@ export class WorkbenchProjectionService {
         iterations: boundedIterations.map((iteration) => ({
           iterationNumber: iteration.iterationNumber,
           plannerStepId: iteration.plannerStepId ?? null,
+          plannerProposal: iteration.plannerProposal
+            ? {
+                reason:
+                  iteration.plannerProposal.reason?.slice(
+                    0,
+                    WORKBENCH_BOUNDS.maxReasonChars,
+                  ) ?? "",
+                tasks: (iteration.plannerProposal.tasks ?? [])
+                  .slice(0, WORKBENCH_BOUNDS.maxWorkersPerIteration)
+                  .map((task) => ({
+                    taskId: task.taskId,
+                    agent: task.agent,
+                    ...(task.connectionId
+                      ? { connectionId: task.connectionId }
+                      : {}),
+                    required: Boolean(task.required),
+                    dependsOn: Array.isArray(task.dependsOn)
+                      ? task.dependsOn.slice(0, 16)
+                      : [],
+                    reason:
+                      task.reason?.slice(0, WORKBENCH_BOUNDS.maxReasonChars) ??
+                      "",
+                  })),
+              }
+            : null,
           workerManifest: iteration.workerManifest.map((entry) => ({
             taskId: entry.taskId,
             logicalStepId: entry.logicalStepId,
@@ -360,6 +405,23 @@ export class WorkbenchProjectionService {
           })),
           verifierStepId: iteration.verifierStepId ?? null,
           decisionAction: iteration.decision?.action ?? null,
+          decisionReason:
+            iteration.decision?.reason?.slice(
+              0,
+              WORKBENCH_BOUNDS.maxReasonChars,
+            ) ?? null,
+          decisionRecommendation: iteration.decision?.recommendation
+            ? {
+                reason:
+                  iteration.decision.recommendation.reason?.slice(
+                    0,
+                    WORKBENCH_BOUNDS.maxReasonChars,
+                  ) ?? "",
+                focus: Array.isArray(iteration.decision.recommendation.focus)
+                  ? iteration.decision.recommendation.focus.slice(0, 16)
+                  : [],
+              }
+            : null,
           decisionHash: iteration.decisionHash ?? null,
           outcome: iteration.outcome ?? null,
         })),
@@ -446,18 +508,55 @@ export class WorkbenchProjectionService {
         activePlanRevisionId: execution.activePlanRevisionId,
       },
       coordination,
-      attempts: attempts.map((attempt) => ({
-        stepId: stepIdByRow.get(attempt.logicalStepId) ?? attempt.logicalStepId,
-        attemptNumber: attempt.attemptNumber,
-        status: attempt.status,
-        terminalAt: attempt.terminalAt?.toISOString() ?? null,
-        error: attempt.error?.slice(0, WORKBENCH_BOUNDS.maxReasonChars) ?? null,
-      })),
+      attempts: attempts.map((attempt) => {
+        const summary: {
+          stepId: string;
+          attemptNumber: number;
+          status: string;
+          terminalAt: string | null;
+          error: string | null;
+          requestedModelId?: string;
+          observedModelId?: string;
+        } = {
+          stepId:
+            stepIdByRow.get(attempt.logicalStepId) ?? attempt.logicalStepId,
+          attemptNumber: attempt.attemptNumber,
+          status: attempt.status,
+          terminalAt: attempt.terminalAt?.toISOString() ?? null,
+          error:
+            attempt.error?.slice(0, WORKBENCH_BOUNDS.maxReasonChars) ?? null,
+        };
+        // P2: frozen requested model — exact execution provenance from the
+        // attempt's frozen executor snapshot (absent = Runtime default).
+        const snapshot = (attempt.executorSnapshot ?? {}) as {
+          requestedModelId?: unknown;
+        };
+        if (
+          typeof snapshot.requestedModelId === "string" &&
+          snapshot.requestedModelId.length > 0 &&
+          snapshot.requestedModelId.length <= 256
+        ) {
+          summary.requestedModelId = snapshot.requestedModelId;
+        }
+        // P2: observed model ONLY when the runtime/worker itself reported
+        // it inside the bounded structured result — never fabricated.
+        const resultOutput = (attempt.result ?? null) as {
+          observedModelId?: unknown;
+        } | null;
+        if (
+          resultOutput !== null &&
+          typeof resultOutput.observedModelId === "string" &&
+          resultOutput.observedModelId.length > 0 &&
+          resultOutput.observedModelId.length <= 256
+        ) {
+          summary.observedModelId = resultOutput.observedModelId;
+        }
+        return summary;
+      }),
       attemptsTruncated,
       approvals: {
-        pending: approvals.filter(
-          (approval) => approval.status === "PENDING",
-        ).length,
+        pending: approvals.filter((approval) => approval.status === "PENDING")
+          .length,
         decided: approvals.length,
       },
       artifacts: artifacts.map((artifact) => ({

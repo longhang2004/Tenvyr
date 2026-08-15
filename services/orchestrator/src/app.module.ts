@@ -3,6 +3,7 @@ import { AppController } from "./app.controller";
 import { ConnectionsController } from "./connections.controller";
 import { WorkbenchController } from "./workbench.controller";
 import { WorkbenchCommandsController } from "./workbench-commands.controller";
+import { ModelSourcesController } from "./model-sources.controller";
 import { databaseProviders } from "./database/database.provider";
 import { repositoryProviders } from "./database/repository.providers";
 import { PipelineService } from "./services/pipeline.service";
@@ -39,6 +40,7 @@ import { RuntimeCoordinationService } from "./services/runtime-coordination.serv
 import { WorkbenchProjectionService } from "./services/workbench-projection.service";
 import { WorkbenchCommandService } from "./services/workbench-command.service";
 import { WorkspaceService } from "./services/workspace.service";
+import { ModelSourceService } from "./services/model-source.service";
 import { RuntimeOnboardingService } from "./services/runtime-onboarding.service";
 
 @Module({
@@ -49,6 +51,7 @@ import { RuntimeOnboardingService } from "./services/runtime-onboarding.service"
     ConnectionsController,
     WorkbenchController,
     WorkbenchCommandsController,
+    ModelSourcesController,
   ],
   providers: [
     ...databaseProviders,
@@ -91,6 +94,7 @@ import { RuntimeOnboardingService } from "./services/runtime-onboarding.service"
     WorkbenchCommandService,
     WorkspaceService,
     RuntimeOnboardingService,
+    ModelSourceService,
   ],
   exports: [
     ...databaseProviders,

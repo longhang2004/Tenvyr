@@ -60,6 +60,12 @@
         "revisionNumber": { "type": "integer", "minimum": 1 },
         "configHash": { "type": "string", "minLength": 1 }
       }
+    },
+    "requestedModelId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/\\-:@+]*$"
     }
   },
   "$defs": {

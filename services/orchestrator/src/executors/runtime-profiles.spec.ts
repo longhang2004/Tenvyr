@@ -65,16 +65,25 @@ describe("runtime profile templates (official sources, accessed 2026-08-12)", ()
     const codex = RUNTIME_PROFILE_TEMPLATES.codex;
     expect(codex.runArgs).toEqual(["exec", "--json", "--ephemeral", "-"]);
     expect(codex.runArgs.join(" ")).not.toMatch(/full-auto|yolo|--version/);
-    expect(codex.probe).toEqual({ args: ["login", "status"], authAnyNonZero: true });
+    expect(codex.probe).toEqual({
+      args: ["login", "status"],
+      authAnyNonZero: true,
+    });
 
     const claude = RUNTIME_PROFILE_TEMPLATES.claude;
     expect(claude.runArgs).toEqual(["-p", "--output-format", "json"]);
     expect(claude.probe).toEqual({ args: ["--version"], expectsVersion: true });
-    expect(claude.authProbe).toEqual({ args: ["auth", "status"], authExitCodes: [1] });
+    expect(claude.authProbe).toEqual({
+      args: ["auth", "status"],
+      authExitCodes: [1],
+    });
 
     const opencode = RUNTIME_PROFILE_TEMPLATES.opencode;
     expect(opencode.runArgs).toEqual(["run", "--format", "json"]);
-    expect(opencode.probe).toEqual({ args: ["--version"], expectsVersion: true });
+    expect(opencode.probe).toEqual({
+      args: ["--version"],
+      expectsVersion: true,
+    });
     expect(opencode.authProbe).toBeUndefined();
   });
 
@@ -89,6 +98,27 @@ describe("runtime profile templates (official sources, accessed 2026-08-12)", ()
     // Cancellation is not documented for `codex exec`: absent = unsupported.
     expect(codex.declaredCapabilities.cancellation).toBeUndefined();
     expect(codex.unsupported.length).toBeGreaterThan(0);
+  });
+
+  // P2 recheck 2026-08-15 (current official docs): every runtime documents
+  // a model override flag (`--model`) and an official runtime-owned login
+  // command. The argv prefix is FIXED configuration; the model id is
+  // appended as ONE bounded data element behind it.
+
+  it("documents the fixed model-argument argv prefix per runtime", () => {
+    for (const template of Object.values(RUNTIME_PROFILE_TEMPLATES)) {
+      expect(template.modelArgvPrefix).toEqual(["--model"]);
+    }
+  });
+
+  it("documents the official runtime-owned login command for the guided Sign-in UX", () => {
+    expect(RUNTIME_PROFILE_TEMPLATES.codex.loginCommand).toBe("codex login");
+    expect(RUNTIME_PROFILE_TEMPLATES.claude.loginCommand).toBe(
+      "claude auth login",
+    );
+    expect(RUNTIME_PROFILE_TEMPLATES.opencode.loginCommand).toBe(
+      "opencode auth login",
+    );
   });
 });
 
@@ -222,8 +252,7 @@ const describeLive = (
   template: RuntimeProfileTemplate,
 ) => {
   const binary = livePath(name);
-  const describeWith =
-    liveGatesEnabled() && binary ? describe : describe.skip;
+  const describeWith = liveGatesEnabled() && binary ? describe : describe.skip;
   describeWith(`live ${name} CLI (installed: ${binary ?? "none"})`, () => {
     const probe = async () =>
       runCliProbe(
@@ -235,49 +264,61 @@ const describeLive = (
     // (cold starts, update checks); the probe wall clock is bounded to 10s.
     const LIVE_TIMEOUT_MS = 30_000;
 
-    it("version/auth-status probe completes with a bounded, secret-free outcome", async () => {
-      const outcome = await probe();
-      const rendered = JSON.stringify(outcome);
-      expect(rendered.length).toBeLessThan(1024);
-      if (template.probe.expectsVersion) {
-        // A real version probe must succeed and yield a version.
-        expect(outcome.ok).toBe(true);
-        expect(outcome).toMatchObject({ reasonCode: "none" });
-        if (outcome.ok) expect(outcome.version).toMatch(/^[0-9]/);
-      } else {
-        // Codex login status: logged in OR auth-required — never a leak of
-        // the auth output into the outcome.
+    it(
+      "version/auth-status probe completes with a bounded, secret-free outcome",
+      async () => {
+        const outcome = await probe();
+        const rendered = JSON.stringify(outcome);
+        expect(rendered.length).toBeLessThan(1024);
+        if (template.probe.expectsVersion) {
+          // A real version probe must succeed and yield a version.
+          expect(outcome.ok).toBe(true);
+          expect(outcome).toMatchObject({ reasonCode: "none" });
+          if (outcome.ok) expect(outcome.version).toMatch(/^[0-9]/);
+        } else {
+          // Codex login status: logged in OR auth-required — never a leak of
+          // the auth output into the outcome.
+          expect(["none", "auth-required"]).toContain(outcome.reasonCode);
+          expect(outcome).not.toHaveProperty("version");
+          expect(rendered).not.toContain("Logged in");
+          expect(rendered).not.toContain("api_key");
+        }
+      },
+      LIVE_TIMEOUT_MS,
+    );
+
+    it(
+      "records the live detected version as evidence",
+      async () => {
+        const outcome = await probe();
+        if (template.probe.expectsVersion && outcome.ok && outcome.version) {
+          // Version formats differ across releases; the pin (${template.pinnedVersion})
+          // is the version the profile was written against, the detected value
+          // is evidence.
+          expect(outcome.version).toMatch(/^v?\d+(\.\d+)+/);
+          expect(outcome.version).not.toMatch(/[\s;]/);
+        }
+      },
+      LIVE_TIMEOUT_MS,
+    );
+
+    it(
+      "documented auth-status probe runs live with a bounded outcome",
+      async () => {
+        const authProbe = template.authProbe;
+        if (!authProbe) return;
+        const outcome = await runCliProbe(
+          { command: binary!, args: template.runArgs, probe: authProbe },
+          { ...process.env },
+        );
+        // Logged in (ok) or not (auth-required) — never a leak of auth output.
         expect(["none", "auth-required"]).toContain(outcome.reasonCode);
         expect(outcome).not.toHaveProperty("version");
-        expect(rendered).not.toContain("Logged in");
-        expect(rendered).not.toContain("api_key");
-      }
-    }, LIVE_TIMEOUT_MS);
-
-    it("records the live detected version as evidence", async () => {
-      const outcome = await probe();
-      if (template.probe.expectsVersion && outcome.ok && outcome.version) {
-        // Version formats differ across releases; the pin (${template.pinnedVersion})
-        // is the version the profile was written against, the detected value
-        // is evidence.
-        expect(outcome.version).toMatch(/^v?\d+(\.\d+)+/);
-        expect(outcome.version).not.toMatch(/[\s;]/);
-      }
-    }, LIVE_TIMEOUT_MS);
-
-    it("documented auth-status probe runs live with a bounded outcome", async () => {
-      const authProbe = template.authProbe;
-      if (!authProbe) return;
-      const outcome = await runCliProbe(
-        { command: binary!, args: template.runArgs, probe: authProbe },
-        { ...process.env },
-      );
-      // Logged in (ok) or not (auth-required) — never a leak of auth output.
-      expect(["none", "auth-required"]).toContain(outcome.reasonCode);
-      expect(outcome).not.toHaveProperty("version");
-      const rendered = JSON.stringify(outcome);
-      expect(rendered).not.toMatch(/authenticated|account|email|token/i);
-    }, LIVE_TIMEOUT_MS);
+        const rendered = JSON.stringify(outcome);
+        expect(rendered).not.toMatch(/authenticated|account|email|token/i);
+      },
+      LIVE_TIMEOUT_MS,
+    );
   });
 };
 

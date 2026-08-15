@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { superviseProcess, type SupervisorInput } from "../src/supervisor";
+import {
+  composeArgv,
+  superviseProcess,
+  type SupervisorInput,
+} from "../src/supervisor";
 import type { HostAgentConfig } from "../src/config";
 import { isProcessAlive } from "../src/state";
 
@@ -305,5 +311,82 @@ describe("superviseProcess", () => {
       kind: "killed",
       trigger: "invocation_deadline",
     });
+  });
+});
+
+describe("composeArgv (P2 model argument composition)", () => {
+  it("composes fixed argv + fixed prefix + model id as separate elements", () => {
+    expect(
+      composeArgv(
+        { args: ["exec", "--json", "-"], modelArgvPrefix: ["--model"] },
+        "gpt-5.5",
+      ),
+    ).toEqual(["exec", "--json", "-", "--model", "gpt-5.5"]);
+    expect(
+      composeArgv(
+        { args: ["run", "--format", "json"], modelArgvPrefix: ["--model"] },
+        "opencode-go/deepseek-v4-flash",
+      ),
+    ).toEqual([
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "opencode-go/deepseek-v4-flash",
+    ]);
+  });
+
+  it("never concatenates the model id into a flag string", () => {
+    const argv = composeArgv(
+      { args: ["-p"], modelArgvPrefix: ["--model"] },
+      "gpt-5.5",
+    );
+    expect(argv).toEqual(["-p", "--model", "gpt-5.5"]);
+    expect(argv.some((arg: string) => arg.includes("--model=gpt-5.5"))).toBe(
+      false,
+    );
+  });
+
+  it("Runtime default: no model id -> configured args unchanged", () => {
+    expect(
+      composeArgv(
+        { args: ["exec", "-"], modelArgvPrefix: ["--model"] },
+        undefined,
+      ),
+    ).toEqual(["exec", "-"]);
+  });
+
+  it("no modelArgvPrefix declared -> args unchanged even with a model id", () => {
+    expect(
+      composeArgv({ args: ["run"], modelArgvPrefix: undefined }, "gpt-5.5"),
+    ).toEqual(["run"]);
+    expect(
+      composeArgv({ args: ["run"], modelArgvPrefix: [] }, "gpt-5.5"),
+    ).toEqual(["run"]);
+  });
+
+  it("the composed argv is what actually spawns (end-to-end evidence)", async () => {
+    const script = join(
+      tmpdir(),
+      `tenvyr-argv-${Math.random().toString(36).slice(2)}.cjs`,
+    );
+    fs.writeFileSync(
+      script,
+      "process.stdout.write(JSON.stringify(process.argv.slice(1)));",
+    );
+    const outcome = await superviseProcess(
+      input({
+        profile: profile({
+          // The child prints its own argv as JSON on stdout.
+          args: [script],
+          modelArgvPrefix: ["--model"],
+        }),
+        requestedModelId: "gpt-5.5",
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: "succeeded" });
+    const argv = outcome.kind === "succeeded" ? JSON.parse(outcome.stdout) : [];
+    expect(argv).toEqual([script, "--model", "gpt-5.5"]);
+    fs.rmSync(script, { force: true });
   });
 });

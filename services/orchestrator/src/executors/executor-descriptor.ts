@@ -1,6 +1,7 @@
 import { AgentAdapterError } from "../agent-adapters/agent-adapter.errors";
 import type { AgentTransportConfiguration } from "../agent-adapters/agent-transport-config.service";
 import { sha256Json } from "../domain/canonical-json";
+import { MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from "../domain/coordination";
 import {
   parseConnectionReference,
   type ConnectionReferenceV1,
@@ -74,6 +75,11 @@ export type ExecutorDescriptorV1 = {
    *  selected a Runtime Connection at claim time; secret-free by
    *  construction. Absent for pre-M8 routing. */
   connection?: ConnectionReferenceV1;
+  /** P2: frozen requested model identifier (data value, pattern-bounded).
+   *  Frozen at claim from the step's `metadata.tenvyrModelId`; a retry or
+   *  a later catalog refresh can never rewrite it. Absent = Runtime
+   *  default (no model argument composed). */
+  requestedModelId?: string;
   /** M8-S6: frozen CLI execution data when the selected connection is a
    *  CLI runtime (codex/claude/opencode/generic-cli); secret-free by
    *  construction (references only). Absent for worker/agent-only routing. */
@@ -98,7 +104,13 @@ export const LOCAL_PROFILE_BOUNDS = {
 } as const;
 
 const HTTP_PROFILE_KEYS = ["submitUrl", "requestTimeoutMs", "maxResponseBytes"];
-const LOCAL_PROFILE_KEYS = ["command", "args", "cwd", "envAllowlist", "secrets"];
+const LOCAL_PROFILE_KEYS = [
+  "command",
+  "args",
+  "cwd",
+  "envAllowlist",
+  "secrets",
+];
 const ENV_NAME_PATTERN = /^[A-Za-z0-9_]+$/;
 const DESCRIPTOR_KEYS = [
   "schemaVersion",
@@ -108,6 +120,7 @@ const DESCRIPTOR_KEYS = [
   "configHash",
   "capabilities",
   "connection",
+  "requestedModelId",
   "localProfile",
   "httpProfile",
 ];
@@ -163,18 +176,16 @@ export function parseExecutorDescriptor(value: unknown): ExecutorDescriptorV1 {
   }
   assertOnlyKeys(snapshot, DESCRIPTOR_KEYS, "Executor descriptor");
 
-  const agent = boundedString(
-    snapshot.agent,
-    "agent",
-    BOUNDS.agentMaxLength,
-  );
+  const agent = boundedString(snapshot.agent, "agent", BOUNDS.agentMaxLength);
   const executorId = boundedString(
     snapshot.executorId,
     "executorId",
     BOUNDS.executorIdMaxLength,
   );
   if (snapshot.kind !== "kafka" && snapshot.kind !== "http") {
-    throw descriptorInvalid(`Executor descriptor kind "${String(snapshot.kind)}" is not supported`);
+    throw descriptorInvalid(
+      `Executor descriptor kind "${String(snapshot.kind)}" is not supported`,
+    );
   }
   const kind = snapshot.kind;
   const configHash = boundedString(
@@ -183,7 +194,9 @@ export function parseExecutorDescriptor(value: unknown): ExecutorDescriptorV1 {
     BOUNDS.configHashLength,
   );
   if (!/^[0-9a-f]{64}$/.test(configHash)) {
-    throw descriptorInvalid("Executor descriptor configHash must be 64 lowercase hex characters");
+    throw descriptorInvalid(
+      "Executor descriptor configHash must be 64 lowercase hex characters",
+    );
   }
   const capabilities = record(snapshot.capabilities, "executor capabilities");
   assertOnlyKeys(capabilities, ["cancel"], "Executor capabilities");
@@ -202,13 +215,28 @@ export function parseExecutorDescriptor(value: unknown): ExecutorDescriptorV1 {
   if (snapshot.connection !== undefined) {
     descriptor.connection = parseConnectionReference(snapshot.connection);
   }
+  if (snapshot.requestedModelId !== undefined) {
+    if (
+      typeof snapshot.requestedModelId !== "string" ||
+      snapshot.requestedModelId.length === 0 ||
+      snapshot.requestedModelId.length > MODEL_ID_MAX_LENGTH ||
+      !MODEL_ID_PATTERN.test(snapshot.requestedModelId)
+    ) {
+      throw descriptorInvalid(
+        `Executor descriptor requestedModelId must match ${MODEL_ID_PATTERN} and be at most ${MODEL_ID_MAX_LENGTH} characters`,
+      );
+    }
+    descriptor.requestedModelId = snapshot.requestedModelId;
+  }
   if (snapshot.localProfile !== undefined) {
     descriptor.localProfile = parseLocalProfile(snapshot.localProfile);
   }
   if (kind === "http") {
     descriptor.httpProfile = parseHttpProfile(snapshot.httpProfile);
   } else if (snapshot.httpProfile !== undefined) {
-    throw descriptorInvalid("Kafka executor descriptors must not carry an HTTP profile");
+    throw descriptorInvalid(
+      "Kafka executor descriptors must not carry an HTTP profile",
+    );
   }
   return descriptor;
 }
@@ -256,10 +284,17 @@ export function parseLocalProfile(value: unknown): LocalExecutorProfileV1 {
   const args = parseLocalArgs(profile.args);
   const local: LocalExecutorProfileV1 = { command, args };
   if (profile.cwd !== undefined) {
-    local.cwd = boundedString(profile.cwd, "cwd", LOCAL_PROFILE_BOUNDS.commandMaxLength);
+    local.cwd = boundedString(
+      profile.cwd,
+      "cwd",
+      LOCAL_PROFILE_BOUNDS.commandMaxLength,
+    );
   }
   if (profile.envAllowlist !== undefined) {
-    local.envAllowlist = parseEnvReferenceMap(profile.envAllowlist, "envAllowlist");
+    local.envAllowlist = parseEnvReferenceMap(
+      profile.envAllowlist,
+      "envAllowlist",
+    );
   }
   if (profile.secrets !== undefined) {
     local.secrets = parseEnvReferenceMap(profile.secrets, "secrets");
@@ -268,7 +303,10 @@ export function parseLocalProfile(value: unknown): LocalExecutorProfileV1 {
 }
 
 function parseLocalArgs(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length > LOCAL_PROFILE_BOUNDS.argsMaxCount) {
+  if (
+    !Array.isArray(value) ||
+    value.length > LOCAL_PROFILE_BOUNDS.argsMaxCount
+  ) {
     throw descriptorInvalid(
       `Local executor profile args must be an array of at most ${LOCAL_PROFILE_BOUNDS.argsMaxCount} strings`,
     );
@@ -326,7 +364,11 @@ export function readExecutorDescriptor(
   snapshot: unknown,
   liveConfig: (agent: string) => AgentTransportConfiguration,
 ): ExecutorDescriptorV1 {
-  if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+  if (
+    snapshot === null ||
+    typeof snapshot !== "object" ||
+    Array.isArray(snapshot)
+  ) {
     throw snapshotInvalid("Executor snapshot must be an object");
   }
   const value = snapshot as Record<string, unknown>;
@@ -361,28 +403,48 @@ function parseHttpProfile(value: unknown): HttpExecutorProfileV1 {
   try {
     url = new URL(submitUrl);
   } catch {
-    throw descriptorInvalid("Executor HTTP profile submitUrl is not a valid URL");
+    throw descriptorInvalid(
+      "Executor HTTP profile submitUrl is not a valid URL",
+    );
   }
   if (url.username || url.password) {
-    throw descriptorInvalid("Executor HTTP profile submitUrl must not contain credentials");
+    throw descriptorInvalid(
+      "Executor HTTP profile submitUrl must not contain credentials",
+    );
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw descriptorInvalid("Executor HTTP profile submitUrl must use http or https");
+    throw descriptorInvalid(
+      "Executor HTTP profile submitUrl must use http or https",
+    );
   }
-  const requestTimeoutMs = positiveInteger(profile.requestTimeoutMs, "requestTimeoutMs");
-  const maxResponseBytes = positiveInteger(profile.maxResponseBytes, "maxResponseBytes");
+  const requestTimeoutMs = positiveInteger(
+    profile.requestTimeoutMs,
+    "requestTimeoutMs",
+  );
+  const maxResponseBytes = positiveInteger(
+    profile.maxResponseBytes,
+    "maxResponseBytes",
+  );
   return { submitUrl, requestTimeoutMs, maxResponseBytes };
 }
 
 function assertAgent(agent: string): void {
-  if (typeof agent !== "string" || !agent.trim() || agent.length > BOUNDS.agentMaxLength) {
+  if (
+    typeof agent !== "string" ||
+    !agent.trim() ||
+    agent.length > BOUNDS.agentMaxLength
+  ) {
     throw descriptorInvalid(
       `Executor agent must be a non-empty string of at most ${BOUNDS.agentMaxLength} characters`,
     );
   }
 }
 
-function boundedString(value: unknown, field: string, maxLength: number): string {
+function boundedString(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string {
   if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
     throw descriptorInvalid(
       `Executor descriptor ${field} must be a non-empty string of at most ${maxLength} characters`,
@@ -393,7 +455,9 @@ function boundedString(value: unknown, field: string, maxLength: number): string
 
 function positiveInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw descriptorInvalid(`Executor descriptor ${field} must be a positive integer`);
+    throw descriptorInvalid(
+      `Executor descriptor ${field} must be a positive integer`,
+    );
   }
   return value;
 }
@@ -412,18 +476,30 @@ function assertOnlyKeys(
 ): void {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
-    throw descriptorInvalid(`${what} contains an unsupported field "${unknown[0]}"`);
+    throw descriptorInvalid(
+      `${what} contains an unsupported field "${unknown[0]}"`,
+    );
   }
 }
 
 function descriptorInvalid(message: string): AgentAdapterError {
-  return new AgentAdapterError("EXECUTOR_DESCRIPTOR_INVALID", "executor", message, {
-    retryable: false,
-  });
+  return new AgentAdapterError(
+    "EXECUTOR_DESCRIPTOR_INVALID",
+    "executor",
+    message,
+    {
+      retryable: false,
+    },
+  );
 }
 
 function snapshotInvalid(message: string): AgentAdapterError {
-  return new AgentAdapterError("EXECUTOR_SNAPSHOT_INVALID", "executor", message, {
-    retryable: false,
-  });
+  return new AgentAdapterError(
+    "EXECUTOR_SNAPSHOT_INVALID",
+    "executor",
+    message,
+    {
+      retryable: false,
+    },
+  );
 }

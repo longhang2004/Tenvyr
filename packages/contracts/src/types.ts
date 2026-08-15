@@ -36,6 +36,14 @@ export type AgentInvocationV1 = {
     revisionNumber: number;
     configHash: string;
   };
+  /**
+   * P2: the frozen requested model identifier (data value; bounded
+   * pattern-validated identifier). Frozen at attempt claim from the step's
+   * `metadata.tenvyrModelId`; the executor host composes it behind its own
+   * FIXED argv prefix (never pipeline-supplied argv) and fails closed when
+   * it cannot. Absent = Runtime default. Never an observed/fallback model.
+   */
+  requestedModelId?: string;
 };
 
 export type AgentResultStatus =

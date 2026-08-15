@@ -69,6 +69,23 @@ export type VerifierAction = (typeof VERIFIER_ACTIONS)[number];
 
 const TASK_ID_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 
+/**
+ * P2: bounded model identifier. Model IDs are DATA — they are validated,
+ * bounded, and appended to FIXED runtime argv as separate argv elements;
+ * they can never become shell fragments or free-form pipeline argv.
+ * Pattern: starts alphanumeric, then alphanumeric plus `._/-:@+`
+ * (covers `gpt-5.5`, `opencode-go/deepseek-v4-flash`, `cc/claude-opus-...`).
+ */
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/\-:@+]*$/;
+export const MODEL_ID_MAX_LENGTH = 256;
+
+/** P2: a usable Runtime Target — connection + optional model. The model
+ *  stays a data value; selection authority remains Tenvyr. */
+export type RuntimeTargetRefV1 = {
+  connectionId: string;
+  modelId?: string;
+};
+
 export class CoordinationError extends Error {
   constructor(
     public readonly code:
@@ -80,6 +97,7 @@ export class CoordinationError extends Error {
       | "LIMIT_EXCEEDED"
       | "AGENT_NOT_ALLOWED"
       | "CONNECTION_NOT_ALLOWED"
+      | "MODEL_NOT_ALLOWED"
       | "EXECUTOR_NOT_ALLOWED"
       | "PHASE_TRANSITION_INVALID"
       | "AGGREGATION_INVALID",
@@ -112,6 +130,14 @@ export type CoordinationConfigV1 = {
   verifier: CoordinatorSelectionV1;
   /** Allowlist of worker agents/connections the Planner may select. */
   allowedWorkers: CoordinatorSelectionV1[];
+  /** P2: frozen Planner Runtime Target (connection kind only). */
+  plannerTarget?: RuntimeTargetRefV1;
+  /** P2: frozen Verifier Runtime Target (connection kind only). */
+  verifierTarget?: RuntimeTargetRefV1;
+  /** P2: worker Runtime Target allowlist. Every entry's connectionId must
+   *  also appear in `allowedWorkers`; a Planner task may select exactly one
+   *  of these (connectionId + modelId). */
+  allowedTargets?: RuntimeTargetRefV1[];
   maxIterations: number;
   maxWorkersPerIteration: number;
   maxTotalWorkers: number;
@@ -130,6 +156,9 @@ export type TaskProposalV1 = {
   agent: string;
   /** Optional M8 connection selector; runtime selection stays in Tenvyr. */
   connectionId?: string;
+  /** P2: optional model selector (data value). Valid only together with
+   *  `connectionId`, and only against the frozen `allowedTargets`. */
+  modelId?: string;
   /** Bounded JSON input; never a secret value, command, or nested loop. */
   input: unknown;
   /** Dependencies on taskIds WITHIN this iteration (acyclic). */
@@ -248,9 +277,30 @@ const TRANSITIONS: Record<CoordinationPhaseEvent, CoordinationPhase[]> = {
   wait: ["DECIDING"],
   approvalGranted: ["WAITING_FOR_HUMAN"],
   approvalDenied: ["WAITING_FOR_HUMAN"],
-  deadline: ["PLANNING", "BATCH_VALIDATION", "WORKING", "VERIFYING", "DECIDING", "WAITING_FOR_HUMAN"],
-  cancel: ["PLANNING", "BATCH_VALIDATION", "WORKING", "VERIFYING", "DECIDING", "WAITING_FOR_HUMAN"],
-  limitReached: ["PLANNING", "BATCH_VALIDATION", "WORKING", "VERIFYING", "DECIDING", "WAITING_FOR_HUMAN"],
+  deadline: [
+    "PLANNING",
+    "BATCH_VALIDATION",
+    "WORKING",
+    "VERIFYING",
+    "DECIDING",
+    "WAITING_FOR_HUMAN",
+  ],
+  cancel: [
+    "PLANNING",
+    "BATCH_VALIDATION",
+    "WORKING",
+    "VERIFYING",
+    "DECIDING",
+    "WAITING_FOR_HUMAN",
+  ],
+  limitReached: [
+    "PLANNING",
+    "BATCH_VALIDATION",
+    "WORKING",
+    "VERIFYING",
+    "DECIDING",
+    "WAITING_FOR_HUMAN",
+  ],
 };
 
 const EVENT_PHASE: Record<CoordinationPhaseEvent, CoordinationPhase> = {
@@ -314,7 +364,12 @@ function boundedInteger(
   max: number,
   code: CoordinationError["code"] = "CONFIG_INVALID",
 ): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < min ||
+    value > max
+  ) {
     throw new CoordinationError(
       code,
       `${field} must be an integer between ${min} and ${max}`,
@@ -355,6 +410,53 @@ export function parseCoordinationSelection(
     selection.agent = boundedString(snapshot.agent, `${field} agent`, 255);
   }
   return selection;
+}
+
+/** Strict parse of a bounded model identifier (data value; pattern and
+ *  length enforced — it can never become argv or shell input). */
+export function parseModelId(
+  value: unknown,
+  field: string,
+  code: CoordinationError["code"] = "CONFIG_INVALID",
+): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MODEL_ID_MAX_LENGTH ||
+    !MODEL_ID_PATTERN.test(value)
+  ) {
+    throw new CoordinationError(
+      code,
+      `${field} must match ${MODEL_ID_PATTERN} and be at most ${MODEL_ID_MAX_LENGTH} characters`,
+    );
+  }
+  return value;
+}
+
+/** Strict parse of a Runtime Target reference. */
+export function parseRuntimeTargetRef(
+  value: unknown,
+  field: string,
+  code: CoordinationError["code"] = "CONFIG_INVALID",
+): RuntimeTargetRefV1 {
+  const snapshot = isRecord(value) ? value : {};
+  const connectionId = boundedString(
+    snapshot.connectionId,
+    `${field} connectionId`,
+    255,
+    code,
+  );
+  if (!CONNECTION_ID_PATTERN.test(connectionId)) {
+    throw new CoordinationError(
+      code,
+      `${field} connectionId must match ${CONNECTION_ID_PATTERN}`,
+    );
+  }
+  const target: RuntimeTargetRefV1 = { connectionId };
+  if (snapshot.modelId !== undefined) {
+    target.modelId = parseModelId(snapshot.modelId, `${field} modelId`, code);
+  }
+  return target;
 }
 
 /** Strict parse of the frozen team configuration. */
@@ -420,13 +522,82 @@ export function parseCoordinationConfig(value: unknown): CoordinationConfigV1 {
     snapshot.allowedExecutors.length === 0 ||
     snapshot.allowedExecutors.length > 32 ||
     !snapshot.allowedExecutors.every(
-      (entry) => typeof entry === "string" && entry.trim().length > 0 && entry.length <= 255,
+      (entry) =>
+        typeof entry === "string" &&
+        entry.trim().length > 0 &&
+        entry.length <= 255,
     )
   ) {
     throw new CoordinationError(
       "CONFIG_INVALID",
       "allowedExecutors must be an array of 1-32 non-empty strings",
     );
+  }
+  // P2: frozen role targets — connection-kind roles only, and the target's
+  // connectionId must BE the role's own connection (a Planner can never
+  // route its own step onto another connection).
+  if (snapshot.plannerTarget !== undefined) {
+    const target = parseRuntimeTargetRef(
+      snapshot.plannerTarget,
+      "plannerTarget",
+    );
+    if (
+      config.planner.kind !== "connection" ||
+      config.planner.name !== target.connectionId
+    ) {
+      throw new CoordinationError(
+        "CONFIG_INVALID",
+        "plannerTarget requires a connection-kind planner whose name equals the target connectionId",
+      );
+    }
+    config.plannerTarget = target;
+  }
+  if (snapshot.verifierTarget !== undefined) {
+    const target = parseRuntimeTargetRef(
+      snapshot.verifierTarget,
+      "verifierTarget",
+    );
+    if (
+      config.verifier.kind !== "connection" ||
+      config.verifier.name !== target.connectionId
+    ) {
+      throw new CoordinationError(
+        "CONFIG_INVALID",
+        "verifierTarget requires a connection-kind verifier whose name equals the target connectionId",
+      );
+    }
+    config.verifierTarget = target;
+  }
+  // P2: worker Runtime Target allowlist — every connectionId must already
+  // be an allowed connection worker, and the list is bounded.
+  if (snapshot.allowedTargets !== undefined) {
+    if (
+      !Array.isArray(snapshot.allowedTargets) ||
+      snapshot.allowedTargets.length === 0 ||
+      snapshot.allowedTargets.length > COORDINATION_BOUNDS.maxAllowedWorkers
+    ) {
+      throw new CoordinationError(
+        "CONFIG_INVALID",
+        `allowedTargets must be an array of 1-${COORDINATION_BOUNDS.maxAllowedWorkers} runtime targets`,
+      );
+    }
+    const allowedConnectionIds = new Set(
+      config.allowedWorkers
+        .filter((selection) => selection.kind === "connection")
+        .map((selection) => selection.name),
+    );
+    const targets = snapshot.allowedTargets.map((entry, index) =>
+      parseRuntimeTargetRef(entry, `allowedTargets[${index}]`),
+    );
+    for (const target of targets) {
+      if (!allowedConnectionIds.has(target.connectionId)) {
+        throw new CoordinationError(
+          "CONFIG_INVALID",
+          `allowedTargets entry "${target.connectionId}" is not an allowed connection worker`,
+        );
+      }
+    }
+    config.allowedTargets = targets;
   }
   if (snapshot.budgetAccountId !== undefined) {
     config.budgetAccountId = boundedString(
@@ -493,13 +664,21 @@ export function parseTaskBatchProposal(value: unknown): TaskBatchProposalV1 {
     }
   }
   assertAcyclic(tasks);
-  boundedBytes(snapshot, "TaskBatchProposal", COORDINATION_BOUNDS.maxBatchSerializedBytes);
+  boundedBytes(
+    snapshot,
+    "TaskBatchProposal",
+    COORDINATION_BOUNDS.maxBatchSerializedBytes,
+  );
   return {
     schemaVersion: 1,
     iterationNumber,
     baseRevision,
     tasks,
-    reason: boundedString(snapshot.reason, "reason", COORDINATION_BOUNDS.maxReasonLength),
+    reason: boundedString(
+      snapshot.reason,
+      "reason",
+      COORDINATION_BOUNDS.maxReasonLength,
+    ),
   };
 }
 
@@ -537,14 +716,22 @@ function parseTaskProposal(value: unknown, index: number): TaskProposalV1 {
       `tasks[${index}].required must be a boolean`,
     );
   }
-  boundedBytes(snapshot.input ?? null, `tasks[${index}].input`, COORDINATION_BOUNDS.maxTaskInputBytes);
+  boundedBytes(
+    snapshot.input ?? null,
+    `tasks[${index}].input`,
+    COORDINATION_BOUNDS.maxTaskInputBytes,
+  );
   const task: TaskProposalV1 = {
     taskId,
     agent,
     input: snapshot.input ?? null,
     dependsOn: dependsOn as string[],
     required: snapshot.required,
-    reason: boundedString(snapshot.reason, `tasks[${index}].reason`, COORDINATION_BOUNDS.maxReasonLength),
+    reason: boundedString(
+      snapshot.reason,
+      `tasks[${index}].reason`,
+      COORDINATION_BOUNDS.maxReasonLength,
+    ),
   };
   if (snapshot.connectionId !== undefined) {
     const connectionId = boundedString(
@@ -559,6 +746,19 @@ function parseTaskProposal(value: unknown, index: number): TaskProposalV1 {
       );
     }
     task.connectionId = connectionId;
+  }
+  if (snapshot.modelId !== undefined) {
+    if (task.connectionId === undefined) {
+      throw new CoordinationError(
+        "TASK_INVALID",
+        `tasks[${index}].modelId requires a connectionId (model selection is always connection-scoped)`,
+      );
+    }
+    task.modelId = parseModelId(
+      snapshot.modelId,
+      `tasks[${index}].modelId`,
+      "TASK_INVALID",
+    );
   }
   if (snapshot.timeoutMs !== undefined) {
     task.timeoutMs = boundedInteger(
@@ -632,16 +832,54 @@ export function validateTaskBatchProposal(
     );
   }
   for (const task of proposal.tasks) {
-    const allowed = config.allowedWorkers.some(
-      (selection) =>
-        selection.kind === "agent"
-          ? task.connectionId === undefined && selection.name === task.agent
-          : selection.kind === "connection" && selection.name === task.connectionId,
+    const allowed = config.allowedWorkers.some((selection) =>
+      selection.kind === "agent"
+        ? task.connectionId === undefined && selection.name === task.agent
+        : selection.kind === "connection" &&
+          selection.name === task.connectionId,
     );
     if (!allowed) {
       throw new CoordinationError(
-        task.connectionId !== undefined ? "CONNECTION_NOT_ALLOWED" : "AGENT_NOT_ALLOWED",
+        task.connectionId !== undefined
+          ? "CONNECTION_NOT_ALLOWED"
+          : "AGENT_NOT_ALLOWED",
         `task "${task.taskId}" selects agent "${task.agent}"${task.connectionId ? ` connection "${task.connectionId}"` : ""} outside the allowlist`,
+      );
+    }
+    // P2: model selection is bounded by the frozen Runtime Target allowlist.
+    // A Planner may choose only targets frozen in `allowedTargets`; it can
+    // never pair an allowed connection with an arbitrary model. When the
+    // Planner emits only a connection and that connection has exactly one
+    // allowed model, deterministic resolution is acceptable (frozen at plan
+    // compile); two or more allowed models REQUIRE the Planner to specify
+    // one — Tenvyr never chooses arbitrarily.
+    if (task.connectionId !== undefined) {
+      const targetsForConnection =
+        config.allowedTargets?.filter(
+          (target) => target.connectionId === task.connectionId,
+        ) ?? [];
+      if (task.modelId !== undefined) {
+        const modelAllowed = targetsForConnection.some(
+          (target) => target.modelId === task.modelId,
+        );
+        if (!modelAllowed) {
+          throw new CoordinationError(
+            "MODEL_NOT_ALLOWED",
+            `task "${task.taskId}" selects model "${task.modelId}" for connection "${task.connectionId}" outside the frozen allowedTargets`,
+          );
+        }
+      } else if (targetsForConnection.length > 1) {
+        throw new CoordinationError(
+          "MODEL_NOT_ALLOWED",
+          `task "${task.taskId}" selects connection "${task.connectionId}" with ${targetsForConnection.length} allowed models; the Planner must specify an allowed modelId`,
+        );
+      }
+    } else if (task.modelId !== undefined) {
+      // Unreachable via parseTaskProposal (modelId requires connectionId),
+      // kept as a belt-and-braces guard for direct construction.
+      throw new CoordinationError(
+        "MODEL_NOT_ALLOWED",
+        `task "${task.taskId}" selects a model without a connection`,
       );
     }
     // M9-S3: a Planner batch can never select the Planner or the Verifier —
@@ -697,7 +935,10 @@ export function compileIterationPlanPatch(
   iterationNumber: number,
   workspace?: WorkspaceSnapshotV1,
 ): { patch: PlanPatchLikeV1; verifierStepId: string } {
-  if (config.verifier.kind !== "agent" && config.verifier.kind !== "connection") {
+  if (
+    config.verifier.kind !== "agent" &&
+    config.verifier.kind !== "connection"
+  ) {
     throw new CoordinationError(
       "CONFIG_INVALID",
       "Verifier must be an agent or connection selection for plan compilation",
@@ -717,7 +958,9 @@ export function compileIterationPlanPatch(
       workspace === undefined
         ? task.input
         : {
-            ...(isPlainObjectInput ? (task.input as object) : { value: task.input }),
+            ...(isPlainObjectInput
+              ? (task.input as object)
+              : { value: task.input }),
             workspace,
           };
     const step: Record<string, unknown> = {
@@ -739,6 +982,17 @@ export function compileIterationPlanPatch(
       // M8 connection constraint recorded on the step; the attempt claim
       // freezes exactly this connection's revision (typed selection).
       step.metadata = { tenvyrConnectionId: task.connectionId };
+      // P2: freeze the requested model on the step. The Planner's modelId
+      // is recorded verbatim; when the Planner emitted only a connection
+      // and that connection has exactly one allowed model, the frozen
+      // target resolves deterministically (validated in
+      // validateTaskBatchProposal) and is frozen here — never chosen
+      // arbitrarily and never re-resolved later.
+      const modelId =
+        task.modelId ?? deterministicWorkerModel(config, task.connectionId);
+      if (modelId !== undefined) {
+        (step.metadata as Record<string, unknown>).tenvyrModelId = modelId;
+      }
     }
     operations.push({ op: "addStep", step });
   }
@@ -765,6 +1019,10 @@ export function compileIterationPlanPatch(
   };
   if (config.verifier.kind === "connection") {
     verifierStep.metadata = { tenvyrConnectionId: config.verifier.name };
+    if (config.verifierTarget?.modelId !== undefined) {
+      (verifierStep.metadata as Record<string, unknown>).tenvyrModelId =
+        config.verifierTarget.modelId;
+    }
   }
   operations.push({ op: "addStep", step: verifierStep });
   return {
@@ -783,6 +1041,25 @@ type PlanPatchLikeV1 = {
   baseRevision: number;
   operations: PlanPatchOperationLikeV1[];
 };
+
+/**
+ * P2: deterministic worker-target model resolution. Returns the connection's
+ * single frozen allowed model, or undefined when the connection has no
+ * model-scoped targets (legacy) — validation guarantees this helper is only
+ * consulted when 0 or 1 targets exist, so it never chooses arbitrarily.
+ */
+export function deterministicWorkerModel(
+  config: CoordinationConfigV1,
+  connectionId: string,
+): string | undefined {
+  const targets =
+    config.allowedTargets?.filter(
+      (target) => target.connectionId === connectionId,
+    ) ?? [];
+  if (targets.length !== 1 || targets[0].modelId === undefined)
+    return undefined;
+  return targets[0].modelId;
+}
 
 /** CONTINUE eligibility: pure bound check (budget/deadline/policy rechecked
  *  by existing authority at commit time). */
@@ -831,7 +1108,8 @@ export function parseVerifierDecision(value: unknown): VerifierDecisionV1 {
     !Array.isArray(evidenceRefs) ||
     evidenceRefs.length > COORDINATION_BOUNDS.maxEvidenceRefs ||
     !evidenceRefs.every(
-      (entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 255,
+      (entry) =>
+        typeof entry === "string" && entry.length > 0 && entry.length <= 255,
     )
   ) {
     throw new CoordinationError(
@@ -853,13 +1131,18 @@ export function parseVerifierDecision(value: unknown): VerifierDecisionV1 {
     evidenceRefs: evidenceRefs as string[],
   };
   if (snapshot.recommendation !== undefined) {
-    const recommendation = isRecord(snapshot.recommendation) ? snapshot.recommendation : {};
+    const recommendation = isRecord(snapshot.recommendation)
+      ? snapshot.recommendation
+      : {};
     const focus = recommendation.focus ?? [];
     if (
       !Array.isArray(focus) ||
       focus.length > COORDINATION_BOUNDS.maxRecommendationFocus ||
       new Set(focus).size !== focus.length ||
-      !focus.every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 255)
+      !focus.every(
+        (entry) =>
+          typeof entry === "string" && entry.length > 0 && entry.length <= 255,
+      )
     ) {
       throw new CoordinationError(
         "DECISION_INVALID",
@@ -875,7 +1158,11 @@ export function parseVerifierDecision(value: unknown): VerifierDecisionV1 {
       ),
       focus: focus as string[],
     };
-    boundedBytes(recommendationValue, "recommendation", COORDINATION_BOUNDS.maxRecommendationBytes);
+    boundedBytes(
+      recommendationValue,
+      "recommendation",
+      COORDINATION_BOUNDS.maxRecommendationBytes,
+    );
     decision.recommendation = recommendationValue;
   }
   return decision;
@@ -914,12 +1201,15 @@ export function fanInReady(
   return requiredTaskIds.every((taskId) => terminalByTaskId.has(taskId));
 }
 
-function truncate(value: string, maxBytes: number): { value: string; omitted: boolean } {
+function truncate(
+  value: string,
+  maxBytes: number,
+): { value: string; omitted: boolean } {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return { value, omitted: false };
   }
   let end = maxBytes;
-  while (end > 0 && (Buffer.byteLength(value.slice(0, end), "utf8") > maxBytes)) {
+  while (end > 0 && Buffer.byteLength(value.slice(0, end), "utf8") > maxBytes) {
     end -= 1;
   }
   return { value: `${value.slice(0, end)}…`, omitted: true };
@@ -965,8 +1255,14 @@ export function buildVerifierContext(input: {
             Object.entries(worker.selectedFields).map(([key, value]) => {
               let normalized = value;
               const rendered = JSON.stringify(value);
-              if (Buffer.byteLength(rendered, "utf8") > COORDINATION_BOUNDS.maxSelectedFieldBytes) {
-                normalized = { truncated: true, bytes: Buffer.byteLength(rendered, "utf8") };
+              if (
+                Buffer.byteLength(rendered, "utf8") >
+                COORDINATION_BOUNDS.maxSelectedFieldBytes
+              ) {
+                normalized = {
+                  truncated: true,
+                  bytes: Buffer.byteLength(rendered, "utf8"),
+                };
                 omitted.push(`worker.${worker.taskId}.field.${key}`);
               }
               return [key, normalized];
@@ -978,13 +1274,19 @@ export function buildVerifierContext(input: {
       ...(worker.failureCode ? { failureCode: worker.failureCode } : {}),
       ...(summary ? { summary: summary.value } : {}),
       ...(selectedFields ? { selectedFields } : {}),
-      artifactRefs: worker.artifactRefs.slice(0, COORDINATION_BOUNDS.maxArtifactRefs),
+      artifactRefs: worker.artifactRefs.slice(
+        0,
+        COORDINATION_BOUNDS.maxArtifactRefs,
+      ),
     };
   });
   const executionStateKeys: Record<string, unknown> = {};
   for (const key of input.selectedStateKeys) {
     if (Object.prototype.hasOwnProperty.call(input.executionStateKeys, key)) {
-      if (Object.keys(executionStateKeys).length >= COORDINATION_BOUNDS.maxExecutionStateKeys) {
+      if (
+        Object.keys(executionStateKeys).length >=
+        COORDINATION_BOUNDS.maxExecutionStateKeys
+      ) {
         omitted.push("executionStateKeys.limit");
         break;
       }
@@ -1004,13 +1306,19 @@ export function buildVerifierContext(input: {
   if (input.priorDecision) {
     aggregate.priorDecision = {
       action: input.priorDecision.action,
-      reason: truncate(input.priorDecision.reason, COORDINATION_BOUNDS.maxReasonLength).value,
+      reason: truncate(
+        input.priorDecision.reason,
+        COORDINATION_BOUNDS.maxReasonLength,
+      ).value,
     };
   }
   if (input.workspace) {
     aggregate.workspace = input.workspace;
   }
-  if (Buffer.byteLength(JSON.stringify(aggregate), "utf8") > COORDINATION_BOUNDS.maxAggregateBytes) {
+  if (
+    Buffer.byteLength(JSON.stringify(aggregate), "utf8") >
+    COORDINATION_BOUNDS.maxAggregateBytes
+  ) {
     throw new CoordinationError(
       "AGGREGATION_INVALID",
       `aggregation exceeds ${COORDINATION_BOUNDS.maxAggregateBytes} bytes`,

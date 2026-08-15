@@ -193,12 +193,47 @@ describe("WorkbenchProjectionService", () => {
       coordinationRunId: "run-1",
       iterationNumber: 1,
       plannerStepId: "planner-1",
+      plannerProposal: {
+        schemaVersion: 1,
+        iterationNumber: 1,
+        baseRevision: 1,
+        reason: "Initial plan for implementation and tests",
+        tasks: [
+          {
+            taskId: "implement-1",
+            agent: "codex",
+            connectionId: "conn:codex",
+            input: {},
+            dependsOn: [],
+            required: true,
+            reason: "Implement core logic",
+          },
+          {
+            taskId: "tests-1",
+            agent: "claude",
+            input: {},
+            dependsOn: ["implement-1"],
+            required: false,
+            reason: "Run validation suite",
+          },
+        ],
+      },
       workerManifest: [
         { taskId: "implement-1", logicalStepId: "step-row-a", required: true },
         { taskId: "tests-1", logicalStepId: "step-row-b", required: false },
       ],
       verifierStepId: "verify-1",
-      decision: { action: "CONTINUE", reason: "keep going", iterationId: "iteration-1", iterationNumber: 1, evidenceRefs: [] },
+      decision: {
+        action: "CONTINUE",
+        reason: "keep going",
+        iterationId: "iteration-1",
+        iterationNumber: 1,
+        evidenceRefs: [],
+        recommendation: {
+          reason: "Fix test failures in iteration 2",
+          focus: ["tests"],
+        },
+      },
       decisionHash: "ab".repeat(32),
       outcome: null,
     };
@@ -270,11 +305,36 @@ describe("WorkbenchProjectionService", () => {
     expect(projection.coordination).not.toBeNull();
     expect(projection.coordination!.run.phase).toBe("VERIFYING");
     expect(projection.coordination!.run.remainingDeadlineMs).toBeGreaterThan(0);
+    expect(projection.coordination!.iterations[0].plannerProposal).toEqual({
+      reason: "Initial plan for implementation and tests",
+      tasks: [
+        {
+          taskId: "implement-1",
+          agent: "codex",
+          connectionId: "conn:codex",
+          required: true,
+          dependsOn: [],
+          reason: "Implement core logic",
+        },
+        {
+          taskId: "tests-1",
+          agent: "claude",
+          required: false,
+          dependsOn: ["implement-1"],
+          reason: "Run validation suite",
+        },
+      ],
+    });
     expect(projection.coordination!.iterations[0].workerManifest).toEqual([
       { taskId: "implement-1", logicalStepId: "step-row-a", required: true, status: "COMPLETED" },
       { taskId: "tests-1", logicalStepId: "step-row-b", required: false, status: "FAILED" },
     ]);
     expect(projection.coordination!.iterations[0].decisionAction).toBe("CONTINUE");
+    expect(projection.coordination!.iterations[0].decisionReason).toBe("keep going");
+    expect(projection.coordination!.iterations[0].decisionRecommendation).toEqual({
+      reason: "Fix test failures in iteration 2",
+      focus: ["tests"],
+    });
     expect(projection.coordination!.iterations[0].decisionHash).toMatch(
       /^[0-9a-f]{64}$/,
     );

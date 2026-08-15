@@ -65,16 +65,20 @@ export type RuntimeOnboardingStatus = {
    *  (opencode provider auth is runtime-owned and not probed), otherwise
    *  true/false from the documented exit-code contract. */
   authReady: boolean | null;
+  /** P2: the official runtime-owned login command for the guided Sign-in
+   *  action (never a Tenvyr credential flow). */
+  loginCommand: string;
+  /** P2: fixed model-argument argv prefix documented for the runtime
+   *  (e.g. ["--model"]); the host agent config mirrors it. */
+  modelArgvPrefix: string[];
   /** Bounded guidance, never credential instructions. */
   guidance: string[];
   /** Ready-to-submit connect payload (executable + template defaults). */
-  connectPayload:
-    | {
-        runtimeKind: OnboardingRuntimeKind;
-        executable: string;
-        version?: string;
-      }
-    | null;
+  connectPayload: {
+    runtimeKind: OnboardingRuntimeKind;
+    executable: string;
+    version?: string;
+  } | null;
 };
 
 @Injectable()
@@ -101,6 +105,8 @@ export class RuntimeOnboardingService {
         executable: null,
         version: null,
         authReady: null,
+        loginCommand: template.loginCommand,
+        modelArgvPrefix: template.modelArgvPrefix,
         guidance,
         connectPayload: null,
       };
@@ -170,6 +176,8 @@ export class RuntimeOnboardingService {
       executable,
       version,
       authReady,
+      loginCommand: template.loginCommand,
+      modelArgvPrefix: template.modelArgvPrefix,
       guidance,
       connectPayload: {
         runtimeKind,

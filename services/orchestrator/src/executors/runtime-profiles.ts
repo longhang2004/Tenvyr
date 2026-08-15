@@ -29,8 +29,18 @@ export type RuntimeProfileTemplate = {
   /** Official primary source(s) and access date. */
   sourceUrl: string;
   accessedAt: string;
+  /** P2: the OFFICIAL runtime-owned login command for the guided Sign-in
+   *  UX. Tenvyr never collects provider credentials; it only shows this
+   *  fixed command for the operator to run in their own terminal. */
+  loginCommand: string;
   /** Fixed run argv (documented flags only). */
   runArgs: string[];
+  /** P2: FIXED argv elements inserted before a requested model id when the
+   *  operator freezes a model for an attempt (e.g. ["--model"]). The host
+   *  agent config mirrors this; the model id is appended as ONE bounded
+   *  data element — never concatenated, never shell-interpreted. Empty =
+   *  runtime default (no model argument). */
+  modelArgvPrefix: string[];
   /** Primary probe: version probe when the CLI documents one, otherwise the
    *  documented auth-status command. */
   probe: CliProbeConfigV1;
@@ -60,6 +70,11 @@ export const RUNTIME_PROFILE_TEMPLATES: Record<
     sourceUrl: CODECX_CLI_DOCS,
     accessedAt: RUNTIME_PROFILE_ACCESSED_AT,
     runArgs: ["exec", "--json", "--ephemeral", "-"],
+    // P2: `codex login` is the documented runtime-owned sign-in command.
+    loginCommand: "codex login",
+    // P2 recheck 2026-08-15: `--model <id>` (alias `-m`) is the documented
+    // invocation override ("Override the model set in configuration").
+    modelArgvPrefix: ["--model"],
     // Version output is NOT documented for the Codex CLI; the documented
     // auth-status command is `codex login status` ("print the active
     // authentication mode and exit with 0 when logged in").
@@ -77,8 +92,16 @@ export const RUNTIME_PROFILE_TEMPLATES: Record<
     ],
     declaredCapabilities: {
       invocation: { supported: true, source: "configured", version: "0.147.0" },
-      structuredResult: { supported: true, source: "configured", version: "0.147.0" },
-      progressEvents: { supported: true, source: "configured", version: "0.147.0" },
+      structuredResult: {
+        supported: true,
+        source: "configured",
+        version: "0.147.0",
+      },
+      progressEvents: {
+        supported: true,
+        source: "configured",
+        version: "0.147.0",
+      },
       localProcessTermination: { supported: true, source: "configured" },
     },
   },
@@ -88,6 +111,12 @@ export const RUNTIME_PROFILE_TEMPLATES: Record<
     sourceUrl: CLAUDE_CLI_DOCS,
     accessedAt: RUNTIME_PROFILE_ACCESSED_AT,
     runArgs: ["-p", "--output-format", "json"],
+    // P2: `claude auth login` is the documented runtime-owned sign-in command.
+    loginCommand: "claude auth login",
+    // P2 recheck 2026-08-15: `--model` accepts an alias or a full model id
+    // ("Sets the model for the current session with an alias for the latest
+    // model or a model's full name"; example `claude --model claude-sonnet-5`).
+    modelArgvPrefix: ["--model"],
     probe: { args: ["--version"], expectsVersion: true },
     // `claude auth status` prints JSON and "exits with code 0 if logged in,
     // 1 if not".
@@ -103,7 +132,11 @@ export const RUNTIME_PROFILE_TEMPLATES: Record<
     ],
     declaredCapabilities: {
       invocation: { supported: true, source: "configured", version: "2.1.228" },
-      structuredResult: { supported: true, source: "configured", version: "2.1.228" },
+      structuredResult: {
+        supported: true,
+        source: "configured",
+        version: "2.1.228",
+      },
       localProcessTermination: { supported: true, source: "configured" },
     },
   },
@@ -113,6 +146,13 @@ export const RUNTIME_PROFILE_TEMPLATES: Record<
     sourceUrl: OPENCODE_CLI_DOCS,
     accessedAt: RUNTIME_PROFILE_ACCESSED_AT,
     runArgs: ["run", "--format", "json"],
+    // P2: `opencode auth login` is the documented runtime-owned sign-in
+    // command (provider auth is runtime-owned; Tenvyr never reads the
+    // OpenCode auth file).
+    loginCommand: "opencode auth login",
+    // P2 recheck 2026-08-15: `run --model provider/model` is the documented
+    // model selector ("Model to use in the form of provider/model").
+    modelArgvPrefix: ["--model"],
     probe: { args: ["--version"], expectsVersion: true },
     credentialEnvRefs: [],
     unsupported: [
@@ -121,8 +161,16 @@ export const RUNTIME_PROFILE_TEMPLATES: Record<
     ],
     declaredCapabilities: {
       invocation: { supported: true, source: "configured", version: "1.18.16" },
-      structuredResult: { supported: true, source: "configured", version: "1.18.16" },
-      progressEvents: { supported: true, source: "configured", version: "1.18.16" },
+      structuredResult: {
+        supported: true,
+        source: "configured",
+        version: "1.18.16",
+      },
+      progressEvents: {
+        supported: true,
+        source: "configured",
+        version: "1.18.16",
+      },
       localProcessTermination: { supported: true, source: "configured" },
     },
   },

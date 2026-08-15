@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Res } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  Res,
+} from "@nestjs/common";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SocketGateway } from "./socket.gateway";
@@ -113,6 +123,77 @@ export class AppController {
   async getWorkbenchOnboarding(@Param("runtimeKind") runtimeKind: string) {
     return this.forwardToOrchestrator(
       `/workbench/onboarding/${encodeURIComponent(runtimeKind)}`,
+    );
+  }
+
+  // P2: Model Sources — single-owner operator surface (same exposure
+  // stance as connections; External Production Exposure Gate stays open).
+
+  @Get("api/model-sources")
+  async getModelSources() {
+    return this.forwardToOrchestrator("/model-sources");
+  }
+
+  @Post("api/model-sources")
+  async createModelSource(@Body() body: any) {
+    return this.forwardToOrchestrator("/model-sources", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Patch("api/model-sources/:sourceId")
+  async updateModelSource(
+    @Param("sourceId") sourceId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/model-sources/${encodeURIComponent(sourceId)}`,
+      { method: "PATCH", body },
+    );
+  }
+
+  @Delete("api/model-sources/:sourceId")
+  async deleteModelSource(
+    @Param("sourceId") sourceId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/model-sources/${encodeURIComponent(sourceId)}`,
+      { method: "DELETE", body },
+    );
+  }
+
+  @Post("api/model-sources/:sourceId/test")
+  async testModelSource(
+    @Param("sourceId") sourceId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/model-sources/${encodeURIComponent(sourceId)}/test`,
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/model-sources/:sourceId/refresh")
+  async refreshModelSource(
+    @Param("sourceId") sourceId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/model-sources/${encodeURIComponent(sourceId)}/refresh`,
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/model-sources/discover-runtime-catalog")
+  async discoverRuntimeCatalog(@Body() body: any) {
+    return this.forwardToOrchestrator(
+      "/model-sources/discover-runtime-catalog",
+      {
+        method: "POST",
+        body,
+      },
     );
   }
 

@@ -26,12 +26,11 @@ import { ArtifactEntity } from "../entities/artifact.entity";
 import { ArtifactProjectionResolver } from "./artifact-projection.resolver";
 import { sha256Json } from "../domain/canonical-json";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
+import { MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from "../domain/coordination";
 import { AgentTransportConfigService } from "../agent-adapters/agent-transport-config.service";
 import { RuntimeConnectionService } from "./runtime-connection.service";
 import { RuntimeCoordinationService } from "./runtime-coordination.service";
-import {
-  buildConnectionReference,
-} from "../executors/runtime-connection";
+import { buildConnectionReference } from "../executors/runtime-connection";
 import {
   attachLocalExecutorProfile,
   type ExecutorDescriptorV1,
@@ -197,16 +196,25 @@ export class ExecutionService {
   private async resolveAttemptSnapshot(
     agent: string,
     stepConnectionId?: string,
+    stepModelId?: string,
     manager?: import("typeorm").EntityManager,
   ): Promise<ExecutorDescriptorV1> {
     const connectionId =
       stepConnectionId ?? this.transportConfig.forAgent(agent).connectionId;
-    if (!connectionId) return this.transportConfig.resolveExecutorDescriptor(agent);
+    if (!connectionId) {
+      const descriptor = this.transportConfig.resolveExecutorDescriptor(agent);
+      if (stepModelId !== undefined) descriptor.requestedModelId = stepModelId;
+      return descriptor;
+    }
     const revision = manager
       ? await this.connections.claimRevisionWithManager(manager, connectionId)
       : await this.connections.claimRevision(connectionId);
     const descriptor = this.transportConfig.resolveExecutorDescriptor(agent);
     descriptor.connection = buildConnectionReference(revision);
+    // P2: freeze the requested model exactly as the step declared it —
+    // retries and redeliveries reuse this frozen descriptor, and a later
+    // catalog refresh can never rewrite an attempt's requested model.
+    if (stepModelId !== undefined) descriptor.requestedModelId = stepModelId;
     return attachLocalExecutorProfile(descriptor, revision);
   }
 
@@ -315,6 +323,8 @@ export class ExecutionService {
       // two steps selecting different connections can never be silently
       // routed through the same static config entry.
       const stepConnectionId = stepConnectionIdOf(stepConfig);
+      // P2: the frozen requested model (data value) rides the same way.
+      const stepModelId = stepModelIdOf(stepConfig);
 
       const allSteps = await logicalRepository.find({
         where: { executionId },
@@ -404,6 +414,7 @@ export class ExecutionService {
               executorSnapshot: await this.resolveAttemptSnapshot(
                 stepConfig.agent,
                 stepConnectionId,
+                stepModelId,
                 manager,
               ),
               status: "FAILED",
@@ -470,6 +481,7 @@ export class ExecutionService {
             executorSnapshot: await this.resolveAttemptSnapshot(
               stepConfig.agent,
               stepConnectionId,
+              stepModelId,
               manager,
             ),
             status: "FAILED",
@@ -549,6 +561,7 @@ export class ExecutionService {
               executorSnapshot: await this.resolveAttemptSnapshot(
                 stepConfig.agent,
                 stepConnectionId,
+                stepModelId,
                 manager,
               ),
               status: "WAITING",
@@ -608,6 +621,7 @@ export class ExecutionService {
       const executorSnapshot = await this.resolveAttemptSnapshot(
         stepConfig.agent,
         stepConnectionId,
+        stepModelId,
         manager,
       );
       const attempt = await attemptRepository.save(
@@ -677,6 +691,12 @@ export class ExecutionService {
                     configHash: executorSnapshot.connection.configHash,
                   },
                 }
+              : {}),
+            // P2: the frozen requested model rides the invocation as data;
+            // the executor host composes it behind its own fixed argv
+            // (`modelArgvPrefix`) and fails closed when it cannot.
+            ...(executorSnapshot.requestedModelId
+              ? { requestedModelId: executorSnapshot.requestedModelId }
               : {}),
           },
         }),
@@ -1091,88 +1111,88 @@ export class ExecutionService {
     executionId: string,
     reason = "Execution cancelled by request",
   ): Promise<ExecutionEntity> {
-      const attemptRepository = manager.getRepository(StepAttemptEntity);
-      const logicalRepository = manager.getRepository(LogicalStepEntity);
-      const executionRepository = manager.getRepository(ExecutionEntity);
-      const outboxRepository = manager.getRepository(DispatchOutboxEntity);
+    const attemptRepository = manager.getRepository(StepAttemptEntity);
+    const logicalRepository = manager.getRepository(LogicalStepEntity);
+    const executionRepository = manager.getRepository(ExecutionEntity);
+    const outboxRepository = manager.getRepository(DispatchOutboxEntity);
 
-      // Match terminal-result locking order (attempt -> logical step ->
-      // execution) to make result-versus-cancel races serialize cleanly.
-      const attempts = await attemptRepository
-        .createQueryBuilder("attempt")
-        .setLock("pessimistic_write")
-        .where('attempt."executionId" = :executionId', { executionId })
-        .andWhere('attempt."status" IN (:...active)', {
-          active: ACTIVE_ATTEMPT_STATUSES,
+    // Match terminal-result locking order (attempt -> logical step ->
+    // execution) to make result-versus-cancel races serialize cleanly.
+    const attempts = await attemptRepository
+      .createQueryBuilder("attempt")
+      .setLock("pessimistic_write")
+      .where('attempt."executionId" = :executionId', { executionId })
+      .andWhere('attempt."status" IN (:...active)', {
+        active: ACTIVE_ATTEMPT_STATUSES,
+      })
+      .orderBy('attempt."id"', "ASC")
+      .getMany();
+    const steps = await logicalRepository
+      .createQueryBuilder("step")
+      .setLock("pessimistic_write")
+      .where('step."executionId" = :executionId', { executionId })
+      .orderBy('step."id"', "ASC")
+      .getMany();
+    const execution = await executionRepository
+      .createQueryBuilder("execution")
+      .setLock("pessimistic_write")
+      .where('execution."id" = :id', { id: executionId })
+      .getOne();
+    if (!execution) throw new Error(`Execution ${executionId} not found`);
+    if (TERMINAL_EXECUTION_STATUSES.includes(execution.status)) {
+      return execution;
+    }
+
+    const now = new Date();
+    for (const attempt of attempts) {
+      attempt.status = "CANCELLED";
+      attempt.terminalAt = now;
+      attempt.result = null;
+      attempt.error = reason;
+      attempt.terminationReason = reason;
+    }
+    if (attempts.length) await attemptRepository.save(attempts);
+
+    // M4-S2: cancelled attempts never complete, so their reservations are
+    // fully unused — release them in the SAME transaction (explicit
+    // authority action, unlike unreported terminal usage which stays
+    // consumed by default).
+    for (const attempt of attempts) {
+      await this.budgetLedger.releaseForAction(
+        manager,
+        attempt.invocationId,
+        "execution cancelled",
+      );
+    }
+
+    for (const step of steps) {
+      if (!CANCELLABLE_STEP_STATUSES.includes(step.status)) continue;
+      step.status = "CANCELLED";
+      step.error = reason;
+      step.endTime = now;
+      step.nextAttemptAt = null;
+      step.eligibleAt = null;
+    }
+    if (steps.length) await logicalRepository.save(steps);
+
+    if (attempts.length) {
+      await outboxRepository
+        .createQueryBuilder()
+        .update(DispatchOutboxEntity)
+        .set({ status: "COMPLETED", leaseExpiresAt: null, leaseToken: null })
+        .where('"stepAttemptId" IN (:...attemptIds)', {
+          attemptIds: attempts.map((attempt) => attempt.id),
         })
-        .orderBy('attempt."id"', "ASC")
-        .getMany();
-      const steps = await logicalRepository
-        .createQueryBuilder("step")
-        .setLock("pessimistic_write")
-        .where('step."executionId" = :executionId', { executionId })
-        .orderBy('step."id"', "ASC")
-        .getMany();
-      const execution = await executionRepository
-        .createQueryBuilder("execution")
-        .setLock("pessimistic_write")
-        .where('execution."id" = :id', { id: executionId })
-        .getOne();
-      if (!execution) throw new Error(`Execution ${executionId} not found`);
-      if (TERMINAL_EXECUTION_STATUSES.includes(execution.status)) {
-        return execution;
-      }
+        .andWhere("status IN (:...dispatchable)", {
+          dispatchable: ["PENDING", "LEASED", "DISPATCHED"],
+        })
+        .execute();
+    }
 
-      const now = new Date();
-      for (const attempt of attempts) {
-        attempt.status = "CANCELLED";
-        attempt.terminalAt = now;
-        attempt.result = null;
-        attempt.error = reason;
-        attempt.terminationReason = reason;
-      }
-      if (attempts.length) await attemptRepository.save(attempts);
-
-      // M4-S2: cancelled attempts never complete, so their reservations are
-      // fully unused — release them in the SAME transaction (explicit
-      // authority action, unlike unreported terminal usage which stays
-      // consumed by default).
-      for (const attempt of attempts) {
-        await this.budgetLedger.releaseForAction(
-          manager,
-          attempt.invocationId,
-          "execution cancelled",
-        );
-      }
-
-      for (const step of steps) {
-        if (!CANCELLABLE_STEP_STATUSES.includes(step.status)) continue;
-        step.status = "CANCELLED";
-        step.error = reason;
-        step.endTime = now;
-        step.nextAttemptAt = null;
-        step.eligibleAt = null;
-      }
-      if (steps.length) await logicalRepository.save(steps);
-
-      if (attempts.length) {
-        await outboxRepository
-          .createQueryBuilder()
-          .update(DispatchOutboxEntity)
-          .set({ status: "COMPLETED", leaseExpiresAt: null, leaseToken: null })
-          .where('"stepAttemptId" IN (:...attemptIds)', {
-            attemptIds: attempts.map((attempt) => attempt.id),
-          })
-          .andWhere("status IN (:...dispatchable)", {
-            dispatchable: ["PENDING", "LEASED", "DISPATCHED"],
-          })
-          .execute();
-      }
-
-      execution.status = "CANCELLED";
-      execution.endTime = now;
-      execution.terminationReason = reason;
-      return executionRepository.save(execution);
+    execution.status = "CANCELLED";
+    execution.endTime = now;
+    execution.terminationReason = reason;
+    return executionRepository.save(execution);
   }
 
   async getExecution(id: string): Promise<ExecutionEntity | null> {
@@ -1520,7 +1540,9 @@ export class ExecutionService {
  * deterministic configuration failure, never silently ignored — a step
  * that claims a connection must claim a REAL one.
  */
-export function stepConnectionIdOf(stepConfig: PipelineStepConfig): string | undefined {
+export function stepConnectionIdOf(
+  stepConfig: PipelineStepConfig,
+): string | undefined {
   const raw = stepConfig.metadata?.tenvyrConnectionId;
   if (raw === undefined || raw === null) return undefined;
   if (
@@ -1531,6 +1553,33 @@ export function stepConnectionIdOf(stepConfig: PipelineStepConfig): string | und
   ) {
     throw new Error(
       `Step "${stepConfig.id}" metadata.tenvyrConnectionId must match [A-Za-z0-9_.:-] (at most 255 characters)`,
+    );
+  }
+  return raw;
+}
+
+/**
+ * P2: extracts the frozen requested model recorded on a materialized step
+ * (`metadata.tenvyrModelId`, written by the Coordinator's PlanPatch
+ * compilation — Planner task modelId, deterministic single-model
+ * resolution, or the operator-frozen role target). Strict bounds mirror
+ * the model-id data contract; anything malformed is a deterministic
+ * configuration failure, never silently ignored — a step that requests a
+ * model must request a REAL one.
+ */
+export function stepModelIdOf(
+  stepConfig: PipelineStepConfig,
+): string | undefined {
+  const raw = stepConfig.metadata?.tenvyrModelId;
+  if (raw === undefined || raw === null) return undefined;
+  if (
+    typeof raw !== "string" ||
+    raw.length === 0 ||
+    raw.length > MODEL_ID_MAX_LENGTH ||
+    !MODEL_ID_PATTERN.test(raw)
+  ) {
+    throw new Error(
+      `Step "${stepConfig.id}" metadata.tenvyrModelId must match ${MODEL_ID_PATTERN} (at most ${MODEL_ID_MAX_LENGTH} characters)`,
     );
   }
   return raw;
