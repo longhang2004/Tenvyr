@@ -334,6 +334,18 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     assert.ok(waitForHealth(`${gatewayBase}/health`, "UP"), `${context}: gateway not ready`);
   };
 
+  /** Drops every preserved failed-promotion candidate (tenvyr_failed_promotion
+   *  and its bounded suffixed names). Each test creates ONLY its own
+   *  candidates (earlier tests clean theirs up), so this is always exactly
+   *  the current test's own preserved candidates. */
+  const cleanupCandidateDbs = () => {
+    const candidates = databases().filter((name) => name.startsWith("tenvyr_failed_promotion"));
+    for (const name of candidates) {
+      const drop = psql(`DROP DATABASE IF EXISTS ${name}`, "postgres");
+      assert.equal(drop.status, 0, `dropping this test's own preserved candidate ${name} failed: ${drop.stderr}`);
+    }
+  };
+
   it("A: concurrent writes during backup creation never break the backup-drill invariant", async () => {
     // Writes race the backup for its whole duration (dump -> isolated
     // restore -> anchors -> finalize). A PASS must imply an immediate
@@ -534,8 +546,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     assert.ok(postRecovery, "new write after reconciliation must succeed");
     // The reconcile preserved this test's own candidate as evidence — drop
     // it so a later test's manual repair never collides with it.
-    const dropCandidate = psql("DROP DATABASE IF EXISTS tenvyr_failed_promotion", "postgres");
-    assert.equal(dropCandidate.status, 0, `dropping this test's own preserved candidate failed: ${dropCandidate.stderr}`);
+    cleanupCandidateDbs();
   });
 
   it("F3: concurrent backups — exactly one owns the maintenance lock; the PASSing artifact drills PASS", async () => {
@@ -733,8 +744,11 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     // The malformed journal on the now-clean layout is cleared by
     // --reconcile.
     const reconcileResult = reconcile();
-    assert.equal(reconcileResult.status, 0, `--reconcile must exit clean: ${reconcile.stdout}\n${reconcile.stderr}`);
+    assert.equal(reconcileResult.status, 0, `--reconcile must exit clean: ${reconcileResult.stdout}\n${reconcileResult.stderr}`);
     assert.ok(!existsSync(journalPath), "the malformed journal must be cleared on the clean layout");
+    // This test's own manually preserved candidate is dropped so a later
+    // test's manual repair never collides with it.
+    cleanupCandidateDbs();
   });
 
   it("G1: SIGKILL after quiesce — --reconcile restarts the original deployment and reports the interrupted operation", () => {
@@ -788,8 +802,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     assert.ok(postRecovery, "new write after --reconcile must succeed");
     // The crashed rollback preserved this test's own candidate before the
     // SIGKILL — drop it so a later test's manual repair never collides.
-    const dropCandidate = psql("DROP DATABASE IF EXISTS tenvyr_failed_promotion", "postgres");
-    assert.equal(dropCandidate.status, 0, `dropping this test's own preserved candidate failed: ${dropCandidate.stderr}`);
+    cleanupCandidateDbs();
   });
 
   it("F9: existing tenvyr_failed_promotion never collides with a later rollback (non-colliding preserve)", () => {
