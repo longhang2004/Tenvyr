@@ -762,10 +762,18 @@ describe("Tenvyr Worker agent events", () => {
         })
       ).status,
     ).toBe(202);
-    await waitFor(
-      () =>
-        eventBodies().filter((event) => event.type === "progress").length === 2,
-    );
+    await waitFor(() => {
+      const bodies = eventBodies();
+      return (
+        bodies.filter((event) => event.type === "progress").length === 2 &&
+        bodies.some(
+          (event) => event.invocationId === "invocation-1" && event.type === "accepted",
+        ) &&
+        bodies.some(
+          (event) => event.invocationId === "invocation-2" && event.type === "accepted",
+        )
+      );
+    });
 
     const byInvocation = (invocationId: string) =>
       eventBodies()

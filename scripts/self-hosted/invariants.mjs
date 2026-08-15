@@ -81,8 +81,24 @@ export const checkHealth = (port, expected) => {
 
 export const main = () => {
   const violations = [];
-  if (!existsSync(join(ROOT, "deploy.env"))) {
-    violations.push("deploy.env is missing (run bootstrap first)");
+  // Disposable-infrastructure seams: the deploy env, compose project, and
+  // host ports are overridable so the recovery E2E stack (and its
+  // --reconcile runs) is verified against ITS OWN disposable stack, never
+  // the production names.
+  const deployEnvPath = () =>
+    process.env.TENVYR_DEPLOY_ENV ?? join(ROOT, "deploy.env");
+  const composeCmd = () => {
+    const args = ["docker", "compose"];
+    const project = process.env.TENVYR_SELF_HOSTED_PROJECT;
+    if (project) args.push("-p", project);
+    args.push("-f", "docker-compose.self-hosted.yml");
+    const override = process.env.TENVYR_SELF_HOSTED_COMPOSE_OVERRIDE;
+    if (override) args.push("-f", override);
+    args.push("--env-file", deployEnvPath());
+    return args;
+  };
+  if (!existsSync(deployEnvPath())) {
+    violations.push(`${deployEnvPath()} is missing (run bootstrap first)`);
   }
   // The environment contract and pinned-image checks apply to the SOURCE
   // profile (its declared env references and image tags); the resolved
@@ -94,8 +110,8 @@ export const main = () => {
   violations.push(...checkEnvironmentContract(sourceCompose));
   violations.push(...checkPinnedImages(sourceCompose));
   const compose = spawnSync(
-    "docker",
-    ["compose", "-f", "docker-compose.self-hosted.yml", "--env-file", "deploy.env", "config"],
+    composeCmd()[0],
+    [...composeCmd().slice(1), "config"],
     { cwd: ROOT, encoding: "utf8", timeout: 30_000 },
   );
   if (compose.status !== 0) {
@@ -103,9 +119,9 @@ export const main = () => {
   } else if (!composeResolves(compose.stdout).ok) {
     violations.push(composeResolves(compose.stdout).reason);
   }
-  const orchestratorHealth = checkHealth(3001, '"ready":true');
+  const orchestratorHealth = checkHealth(Number(process.env.TENVYR_ORCHESTRATOR_PORT ?? 3001), '"ready":true');
   if (!orchestratorHealth.ok) violations.push(orchestratorHealth.reason);
-  const gatewayHealth = checkHealth(3000, "UP");
+  const gatewayHealth = checkHealth(Number(process.env.TENVYR_GATEWAY_PORT ?? 3000), "UP");
   if (!gatewayHealth.ok) violations.push(gatewayHealth.reason);
 
   if (violations.length > 0) {
