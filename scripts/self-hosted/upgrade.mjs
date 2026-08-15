@@ -33,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireMaintenanceLock, releaseMaintenanceLock } from "./maintenance.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -223,16 +224,36 @@ const run = (cmd, args, opts = {}) => {
 };
 
 export const main = () => {
+  // Maintenance serialization: the upgrade owns the exclusive maintenance
+  // lock for its whole run; the verified-backup child INHERITS ownership
+  // via TENVYR_MAINTENANCE_OWNED=1 (explicit re-entrancy — never a
+  // self-deadlock). A crashed upgrade releases the lock automatically via
+  // dead-owner-PID stale reclaim.
+  const lock = acquireMaintenanceLock();
+  if (!lock.owned) {
+    const owner = lock.owner
+      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
+      : "";
+    console.error(
+      `[upgrade] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
+    );
+    // No lock is held here (acquisition failed) — plain exit is correct.
+    process.exit(1);
+  }
+  const exit = (code) => {
+    releaseMaintenanceLock(lock);
+    process.exit(code);
+  };
   const target = process.argv[2];
   if (!target) {
     console.error("[upgrade] usage: upgrade.mjs <target-version>");
-    process.exit(1);
+    exit(1);
   }
   const deployed = env().TENVYR_VERSION;
   const check = validateTargetVersion(target, deployed);
   if (!check.ok) {
     console.error(`[upgrade] FAIL: ${check.reason}`);
-    process.exit(1);
+    exit(1);
   }
   // 1. PROVE the source identity BEFORE anything is built or mutated: the
   // checkout must be the exact clean commit of the release tag, otherwise
@@ -241,7 +262,7 @@ export const main = () => {
   if (!provenance.ok) {
     console.error(`[upgrade] FAIL: ${provenance.reason}`);
     console.error("[upgrade] the stack was NOT touched; deploy.env is unchanged");
-    process.exit(1);
+    exit(1);
   }
   const sourceRevision = provenance.sourceRevision;
   console.log(
@@ -268,10 +289,12 @@ export const main = () => {
   //    BEFORE compose build/up or any other deployment mutation.
   console.log("[upgrade] taking VERIFIED backup before touching the stack...");
   const backupScript = process.env.TENVYR_UPGRADE_BACKUP_CMD ?? "scripts/self-hosted/backup.mjs";
-  const backupStatus = run(process.execPath, [backupScript]);
+  const backupStatus = run(process.execPath, [backupScript], {
+    env: { ...process.env, TENVYR_MAINTENANCE_OWNED: "1" },
+  });
   if (backupStatus !== 0) {
     console.error("[upgrade] FAIL: verified backup did not complete; refusing to build or mutate the deployment");
-    process.exit(1);
+    exit(1);
   }
 
   // 2. FAIL-CLOSED resolution check: the compose config with the requested
@@ -285,14 +308,14 @@ export const main = () => {
   });
   if (resolved.status !== 0) {
     console.error(`[upgrade] FAIL: compose config did not resolve: ${resolved.stderr?.slice(0, 500)}`);
-    process.exit(1);
+    exit(1);
   }
   const mismatches = resolvedTagsMatch(resolved.stdout, target);
   if (mismatches.length > 0) {
     console.error("[upgrade] FAIL: resolved deployment does not target the requested version:");
     for (const mismatch of mismatches) console.error(`  - ${mismatch}`);
     console.error("[upgrade] the stack was NOT touched; deploy.env is unchanged");
-    process.exit(1);
+    exit(1);
   }
   console.log(`[upgrade] ok: resolved Tenvyr images target ${target}`);
 
@@ -305,11 +328,11 @@ export const main = () => {
   const buildArgs = ["--build-arg", `TENVYR_SOURCE_REVISION=${sourceRevision}`];
   if (run(compose[0], [...compose.slice(1), "build", ...buildArgs], { env: composeEnv }) !== 0) {
     console.error("[upgrade] FAIL: image build failed; the stack was NOT touched and the backup is preserved");
-    process.exit(1);
+    exit(1);
   }
   if (run(compose[0], [...compose.slice(1), "up", "-d"], { env: composeEnv }) !== 0) {
     console.error("[upgrade] FAIL: stack recreate failed; the backup is preserved");
-    process.exit(1);
+    exit(1);
   }
 
   // 4. Readiness wait (orchestrator + gateway).
@@ -335,12 +358,12 @@ export const main = () => {
   );
   if (!orchestratorReady) {
     console.error("[upgrade] FAIL: orchestrator not ready after upgrade; run `pnpm self-hosted:invariants` and restore from the preserved backup");
-    process.exit(1);
+    exit(1);
   }
   const gatewayReady = waitForHealth("http://127.0.0.1:3000/health", "UP");
   if (!gatewayReady) {
     console.error("[upgrade] FAIL: gateway not ready after upgrade; run `pnpm self-hosted:invariants` and restore from the preserved backup");
-    process.exit(1);
+    exit(1);
   }
 
   // 5. PROVE the RUNNING deployment targets the requested version — never
@@ -370,7 +393,7 @@ export const main = () => {
   if (runningMismatch) {
     console.error(`[upgrade] FAIL: ${runningMismatch}`);
     console.error("[upgrade] the stack was recreated but does not run the requested target; deploy.env is unchanged; restore from the preserved backup");
-    process.exit(1);
+    exit(1);
   }
   console.log(`[upgrade] ok: running orchestrator/gateway images target ${target}`);
 
@@ -389,7 +412,7 @@ export const main = () => {
         `[upgrade] FAIL: running container "${container}" does not carry the proven source revision ${sourceRevision} (baked TENVYR_SOURCE_REVISION missing or mismatched)`,
       );
       console.error("[upgrade] prebuilt images must be verified by digest against the target release; the stack was recreated but deploy.env is unchanged; restore from the preserved backup");
-      process.exit(1);
+      exit(1);
     }
   }
   console.log(`[upgrade] ok: running containers carry the proven source revision ${sourceRevision.slice(0, 12)}`);
@@ -399,7 +422,7 @@ export const main = () => {
   const invariants = run(process.execPath, ["scripts/self-hosted/invariants.mjs"]);
   if (invariants !== 0) {
     console.error("[upgrade] FAIL: post-upgrade invariants failed; the backup is preserved and deploy.env is unchanged");
-    process.exit(1);
+    exit(1);
   }
 
   // 7. Persist deployed metadata ONLY after the upgrade is proven:
@@ -412,6 +435,7 @@ export const main = () => {
   );
   console.log(`[upgrade] OK: upgraded to ${target} with verified backup, proven running target, proven source revision, and green invariants`);
   console.log(`[upgrade] deploy.env TENVYR_VERSION=${target} TENVYR_SOURCE_REVISION=${sourceRevision} (persisted after success)`);
+  releaseMaintenanceLock(lock);
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

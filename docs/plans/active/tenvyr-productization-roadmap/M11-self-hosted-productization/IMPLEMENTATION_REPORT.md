@@ -228,3 +228,65 @@ OPEN.
   description. M8/M9/M10 are recorded as accepted by independent Tech
   Lead review. M11 is NOT closed — closure remains the Technical Lead's
   decision.
+
+## Closure hardening 4 (2026-08-14, implementer — crash-recoverable recovery)
+
+- CRASH-RECOVERABLE PROMOTION: `restore --promote` now writes a durable
+  phase journal (`backups/.recovery-journal.json`) BEFORE every
+  destructive database step: `verify-done -> quiescing ->
+  swap-active-to-safety -> swap-verified-to-active -> post-gates ->
+  complete`. A process death at ANY phase (before quiesce, after quiesce,
+  after active->safety, after candidate->active, during post-promotion
+  gates, after gates before the completion marker) leaves the journal +
+  the database names as the unambiguous record; the NEXT recovery
+  invocation (drill, promote, or the new `--reconcile` mode) reconciles
+  the OBSERVED state BEFORE any destructive DROP/rename. The original
+  authority is never silently deleted: `tenvyr_pre_restore` is only ever
+  renamed back (`restore-original`) or, when the second rename already
+  ran, the unproven candidate is preserved under the bounded
+  `tenvyr_failed_promotion` name while the original is restored
+  (`rollback-candidate`). An interrupted promotion is conservatively
+  undone (original restored, deployment restarted + readiness +
+  invariants proven) and the new operation aborts with an explicit
+  retry-required result — never resumed blindly. A fully completed
+  recovery writes the durable `complete` marker BEFORE printing PASS, so
+  a retained safety copy is distinguishable as a completed artifact
+  (replaced at the next recovery) rather than an interrupted one. Real
+  SIGKILL fault hooks (`crash-after-first-rename`,
+  `crash-after-promotion`) drive the E2E crash tests; the pure
+  `planReconciliation` decision table is contract-tested for every phase.
+- MAINTENANCE MUTUAL EXCLUSION: every backup/restore (drill/promote/
+  reconcile) acquires an exclusive process-lifetime lock
+  (`backups/.maintenance.lock`, owner PID + startedAt); a concurrent
+  operation FAILS FAST with "maintenance operation already active"
+  instead of interleaving the shared bounded resources
+  (`tenvyr_backup_verify`, staging dump paths) or the authority-swap
+  names. Crash-release: a dead owner PID makes the lock stale and the
+  next acquisition reclaims it. `upgrade` owns the lock for its whole run
+  and the backup child inherits ownership via
+  `TENVYR_MAINTENANCE_OWNED=1` (explicit re-entrancy, never a
+  self-deadlock). E2E: concurrent backups -> exactly one PASS (its
+  artifact drills PASS), the other fails fast; concurrent promotions ->
+  only one enters authority mutation.
+- MANIFEST CONTRACT FAILS CLOSED: `validateManifestContract` (shared in
+  anchors.mjs) enforces the checksum TRIPLE (computed dump SHA-256 ==
+  .sha256 sidecar == manifest.checksum; ANY mismatch fails), the
+  verified-backup marker, version match, sha256 algorithm, full 40-hex
+  sourceRevision, every REQUIRED structural anchor non-null and
+  64-hex well-formed (optional execution/Capsule anchors stay nullable
+  for empty databases), and the canonical 31-table inventory. All
+  enforced pre-quiesce; corruption/tamper fail-closed within the
+  single-owner trust boundary. Contract tests cover every class; E2E
+  proves null-required-anchor and checksum-triple failures leave the
+  deployment untouched.
+- OPERATOR INSTRUCTIONS RE-AUDITED: `printUnrecoverableState` prints
+  commands valid for the OBSERVED database state — it never instructs
+  `safety -> active` while an active database exists without first
+  preserving the active one under `tenvyr_failed_promotion`; the
+  no-active-no-safety state prints a preserve-everything instruction with
+  no automatic command. The D2 E2E executes the printed commands and
+  repairs the deployment, then `--reconcile` proves the journal clears.
+- Docs describe the ACTUAL crash-recovery and mutual-exclusion semantics
+  (no "failure-safe state machine" overclaim). M8/M9/M10 remain
+  independently accepted. M11 is NOT closed — closure remains the
+  Technical Lead's decision.

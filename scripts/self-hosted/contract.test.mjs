@@ -105,13 +105,17 @@ test("data inventory matches the backup script's table list", () => {
   }
   // The backup script must consume the SHARED inventory, never a private copy.
   assert.match(backup, /from "\.\/anchors\.mjs"/);
-  assert.match(backup, /TABLES\.join\(", "\)/);
+  assert.match(backup, /inventoryFingerprintValue\(\)/);
 });
 
 test("restore verifies checksum and version before touching the target", () => {
   const restore = readFileSync(join(ROOT, "scripts", "self-hosted", "restore.mjs"), "utf8");
-  assert.match(restore, /checksum mismatch — refusing to restore/);
-  assert.match(restore, /backup version .* does not match deployment/);
+  const anchors = readFileSync(join(ROOT, "scripts", "self-hosted", "anchors.mjs"), "utf8");
+  // The fail-closed manifest contract lives in anchors.mjs and is invoked
+  // by restore's pre-quiesce verifyBackup.
+  assert.match(anchors, /checksum mismatch — refusing to restore/);
+  assert.match(anchors, /backup version .* does not match deployment/);
+  assert.match(restore, /validateManifestContract\(/);
   assert.match(restore, /DROP DATABASE IF EXISTS/);
   assert.match(restore, /tenvyr_restore/);
 });
@@ -658,6 +662,205 @@ test("hosted CI wires real PostgreSQL twice, the self-hosted contract gate, and 
   assert.ok(!ci.includes("continue-on-error"), "required closure tests must not continue-on-error");
   // Live provider/CLI gates stay opt-in in hosted CI.
   assert.match(ci, /TENVYR_LIVE_RUNTIME_GATES: "0"/);
+});
+
+test("maintenance lock: exclusive ownership, fail-fast contention, and stale-lock reclaim on crash", async () => {
+  const {
+    acquireMaintenanceLock,
+    releaseMaintenanceLock,
+    journalPath,
+  } = await awaitImport("../self-hosted/maintenance.mjs");
+  const { rmSync } = await import("node:fs");
+  // Clean slate (a crashed test may have left a stale lock — the reclaim
+  // path is exactly what we are testing).
+  try {
+    rmSync(join(ROOT, "backups", ".maintenance.lock"), { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+  try {
+    const first = acquireMaintenanceLock();
+    assert.equal(first.owned, true, "first acquisition must own the lock");
+    // A second acquisition while the owner is ALIVE fails fast.
+    const second = acquireMaintenanceLock();
+    assert.equal(second.owned, false, "second acquisition must not own the lock");
+    assert.equal(second.held, true);
+    assert.equal(second.owner?.pid, process.pid, "the held lock must name the live owner");
+    releaseMaintenanceLock(first);
+    // After release, acquisition succeeds again.
+    const third = acquireMaintenanceLock();
+    assert.equal(third.owned, true, "acquisition must succeed after release");
+    releaseMaintenanceLock(third);
+    // Stale-lock reclaim: a lock owned by a DEAD pid (a crashed process)
+    // is reclaimed automatically.
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      join(ROOT, "backups", ".maintenance.lock"),
+      JSON.stringify({ pid: 999_999_999, startedAt: new Date().toISOString() }),
+      { flag: "wx" },
+    );
+    const reclaimed = acquireMaintenanceLock();
+    assert.equal(reclaimed.owned, true, "a stale lock from a dead owner must be reclaimed");
+    releaseMaintenanceLock(reclaimed);
+  } finally {
+    releaseMaintenanceLock({ owned: true });
+    try {
+      rmSync(join(ROOT, "backups", ".maintenance.lock"), { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
+  assert.ok(journalPath().endsWith(".recovery-journal.json"));
+});
+
+test("planReconciliation: every crash phase maps to a deterministic, never-destructive action", async () => {
+  const { planReconciliation, ACTIVE_DB, SAFETY_DB, ISOLATED_DB } = await awaitImport(
+    "../self-hosted/maintenance.mjs",
+  );
+  const dbs = (extra) => [ACTIVE_DB, SAFETY_DB, ISOLATED_DB, ...extra];
+  // No journal / completed journal -> proceed.
+  assert.equal(planReconciliation({ phase: null, databases: dbs([]) }).action, "proceed");
+  assert.equal(planReconciliation({ phase: "complete", databases: dbs([]) }).action, "proceed");
+  // Crash after the first rename: original is the safety copy; active is
+  // missing -> restore-original (NEVER dropped).
+  assert.equal(
+    planReconciliation({ phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }).action,
+    "restore-original",
+  );
+  // Crash after candidate promotion: tenvyr holds the unproven candidate,
+  // safety holds the original -> rollback-candidate.
+  assert.equal(
+    planReconciliation({ phase: "post-gates", databases: dbs([]) }).action,
+    "rollback-candidate",
+  );
+  assert.equal(
+    planReconciliation({ phase: "swap-verified-to-active", databases: dbs([]) }).action,
+    "rollback-candidate",
+  );
+  // Crash before the first rename (journal written, nothing mutated):
+  // tenvyr is the ORIGINAL -> proceed (the safety copy is the previous
+  // completed recovery's artifact).
+  for (const phase of ["verify-done", "quiescing", "swap-active-to-safety"]) {
+    assert.equal(
+      planReconciliation({ phase, databases: dbs([]) }).action,
+      "proceed",
+      `phase ${phase} with active+safety must proceed`,
+    );
+  }
+  // Mid-reconciliation crash after the rename-back: original active, no
+  // safety -> proceed.
+  assert.equal(
+    planReconciliation({ phase: "swap-verified-to-active", databases: [ACTIVE_DB, ISOLATED_DB] }).action,
+    "proceed",
+  );
+  // No active AND no safety -> blocked (no safe automatic action).
+  assert.equal(
+    planReconciliation({ phase: "swap-verified-to-active", databases: [ISOLATED_DB] }).action,
+    "blocked",
+  );
+  // The original authority must never be dropped by any plan: every
+  // non-proceed action renames the safety copy back or blocks.
+  for (const outcome of [
+    planReconciliation({ phase: "post-gates", databases: dbs([]) }),
+    planReconciliation({ phase: "swap-verified-to-active", databases: [SAFETY_DB, ISOLATED_DB] }),
+  ]) {
+    assert.ok(
+      ["restore-original", "rollback-candidate", "blocked"].includes(outcome.action),
+    );
+  }
+});
+
+test("validateManifestContract fails closed on every corruption/tamper class", async () => {
+  const {
+    validateManifestContract,
+    inventoryFingerprintValue,
+  } = await awaitImport("../self-hosted/anchors.mjs");
+  const hash = (char) => char.repeat(64);
+  const validManifest = {
+    version: "v0.1.0",
+    algorithm: "sha256",
+    verified: true,
+    sourceRevision: "a".repeat(40),
+    checksum: "c".repeat(64),
+    tables: inventoryFingerprintValue(),
+    anchors: {
+      migrationLedgerFingerprint: hash("1"),
+      tableCountFingerprint: hash("2"),
+      planRevisionHashFingerprint: hash("3"),
+      executionAnchor: "exec-1",
+      capsuleAnchor: null,
+    },
+  };
+  const context = {
+    manifest: validManifest,
+    dumpChecksum: "c".repeat(64),
+    sidecarChecksum: "c".repeat(64),
+    TENVYR_VERSION: "v0.1.0",
+  };
+  // The valid manifest passes.
+  assert.equal(validateManifestContract(context).version, "v0.1.0");
+  // Checksum triple: ANY copy mismatch fails.
+  assert.throws(
+    () => validateManifestContract({ ...context, dumpChecksum: "d".repeat(64) }),
+    /checksum mismatch/,
+  );
+  assert.throws(
+    () => validateManifestContract({ ...context, sidecarChecksum: "d".repeat(64) }),
+    /checksum mismatch/,
+  );
+  assert.throws(
+    () =>
+      validateManifestContract({
+        ...context,
+        manifest: { ...validManifest, checksum: "d".repeat(64) },
+      }),
+    /checksum mismatch/,
+  );
+  // Missing manifest / missing verified marker.
+  assert.throws(() => validateManifestContract({ ...context, manifest: null }), /manifest is missing/);
+  assert.throws(
+    () => validateManifestContract({ ...context, manifest: { ...validManifest, verified: undefined } }),
+    /not a VERIFIED backup/,
+  );
+  // Required structural anchors: null and malformed shapes fail; optional
+  // anchors may be null (empty database).
+  for (const key of ["migrationLedgerFingerprint", "tableCountFingerprint", "planRevisionHashFingerprint"]) {
+    assert.throws(
+      () =>
+        validateManifestContract({
+          ...context,
+          manifest: { ...validManifest, anchors: { ...validManifest.anchors, [key]: null } },
+        }),
+      /required anchor/,
+      `${key} null must fail`,
+    );
+    assert.throws(
+      () =>
+        validateManifestContract({
+          ...context,
+          manifest: { ...validManifest, anchors: { ...validManifest.anchors, [key]: "not-hex" } },
+        }),
+      /required anchor/,
+      `${key} malformed must fail`,
+    );
+  }
+  // Version / algorithm / sourceRevision / inventory shape.
+  assert.throws(
+    () => validateManifestContract({ ...context, manifest: { ...validManifest, version: "v9.9.9" } }),
+    /does not match deployment/,
+  );
+  assert.throws(
+    () => validateManifestContract({ ...context, manifest: { ...validManifest, algorithm: "md5" } }),
+    /unsupported backup checksum algorithm/,
+  );
+  assert.throws(
+    () => validateManifestContract({ ...context, manifest: { ...validManifest, sourceRevision: "short" } }),
+    /sourceRevision must be a full git commit SHA/,
+  );
+  assert.throws(
+    () => validateManifestContract({ ...context, manifest: { ...validManifest, tables: "some, other" } }),
+    /inventory does not match/,
+  );
 });
 
 test("invariants checks are executable: environment contract and pinned images", async () => {

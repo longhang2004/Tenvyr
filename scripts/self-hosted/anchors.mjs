@@ -62,6 +62,100 @@ export const TABLES = [
 export const fingerprint = (value) =>
   createHash("sha256").update(value ?? "").digest("hex");
 
+/** The structural anchor keys a VERIFIED backup manifest guarantees are
+ *  non-null (null means the restored snapshot was not structurally
+ *  valid — the backup failed). Restore enforces the SAME contract. */
+export const REQUIRED_ANCHOR_KEYS = [
+  "migrationLedgerFingerprint",
+  "tableCountFingerprint",
+  "planRevisionHashFingerprint",
+];
+
+/** The canonical inventory string a verified manifest records. */
+export const inventoryFingerprintValue = () => TABLES.join(", ");
+
+/**
+ * M11 closure: fail-closed manifest contract validation.
+ *
+ * Enforced BEFORE any quiescing/promotion step:
+ *   - checksum triple: computed dump SHA-256 == .sha256 sidecar (when
+ *     present) == manifest.checksum (when present); ANY mismatch fails;
+ *   - the manifest exists and carries the verified-backup marker;
+ *   - version matches the deployment release version;
+ *   - checksum algorithm is sha256;
+ *   - sourceRevision is a full immutable commit SHA;
+ *   - every REQUIRED structural anchor is present and a well-formed
+ *     64-hex sha256 fingerprint (optional anchors may be null where
+ *     semantically valid, e.g. an empty database has no execution anchor);
+ *   - the recorded authority inventory equals the current canonical
+ *     inventory (a backup from a different schema era fails closed).
+ *
+ * This is corruption/tamper fail-closed behavior within the supported
+ * single-owner trust boundary — NOT cryptographic protection against a
+ * malicious local administrator.
+ */
+export const validateManifestContract = ({
+  manifest,
+  dumpChecksum,
+  sidecarChecksum,
+  TENVYR_VERSION,
+}) => {
+  if (sidecarChecksum && dumpChecksum !== sidecarChecksum) {
+    throw new Error(
+      "checksum mismatch — refusing to restore (dump does not match the .sha256 sidecar)",
+    );
+  }
+  if (manifest?.checksum && dumpChecksum !== manifest.checksum) {
+    throw new Error(
+      "checksum mismatch — refusing to restore (dump does not match the manifest checksum)",
+    );
+  }
+  if (sidecarChecksum && manifest?.checksum && sidecarChecksum !== manifest.checksum) {
+    throw new Error(
+      "checksum mismatch — refusing to restore (.sha256 sidecar does not match the manifest checksum)",
+    );
+  }
+  if (!manifest) {
+    throw new Error(
+      "backup manifest is missing — refusing to restore (this artifact predates verified backups)",
+    );
+  }
+  if (manifest.verified !== true) {
+    throw new Error(
+      "backup manifest is not a VERIFIED backup (verified marker missing) — refusing to restore",
+    );
+  }
+  if (manifest.version !== TENVYR_VERSION) {
+    throw new Error(
+      `backup version ${manifest.version} does not match deployment ${TENVYR_VERSION}`,
+    );
+  }
+  if (manifest.algorithm !== "sha256") {
+    throw new Error(
+      `unsupported backup checksum algorithm "${manifest.algorithm}" — refusing to restore`,
+    );
+  }
+  if (!/^[0-9a-f]{40}$/.test(manifest.sourceRevision ?? "")) {
+    throw new Error(
+      `backup manifest sourceRevision must be a full git commit SHA, got "${manifest.sourceRevision}"`,
+    );
+  }
+  for (const key of REQUIRED_ANCHOR_KEYS) {
+    const value = manifest.anchors?.[key];
+    if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+      throw new Error(
+        `backup manifest required anchor "${key}" is missing or malformed — refusing to restore`,
+      );
+    }
+  }
+  if (manifest.tables !== inventoryFingerprintValue()) {
+    throw new Error(
+      "backup manifest inventory does not match the current authority inventory — refusing to restore",
+    );
+  }
+  return manifest;
+};
+
 /** Migration ledger: the ordered migration NAME sequence. An empty ledger
  *  fingerprints deterministically as the empty string (valid snapshot). */
 export const migrationLedgerSql = () =>

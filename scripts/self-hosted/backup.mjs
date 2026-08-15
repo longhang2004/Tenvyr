@@ -34,9 +34,17 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  inventoryFingerprintValue,
+  REQUIRED_ANCHOR_KEYS as REQUIRED_ANCHOR_KEYS_SHARED,
   snapshotAnchors,
   TABLES,
 } from "./anchors.mjs";
+import { acquireMaintenanceLock, releaseMaintenanceLock } from "./maintenance.mjs";
+
+/** The three structural fingerprints that must be computable from the
+ *  restored dump (null means the restored snapshot is not structurally
+ *  valid — the backup must fail, never PASS). */
+export const REQUIRED_ANCHOR_KEYS = REQUIRED_ANCHOR_KEYS_SHARED;
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const BACKUP_DIR = join(ROOT, "backups");
@@ -79,20 +87,29 @@ export const buildManifest = (base, anchors, sourceRevision) => ({
   anchors,
 });
 
-/** The three structural fingerprints that must be computable from the
- *  restored dump (null means the restored snapshot is not structurally
- *  valid — the backup must fail, never PASS). */
-export const REQUIRED_ANCHOR_KEYS = [
-  "migrationLedgerFingerprint",
-  "tableCountFingerprint",
-  "planRevisionHashFingerprint",
-];
-
 const main = () => {
   mkdirSync(BACKUP_DIR, { recursive: true });
+  // Maintenance serialization: backup uses shared bounded resources (the
+  // verification database + staging dump paths). The exclusive
+  // process-lifetime lock guarantees that a PASSing manifest describes
+  // THAT EXACT dump — a concurrent second backup fails fast instead of
+  // interleaving. A crashed backup releases the lock automatically
+  // (dead-owner-PID stale reclaim). Under `upgrade` the lock is already
+  // owned and inherited via TENVYR_MAINTENANCE_OWNED=1.
+  const lock = acquireMaintenanceLock();
+  if (!lock.owned) {
+    const owner = lock.owner
+      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
+      : "";
+    console.error(
+      `[backup] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
+    );
+    process.exit(1);
+  }
   const { TENVYR_VERSION, POSTGRES_PASSWORD, TENVYR_SOURCE_REVISION } = env();
   if (!TENVYR_VERSION || !POSTGRES_PASSWORD) {
     console.error("[backup] FAIL: deploy.env must set TENVYR_VERSION and POSTGRES_PASSWORD");
+    releaseMaintenanceLock(lock);
     process.exit(1);
   }
   // M11 closure: the deployment identity model has ONE meaning per key —
@@ -105,6 +122,7 @@ const main = () => {
     console.error(
       "[backup] FAIL: deploy.env must set TENVYR_SOURCE_REVISION to the full git commit SHA of the deployed source (e.g. TENVYR_SOURCE_REVISION=$(git rev-parse HEAD))",
     );
+    releaseMaintenanceLock(lock);
     process.exit(1);
   }
 
@@ -193,7 +211,7 @@ const main = () => {
         checksum,
         algorithm: "sha256",
         scope: "PostgreSQL authority only (no artifact bytes, no runtime auth)",
-        tables: TABLES.join(", "),
+        tables: inventoryFingerprintValue(),
       },
       anchors,
       TENVYR_SOURCE_REVISION,
@@ -204,6 +222,7 @@ const main = () => {
     console.log(`[backup] manifest: version=${manifest.version} sourceRevision=${manifest.sourceRevision} verified=${manifest.verified}`);
   } catch (error) {
     console.error(`[backup] FAIL: ${error instanceof Error ? error.message : String(error)}`);
+    releaseMaintenanceLock(lock);
     process.exit(1);
   } finally {
     // Deterministic cleanup: the verification database and in-container
@@ -218,6 +237,7 @@ const main = () => {
         // best-effort cleanup
       }
     }
+    releaseMaintenanceLock(lock);
   }
 };
 

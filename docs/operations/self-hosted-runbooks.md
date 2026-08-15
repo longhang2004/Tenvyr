@@ -67,6 +67,11 @@ both values in `deploy.env` only after success.
 
 ## Backup and restore (drill vs recovery — practice the drill first)
 
+0. Maintenance serialization: only ONE backup/restore/upgrade maintenance
+   operation may run at a time (exclusive lock at
+   `backups/.maintenance.lock`; a concurrent operation fails fast with
+   "maintenance operation already active"). A crashed operation releases
+   the lock automatically (dead-owner-PID stale reclaim).
 1. `pnpm self-hosted:backup` → writes `backups/tenvyr-<version>-<ts>.dump`
    + `.sha256` + `manifest.json`. The backup is VERIFIED before PASS: the
    dump is restored into an isolated `tenvyr_backup_verify` database and
@@ -79,7 +84,10 @@ both values in `deploy.env` only after success.
    restorable. A failed verification never leaves a labeled backup.
 2. Restore DRILL (verification only — the ACTIVE authority is never
    touched): `pnpm self-hosted:restore backups/tenvyr-...dump --drill`
-   — checksum verify, schema/version check, restore into the isolated
+   — checksum verify, fail-closed manifest contract (checksum triple
+   dump == sidecar == manifest, version, sha256 algorithm, verified
+   marker, source revision shape, required structural anchors non-null,
+   canonical inventory), schema/version check, restore into the isolated
    `tenvyr_restore` database, then DEEP integrity checks that recompute
    the snapshot anchors on the RESTORED database and compare them against
    the BACKUP MANIFEST. The current active database is NOT the authority:
@@ -89,19 +97,31 @@ both values in `deploy.env` only after success.
    restorable — it does NOT mean authority was restored.
 3. Recovery (explicit, replaces the active authority):
    `pnpm self-hosted:restore backups/tenvyr-...dump --promote` —
-   FAILURE-SAFE ordering: checksum + manifest + deep manifest-relative
-   verification ALL complete BEFORE any writer is quiesced (a failed
-   backup leaves the deployment untouched and healthy); then quiesce
-   writers, swap the authority with deterministic automatic rollback
-   (the renames are NOT transactionally atomic — if `tenvyr_restore ->
-   tenvyr` fails, `tenvyr_pre_restore -> tenvyr` is attempted immediately
-   and the original deployment is restarted and proven ready), restart,
-   verify readiness + invariants + Capsule/provenance reconstruction, and
-   prove a NEW write through the app API. The pre-recovery safety copy
-   `tenvyr_pre_restore` is kept until every gate passes; any
-   post-promotion gate failure rolls back to the original authority and
-   returns failure — never PASS.
-4. After ANY restore: rotate deployment secrets, reconnect runtimes
+   FAILURE-SAFE AND CRASH-SAFE ordering: checksum + manifest contract +
+   deep manifest-relative verification ALL complete BEFORE any writer is
+   quiesced (a failed backup leaves the deployment untouched and
+   healthy); then quiesce writers, swap the authority with deterministic
+   automatic rollback (the renames are NOT transactionally atomic — if
+   `tenvyr_restore -> tenvyr` fails, `tenvyr_pre_restore -> tenvyr` is
+   attempted immediately and the original deployment is restarted and
+   proven ready), restart, verify readiness + invariants + Capsule/
+   provenance reconstruction, and prove a NEW write through the app API.
+   The pre-recovery safety copy `tenvyr_pre_restore` is kept until every
+   gate passes; any post-promotion gate failure rolls back to the
+   original authority and returns failure — never PASS.
+4. CRASH RECOVERY: promotion journals every phase durably
+   (`backups/.recovery-journal.json`) BEFORE each destructive database
+   step. After ANY process death (e.g. power loss, `kill -9`), the next
+   `restore` invocation (drill, promote, or the explicit
+   `pnpm self-hosted:restore --reconcile`) reconciles the observed state
+   FIRST — before any DROP/rename — and NEVER blindly drops
+   `tenvyr_pre_restore`. The original authority is only ever renamed
+   back; an unproven candidate is preserved under
+   `tenvyr_failed_promotion`; if no safe automatic action exists, the
+   exact observed state and phase-accurate recovery commands are printed.
+   An interrupted promotion is aborted with "retry explicitly" — resume
+   by running the promote again.
+5. After ANY restore: rotate deployment secrets, reconnect runtimes
    explicitly (local CLI auth is runtime-owned machine state and is never
    restored), then run a NEW team run to prove the wedge.
 
@@ -114,10 +134,12 @@ both values in `deploy.env` only after success.
    tree must be clean — arbitrary old source is never rebuilt under a
    newer target tag.
 3. It then takes a VERIFIED backup (backup.mjs PASS implies a manifest
-   proven against an isolated restore of that exact dump). Any backup
-   failure aborts BEFORE compose build/up or any other deployment
-   mutation. After that it FAILS CLOSED unless the resolved Compose stack
-   points every Tenvyr service at the requested target.
+   proven against an isolated restore of that exact dump; the upgrade
+   holds the maintenance lock and the backup child inherits ownership via
+   `TENVYR_MAINTENANCE_OWNED=1`). Any backup failure aborts BEFORE
+   compose build/up or any other deployment mutation. After that it FAILS
+   CLOSED unless the resolved Compose stack points every Tenvyr service
+   at the requested target.
 4. It builds the images with the proven source revision baked in
    (`TENVYR_SOURCE_REVISION`), recreates the stack WITH the target,
    waits for readiness, and proves the RUNNING containers carry BOTH the

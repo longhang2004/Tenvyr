@@ -58,10 +58,13 @@
  * runtimes explicitly (runtime auth is never restored).
  *
  * TEST HOOK (bounded, one-shot per label, never active by default):
- *   TENVYR_RESTORE_FAULT=second-rename|rollback-rename|post-gate-readiness[,more]
+ *   TENVYR_RESTORE_FAULT=second-rename|rollback-rename|post-gate-readiness|
+ *   crash-after-first-rename|crash-after-promotion[,more]
  * Deterministically injects the named failure once, so the rollback paths
- * are exercised by real fault-injection tests. Production behavior is
- * unchanged when the variable is unset.
+ * and the crash-recovery protocol are exercised by real fault-injection
+ * tests. The crash labels terminate the process abruptly (SIGKILL) at the
+ * named phase — no cleanup runs. Production behavior is unchanged when
+ * the variable is unset.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -70,17 +73,26 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   compareAnchors,
+  REQUIRED_ANCHOR_KEYS,
   snapshotAnchors,
-  TABLES,
+  validateManifestContract,
 } from "./anchors.mjs";
+import {
+  ACTIVE_DB,
+  acquireMaintenanceLock,
+  clearJournal,
+  FAILED_PROMOTION_DB,
+  ISOLATED_DB,
+  journalPath,
+  planReconciliation,
+  readJournal,
+  releaseMaintenanceLock,
+  SAFETY_DB,
+  writeJournal,
+} from "./maintenance.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const CONTAINER = "tenvyr-self-hosted-postgres";
-const ISOLATED_DB = "tenvyr_restore";
-const SAFETY_DB = "tenvyr_pre_restore";
-const ACTIVE_DB = "tenvyr";
-/** Bounded state for a restored authority whose post-promotion gates failed. */
-const FAILED_PROMOTION_DB = "tenvyr_failed_promotion";
 
 /** Deploy env file: overridable so disposable-infrastructure tests never
  *  touch an operator's real deploy.env. */
@@ -253,9 +265,12 @@ const restoreIntoIsolated = (dumpPath) => {
   }
 };
 
-/** Verify backup checksum + version + manifest shape. Returns the parsed
- *  manifest (null when no manifest file exists — deep checks fail closed
- *  on that). Every failure here happens BEFORE any quiescing. */
+/** Verify backup checksum + manifest CONTRACT. Returns the parsed
+ *  manifest. The fail-closed contract (validateManifestContract) covers
+ *  the checksum triple (dump SHA-256 == sidecar == manifest.checksum),
+ *  version, algorithm, verified marker, source revision shape, required
+ *  structural anchors (never null), and the canonical authority
+ *  inventory. Every failure here happens BEFORE any quiescing. */
 const verifyBackup = (dumpPath, TENVYR_VERSION) => {
   const bytes = readFileSync(dumpPath);
   const checksum = createHash("sha256").update(bytes).digest("hex");
@@ -265,17 +280,12 @@ const verifyBackup = (dumpPath, TENVYR_VERSION) => {
   // the replace must not silently no-op onto the dump itself — append.
   let manifestPath = dumpPath.replace(/\.dump$/, ".manifest.json");
   if (manifestPath === dumpPath) manifestPath = `${dumpPath}.manifest.json`;
-  let expected = null;
+  let sidecarChecksum = null;
   if (existsSync(sidecar)) {
-    expected = readFileSync(sidecar, "utf8").split(/\s+/)[0];
-  } else if (existsSync(manifestPath)) {
-    expected = JSON.parse(readFileSync(manifestPath, "utf8")).checksum;
+    sidecarChecksum = readFileSync(sidecar, "utf8").split(/\s+/)[0];
   }
-  if (!expected || expected !== checksum) {
-    throw new Error("checksum mismatch — refusing to restore");
-  }
+  let manifest = null;
   if (existsSync(manifestPath)) {
-    let manifest;
     try {
       manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     } catch (error) {
@@ -283,15 +293,13 @@ const verifyBackup = (dumpPath, TENVYR_VERSION) => {
         `malformed backup manifest: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (manifest.version !== TENVYR_VERSION) {
-      throw new Error(
-        `backup version ${manifest.version} does not match deployment ${TENVYR_VERSION}`,
-      );
-    }
-    console.log(`[restore] ok: backup version ${manifest.version} matches deployment`);
-    return manifest;
   }
-  return null;
+  return validateManifestContract({
+    manifest,
+    dumpChecksum: checksum,
+    sidecarChecksum,
+    TENVYR_VERSION,
+  });
 };
 
 const compose = () =>
@@ -432,17 +440,157 @@ const writeProof = () => {
   return null;
 };
 
-/** Prints the exact observed database state and bounded operator recovery
- *  commands after an unrecoverable swap/rollback failure. Never success. */
+/** Reads the observed database names inside the postgres container. */
+const observedDatabases = () => {
+  const result = psql("SELECT datname FROM pg_database ORDER BY datname");
+  if (result.status !== 0) return null;
+  return result.stdout
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+};
+
+/** Restart the original deployment and prove readiness + invariants.
+ *  Returns { ok: true } or { ok: false, reason }. */
+const restartAndProve = () => {
+  try {
+    startServices();
+  } catch (error) {
+    return { ok: false, reason: `service start failed: ${error.message}` };
+  }
+  if (!orchestratorReady() || !gatewayReady()) {
+    return { ok: false, reason: "services did not become ready" };
+  }
+  if (!runInvariants()) {
+    return { ok: false, reason: "invariants failed" };
+  }
+  return { ok: true };
+};
+
+/** Prints the exact observed database state and recovery instructions
+ *  that are ACTUALLY VALID for that state. Never instructs
+ *  safety -> active when an active database already exists without first
+ *  accounting for it (the active one is preserved under the bounded
+ *  failed-promotion name). Never success. */
 const printUnrecoverableState = (context) => {
   console.error(`[restore] CRITICAL: ${context}`);
-  console.error("[restore] observed database state (docker exec psql -U tenvyr -d postgres -tA -c \"SELECT datname FROM pg_database ORDER BY datname\"):");
-  const state = psql("SELECT datname FROM pg_database ORDER BY datname");
-  console.error(state.status === 0 ? `  ${state.stdout.trim().split("\n").filter(Boolean).join(", ")}` : "  (could not read database list)");
-  console.error("[restore] bounded operator recovery commands (run in order, then restart services):");
-  console.error(`  docker exec ${CONTAINER} psql -U tenvyr -d postgres -c 'ALTER DATABASE ${SAFETY_DB} RENAME TO ${ACTIVE_DB}'`);
+  const dbs = observedDatabases();
+  const list = dbs === null ? "(could not read database list)" : dbs.join(", ");
+  console.error(`[restore] observed database state: ${list}`);
+  console.error("[restore] bounded operator recovery commands (valid for the observed state; run in order):");
+  const hasActive = dbs?.includes(ACTIVE_DB) ?? false;
+  const hasSafety = dbs?.includes(SAFETY_DB) ?? false;
+  const psqlCmd = `docker exec ${CONTAINER} psql -U tenvyr -d postgres -c`;
+  if (dbs === null) {
+    console.error(`  ${psqlCmd} "SELECT datname FROM pg_database ORDER BY datname"   # inspect first`);
+  } else if (hasSafety && !hasActive) {
+    // The original authority is the safety copy; no active exists.
+    console.error(`  ${psqlCmd} 'ALTER DATABASE ${SAFETY_DB} RENAME TO ${ACTIVE_DB}'`);
+  } else if (hasSafety && hasActive) {
+    // An active database already exists: it is the UNPROVEN restored
+    // candidate — preserve it under the bounded failed name BEFORE
+    // restoring the original, so no copy is lost.
+    console.error(`  # the active database is the unproven restored candidate; preserve it first:`);
+    console.error(`  ${psqlCmd} 'ALTER DATABASE ${ACTIVE_DB} RENAME TO ${FAILED_PROMOTION_DB}'`);
+    console.error(`  ${psqlCmd} 'ALTER DATABASE ${SAFETY_DB} RENAME TO ${ACTIVE_DB}'`);
+  } else if (!hasActive) {
+    // No active authority AND no safety copy: no safe automatic command.
+    console.error("  # NO active authority and NO safety copy exist — preserve every remaining");
+    console.error("  # database copy; do NOT create a new tenvyr database; contact the");
+    console.error("  # Technical Lead with the observed state above.");
+  } else {
+    // Active present, no safety: the original authority is active; nothing
+    // to rename.
+    console.error("  # the original authority is already active; no rename is needed.");
+  }
   console.error(`  docker compose -f docker-compose.self-hosted.yml --env-file deploy.env start orchestrator gateway`);
+  console.error(`  node scripts/self-hosted/restore.mjs --reconcile   # verify + clear the recovery journal`);
   console.error("[restore] every database copy is preserved; do NOT drop any database before the operator recovery is complete");
+};
+
+/**
+ * Crash-recovery reconciliation: the durable journal + the OBSERVED
+ * database names decide what the next recovery invocation must do —
+ * BEFORE any destructive DROP/rename. The original authority is never
+ * silently deleted: the safety copy is only ever renamed back (or
+ * preserved with exact instructions). Returns an outcome object; when the
+ * state was interrupted, the caller must abort the new operation (retry
+ * required).
+ */
+const reconcileInterruptedState = () => {
+  const journal = readJournal();
+  const dbs = observedDatabases();
+  if (dbs === null) {
+    return {
+      action: "blocked",
+      message: "could not read the database state — refusing to start any maintenance operation",
+    };
+  }
+  const plan = planReconciliation({
+    phase: journal?.phase ?? null,
+    databases: dbs,
+  });
+  if (plan.action === "proceed") {
+    if (journal) clearJournal();
+    return { action: "proceed" };
+  }
+  if (plan.action === "restore-original") {
+    console.error(`[restore] detected an INTERRUPTED promotion (journal phase=${journal.phase}); the original authority is preserved as ${SAFETY_DB}`);
+    const rename = psqlRename(SAFETY_DB, ACTIVE_DB);
+    if (!rename.ok) {
+      printUnrecoverableState(
+        `reconciliation could not restore the original authority (${rename.error})`,
+      );
+      return { action: "blocked", message: "reconciliation failed — see CRITICAL state above" };
+    }
+    clearJournal();
+    // The crashed promotion left the services quiesced: restart the
+    // original deployment and prove readiness + invariants.
+    const healthy = restartAndProve();
+    if (!healthy.ok) {
+      printUnrecoverableState(`reconciliation restored the original authority but the deployment is not healthy (${healthy.reason})`);
+      return { action: "blocked", message: "reconciliation restored the original authority but the deployment is not healthy — see CRITICAL state above" };
+    }
+    console.error("[restore] reconciled: the original authority was RESTORED from the safety copy (renamed back, never dropped); services ready");
+    return {
+      action: "restore-original",
+      message: "interrupted promotion reconciled — the original authority was restored from the safety copy; services are ready; the new operation was aborted; retry explicitly",
+    };
+  }
+  if (plan.action === "rollback-candidate") {
+    console.error(`[restore] detected an INTERRUPTED promotion (journal phase=${journal.phase}); the active database is the UNPROVEN restored candidate`);
+    const preserve = psqlRename(ACTIVE_DB, FAILED_PROMOTION_DB);
+    if (!preserve.ok) {
+      printUnrecoverableState(
+        `reconciliation could not preserve the unproven candidate (${preserve.error})`,
+      );
+      return { action: "blocked", message: "reconciliation failed — see CRITICAL state above" };
+    }
+    const rename = psqlRename(SAFETY_DB, ACTIVE_DB);
+    if (!rename.ok) {
+      printUnrecoverableState(
+        `reconciliation could not restore the original authority (${rename.error})`,
+      );
+      return { action: "blocked", message: "reconciliation failed — see CRITICAL state above" };
+    }
+    clearJournal();
+    const healthy = restartAndProve();
+    if (!healthy.ok) {
+      printUnrecoverableState(`reconciliation restored the original authority but the deployment is not healthy (${healthy.reason})`);
+      return { action: "blocked", message: "reconciliation restored the original authority but the deployment is not healthy — see CRITICAL state above" };
+    }
+    console.error(`[restore] reconciled: the unproven candidate was preserved as ${FAILED_PROMOTION_DB}; the original authority restored; services ready`);
+    return {
+      action: "rollback-candidate",
+      message: "interrupted promotion reconciled — the unproven candidate was preserved and the original authority restored; services are ready; the new operation was aborted; retry explicitly",
+    };
+  }
+  // blocked: no safe automatic action — exact state + instructions.
+  printUnrecoverableState(
+    `no active authority AND no safety copy exist after an interrupted promotion (journal phase=${journal?.phase ?? "unknown"})`,
+  );
+  return { action: "blocked", message: "no safe automatic reconciliation exists — see CRITICAL state and instructions above" };
 };
 
 /** Post-promotion rollback: quiesce, move the unproven restored authority
@@ -463,13 +611,16 @@ const rollbackAfterGateFailure = (gateFailure) => {
       faulted("rollback-rename") ? { ok: false, error: "injected fault: rollback-rename" } : psqlRename(SAFETY_DB, ACTIVE_DB),
   });
   if (!rollback.ok) {
+    // The journal is KEPT: the next invocation reconciles this state.
     printUnrecoverableState(
       `post-promotion rollback failed at "${rollback.phase}": ${rollback.reason}`,
     );
-    throw new Error("post-promotion gate failed AND rollback failed — see CRITICAL state and recovery commands above");
+    throw new Error("post-promotion gate failed AND rollback failed — see CRITICAL state and recovery instructions above");
   }
-  // Bounded cleanup: the failed candidate is dropped only AFTER the
-  // original authority is active again.
+  // The state is reconciled (original authority active again): clear the
+  // durable journal. Bounded cleanup: the failed candidate is dropped only
+  // AFTER the original authority is active again.
+  clearJournal();
   psql(`DROP DATABASE IF EXISTS ${FAILED_PROMOTION_DB}`);
   startServices();
   if (!orchestratorReady() || !gatewayReady()) {
@@ -513,11 +664,39 @@ const runPostPromotionGates = (manifest) => {
   return null;
 };
 
+/** `--reconcile` mode: inspect + reconcile the recovery state only. */
+const reconcileMode = () => {
+  const lock = acquireMaintenanceLock();
+  if (!lock.owned) {
+    console.error("[restore] FAIL: maintenance operation already active — refusing to interleave");
+    process.exit(1);
+  }
+  try {
+    const outcome = reconcileInterruptedState();
+    if (outcome.action === "blocked") {
+      process.exitCode = 1;
+    } else if (outcome.action === "proceed") {
+      console.log("[restore] reconcile: no interrupted promotion detected — the recovery journal is clear");
+    } else {
+      console.log(`[restore] reconcile: ${outcome.message}`);
+    }
+  } catch (error) {
+    console.error(`[restore] FAIL: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  } finally {
+    releaseMaintenanceLock(lock);
+  }
+};
+
 const main = () => {
+  if (process.argv[2] === "--reconcile") {
+    reconcileMode();
+    return;
+  }
   const backupArg = process.argv[2];
   const modeArg = process.argv[3] ?? "--drill";
   if (!backupArg) {
-    console.error("[restore] usage: restore.mjs <backup.dump> [--drill|--promote]");
+    console.error("[restore] usage: restore.mjs <backup.dump> [--drill|--promote] | restore.mjs --reconcile");
     process.exit(1);
   }
   if (modeArg !== "--drill" && modeArg !== "--promote") {
@@ -535,10 +714,40 @@ const main = () => {
     process.exit(1);
   }
 
+  // Maintenance serialization: only one backup/restore operation may use
+  // the shared bounded resources at a time (a crashed owner releases the
+  // lock automatically via dead-PID stale reclaim).
+  const lock = acquireMaintenanceLock();
+  if (!lock.owned) {
+    const owner = lock.owner
+      ? ` (owner pid ${lock.owner.pid} since ${lock.owner.startedAt})`
+      : "";
+    console.error(
+      `[restore] FAIL: maintenance operation already active${owner} — refusing to interleave; wait for it to finish or clear the stale lock at backups/.maintenance.lock`,
+    );
+    process.exit(1);
+  }
+
   try {
-    // 1. Preflight (checksum + version + manifest shape). Any failure here
+    // 0. Crash-recovery reconciliation BEFORE any destructive DROP/rename.
+    //    A process death at ANY promotion phase leaves the durable
+    //    journal + the database names; this invocation reconciles the
+    //    observed state first. The original authority is never silently
+    //    deleted (the safety copy is only ever renamed back).
+    const outcome = reconcileInterruptedState();
+    if (outcome.action !== "proceed") {
+      // The interrupted state was reconciled; the NEW operation must not
+      // proceed — an explicit retry is required.
+      throw new Error(outcome.message);
+    }
+    // Bounded cleanup of a preserved failed-candidate from an earlier
+    // reconciled interruption (never an original authority).
+    psql(`DROP DATABASE IF EXISTS ${FAILED_PROMOTION_DB}`);
+
+    // 1. Preflight (checksum + manifest CONTRACT). Any failure here
     //    leaves the active authority AND the services untouched.
     const manifest = verifyBackup(dumpPath, TENVYR_VERSION);
+    console.log(`[restore] ok: backup version ${manifest.version} matches deployment; verified backup contract PASS`);
 
     if (modeArg === "--drill") {
       console.log("[restore] DRILL mode: the ACTIVE authority is never touched.");
@@ -569,34 +778,62 @@ const main = () => {
     if (violations.length > 0) {
       throw new Error(`restored database failed deep integrity checks; the ACTIVE authority was NOT replaced:\n  ${violations.join("\n  ")}`);
     }
-    console.log("[restore] verified backup (pre-quiesce): checksum + manifest + deep integrity PASS against the backup manifest");
+    console.log("[restore] verified backup (pre-quiesce): checksum + manifest contract + deep integrity PASS against the backup manifest");
+    writeJournal("verify-done", dumpPath);
 
     // 3. Quiesce writers (partial failure restarts both services).
     quiesce();
+    writeJournal("quiescing", dumpPath);
 
     // 4. Bounded authority swap with deterministic automatic rollback.
+    //    The durable journal advances BEFORE each destructive rename, so
+    //    a crash at any point is reconciled by the next invocation.
     console.log("[restore] promoting the verified database to ACTIVE authority...");
+    writeJournal("swap-active-to-safety", dumpPath);
     const swap = swapAuthority({
       dropSafety: () => {
         const drop = psql(`DROP DATABASE IF EXISTS ${SAFETY_DB}`);
         return drop.status === 0 ? { ok: true } : { ok: false, error: (drop.stderr ?? "").trim() || "could not replace the previous safety copy" };
       },
-      renameActiveToSafety: () => psqlRename(ACTIVE_DB, SAFETY_DB),
-      renameVerifiedToActive: () =>
-        faulted("second-rename") ? { ok: false, error: "injected fault: second-rename" } : psqlRename(ISOLATED_DB, ACTIVE_DB),
+      renameActiveToSafety: () => {
+        const result = psqlRename(ACTIVE_DB, SAFETY_DB);
+        if (result.ok) {
+          writeJournal("swap-verified-to-active", dumpPath);
+          if (faulted("crash-after-first-rename")) {
+            process.kill(process.pid, "SIGKILL");
+          }
+        }
+        return result;
+      },
+      renameVerifiedToActive: () => {
+        const result = faulted("second-rename")
+          ? { ok: false, error: "injected fault: second-rename" }
+          : psqlRename(ISOLATED_DB, ACTIVE_DB);
+        if (result.ok) {
+          writeJournal("post-gates", dumpPath);
+          if (faulted("crash-after-promotion")) {
+            process.kill(process.pid, "SIGKILL");
+          }
+        }
+        return result;
+      },
       renameSafetyToActive: () =>
         faulted("rollback-rename") ? { ok: false, error: "injected fault: rollback-rename" } : psqlRename(SAFETY_DB, ACTIVE_DB),
     });
     if (!swap.ok) {
       if (swap.phase === "rollback-failed") {
+        // The journal is KEPT: the next invocation reconciles this state
+        // (safety holds the original authority).
         printUnrecoverableState(
           `promotion swap failed (${swap.reason}) AND automatic rollback failed (${swap.rollbackError})`,
         );
-        throw new Error("promotion swap failed and rollback failed — the original authority is preserved as tenvyr_pre_restore; see CRITICAL state and recovery commands above");
+        throw new Error("promotion swap failed and rollback failed — the original authority is preserved as tenvyr_pre_restore; see CRITICAL state and recovery instructions above");
       }
       if (swap.phase === "rolled-back") {
-        // Original authority is active again: restart + prove readiness,
-        // then return promotion failure (never success).
+        // Original authority is active again (the state is reconciled):
+        // clear the journal, restart + prove readiness, then return
+        // promotion failure (never success).
+        clearJournal();
         startServices();
         if (!orchestratorReady() || !gatewayReady()) {
           printUnrecoverableState("post-rollback services did not become ready");
@@ -611,6 +848,7 @@ const main = () => {
       }
       // drop-safety / active-to-safety: the active authority was NEVER
       // renamed; restart the quiesced services and fail.
+      clearJournal();
       startServices();
       console.log(`[restore] ok: services restarted; active authority untouched (swap failed at "${swap.phase}")`);
       throw new Error(`promotion swap failed at "${swap.phase}": ${swap.reason} — the active authority was NOT touched`);
@@ -627,12 +865,18 @@ const main = () => {
       // rollbackAfterGateFailure always throws; this line is unreachable.
       process.exit(1);
     }
+    // Durable completion marker: distinguishes a fully completed recovery
+    // (safety copy retained as a completed artifact) from an interrupted
+    // one. Written BEFORE printing PASS.
+    writeJournal("complete", dumpPath);
     console.log("[restore] PASS: verified backup promoted; readiness, invariants, Capsule/provenance reconstruction, and a new write all proven");
     console.log("[restore] next: rotate deployment secrets, reconnect runtimes (runtime auth is never restored).");
     console.log("[restore] NOT restored: local CLI auth state, external runtime sessions, provider secrets, artifact bytes, object stores.");
   } catch (error) {
     console.error(`[restore] FAIL: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    releaseMaintenanceLock(lock);
   }
 };
 
