@@ -32,6 +32,7 @@ export const TABLES = [
   "plan_proposals",
   "step_executions",
   "step_attempts",
+  "workspaces",
   "dispatch_outbox",
   "result_inbox",
   "result_conflicts",

@@ -14,7 +14,7 @@
  *        (`tenvyr_backup_verify`, bounded, dropped before and after)
  *     -> compute ALL manifest anchors FROM THE RESTORED DUMP
  *     -> prove the restored snapshot is structurally valid
- *        (migration ledger + full 31-table inventory counts + plan hash
+ *        (migration ledger + full 32-table inventory counts + plan hash
  *         ledger all readable)
  *     -> only then finalize the verified manifest + checksum, rename the
  *        staging dump to its final name, and print PASS

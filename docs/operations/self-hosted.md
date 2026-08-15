@@ -107,7 +107,7 @@ operator fills values from their own secret store. No installer framework.
   (custom format) is restored into an isolated verification database
   (`tenvyr_backup_verify`, bounded and dropped before/after); ALL manifest
   anchors (migration ledger fingerprint, table inventory/count
-  fingerprint over the complete authoritative 31-table set, plan revision
+  fingerprint over the complete authoritative 32-table set, plan revision
   hash-ledger fingerprint, execution provenance anchor, terminal
   Capsule/export anchor) are computed FROM THE RESTORED DUMP — never from
   the live database — and proven structurally valid. Only then is the

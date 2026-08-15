@@ -523,7 +523,7 @@ test("the canonical backup inventory matches the authoritative entity/schema inv
   // Spot-check the two tables this closure added.
   assert.ok(backupSet.has("pipelines"));
   assert.ok(backupSet.has("plan_proposals"));
-  assert.equal(TABLES.length, 31);
+  assert.equal(TABLES.length, 32);
 });
 
 test("restore verifies BEFORE quiescing and swaps via a rollback-capable state machine", async () => {

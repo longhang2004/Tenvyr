@@ -76,7 +76,7 @@ both values in `deploy.env` only after success.
    + `.sha256` + `manifest.json`. The backup is VERIFIED before PASS: the
    dump is restored into an isolated `tenvyr_backup_verify` database and
    ALL manifest anchors (migration ledger fingerprint, table
-   inventory/count fingerprint over the complete authoritative 31-table
+   inventory/count fingerprint over the complete authoritative 32-table
    set, plan revision hash-ledger fingerprint, execution provenance
    anchor, representative terminal Capsule/export anchor) are computed
    FROM THE RESTORED DUMP — never from the live database. The manifest is

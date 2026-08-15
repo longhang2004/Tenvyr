@@ -113,11 +113,15 @@ const readOwnerFrom = (path) => {
 const readLockOwner = () => readOwnerFrom(LOCK_PATH);
 
 const isPidAlive = (pid) => {
+  if (typeof pid !== "number" || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // ESRCH is the ONLY "gone" verdict; EPERM (exists, not signalable) is
+    // conservatively ALIVE — a stale-lock reclaim must never treat an
+    // existent owner as dead.
+    return error?.code === "ESRCH" ? false : true;
   }
 };
 
