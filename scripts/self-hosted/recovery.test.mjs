@@ -834,7 +834,7 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     const after = databases();
     assert.ok(after.includes("tenvyr"), "the ORIGINAL authority must be active after the non-colliding rollback");
     assert.ok(after.includes("tenvyr_failed_promotion"), "the manually preserved candidate must NOT have been overwritten or deleted");
-    assert.ok(!after.includes("tenvyr_failed_promotion_1"), `the rollback's own candidate was cleaned up after the successful rollback (only the pre-existing preserved candidate remains); observed: ${after.join(", ")}`);
+    assert.ok(!after.includes("tenvyr_failed_promotion_1"), `the rollback's own candidate was cleaned up after the successful rollback (only the pre-existing preserved candidate remains); observed: ${after.join(", ")}; promote output: ${(failed.stdout + failed.stderr).slice(-800)}`);
     assert.ok(pipelines().includes("crash-f9-state"), "the ORIGINAL data must still be present");
     assertServicesReady("after the non-colliding rollback");
     const postRecovery = createPipeline("crash-f9-recovery-write");
