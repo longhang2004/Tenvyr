@@ -246,13 +246,37 @@ export type RuntimeModelsRefreshV1 = {
   catalog: ModelCatalogSnapshotV1;
 };
 
+/** P2 final closure: OpenCode auth method — the REAL contract is
+ *  `{ type: "oauth" | "api", label }`; a method is identified by its
+ *  STABLE LIST INDEX within the discovery snapshot, never a synthesized
+ *  string id. `requiresPrompt` marks methods Tenvyr will not drive (fail
+ *  closed -> guided official login command). */
+export type OpenCodeAuthMethodV1 = {
+  methodIndex: number;
+  type: "oauth" | "api";
+  label: string;
+  requiresPrompt: boolean;
+};
+
 /** Auth methods for ONE provider of ONE connection (OpenCode Server API). */
 export type ProviderAuthMethodsV1 = {
   connectionId: string;
   revisionNumber: number;
   runtimeKind: string;
   providerId: string;
-  methods: Array<{ id: string; type?: string }>;
+  methods: OpenCodeAuthMethodV1[];
+};
+
+/** Bounded result of BEGINNING the runtime-owned auth flow. The same live
+ *  management session completes the flow. */
+export type OpenCodeAuthBeginV1 = {
+  authFlowId: string;
+  url: string;
+  method: "auto" | "code";
+  instructions: string | null;
+  connectionId: string;
+  connectionRevision: number;
+  providerId: string;
 };
 
 /** Bounded evidence of a REAL runtime invocation for a target. "ok" only

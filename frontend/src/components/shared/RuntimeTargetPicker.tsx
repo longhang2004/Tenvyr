@@ -246,6 +246,23 @@ export function RuntimeTargetPicker({
         ? "Anthropic"
         : null;
 
+  /** Manual entry never bypasses connection/provider authorization: for
+   *  runtimes with authoritative provider discovery (opencode), the manual
+   *  provider/model target must reference a provider AUTHENTICATED through
+   *  this exact connection. */
+  const manualModelIsAllowed = (): boolean => {
+    const modelId = manualModel.trim();
+    if (!modelId) return false;
+    if (providerDiscoverySupported && selectable.length > 0) {
+      const providerId = modelId.includes("/") ? modelId.split("/")[0] : null;
+      if (!providerId) return false;
+      return selectable.some((p) => p.providerId === providerId);
+    }
+    // No authoritative provider discovery (codex/claude/generic): manual
+    // entry remains available; the backend still authorizes the target.
+    return true;
+  };
+
   /** Audited Test Runtime Target: a SMALL BOUNDED REAL INVOCATION through
    *  the selected connection + model. May consume provider credits. */
   const handleTestTarget = async () => {
@@ -378,19 +395,21 @@ export function RuntimeTargetPicker({
               {loading ? (
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Loading providers & models…</div>
               ) : selectable.length === 0 && providerDiscoverySupported ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    No providers connected through this runtime. Connect a provider on the
-                    Runtimes page before choosing a model target.
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.35rem",
+                    fontSize: "0.75rem",
+                    color: "var(--accent-amber)",
+                  }}
+                >
+                  <div>
+                    No providers connected through this runtime. Zero authenticated
+                    providers means NO explicit provider/model target can launch —
+                    connect a provider on the Runtimes page first. Only &quot;Runtime
+                    default&quot; (no model argument) is available.
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => setManualMode(true)}
-                    disabled={disabled}
-                  >
-                    Enter model ID manually
-                  </button>
                 </div>
               ) : catalog && catalog.length > 0 ? (
                 <>
@@ -471,7 +490,7 @@ export function RuntimeTargetPicker({
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
-                disabled={!manualModel.trim() || disabled}
+                disabled={!manualModel.trim() || disabled || !manualModelIsAllowed()}
                 onClick={() => {
                   selectModel(manualModel.trim());
                   setManualMode(false);

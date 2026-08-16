@@ -303,14 +303,20 @@ function NewTeamRunContent() {
           );
           continue;
         }
-        if (discovery.providers.length === 0) continue; // implied single provider
         const providerId = target.modelId.includes("/")
           ? target.modelId.split("/")[0]
           : null;
+        if (providerId && discovery.providers.length === 0) {
+          // Authoritative provider discovery (opencode) with ZERO connected
+          // providers: no explicit provider/model target may launch.
+          unavailable.push(
+            `${target.connectionId} · ${providerId} — no providers connected through this runtime`,
+          );
+          continue;
+        }
         const connected = discovery.providers.filter((p) => p.authenticated);
         if (
           providerId &&
-          connected.length > 0 &&
           !connected.some((p) => p.providerId === providerId)
         ) {
           unavailable.push(

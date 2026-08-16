@@ -22,6 +22,7 @@ import type {
   RuntimeModelsRefreshV1,
   ProviderAuthMethodsV1,
   TestTargetEvidenceV1,
+  OpenCodeAuthBeginV1,
 } from "./types.ts";
 
 export const GATEWAY_API_URL =
@@ -329,29 +330,39 @@ export class TenvyrApiClient {
     });
   }
 
-  /** Audited: start the runtime-owned OpenCode OAuth flow. Returns a
-   *  validated authorization URL; Tenvyr never sees tokens. */
-  async openCodeOauthAuthorize(
+  /** Audited: BEGIN the runtime-owned OpenCode auth flow with the SELECTED
+   *  METHOD INDEX. The same live management session completes the flow;
+   *  Tenvyr never sees tokens. */
+  async openCodeOauthBegin(
     connectionId: string,
     providerId: string,
+    methodIndex: number,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ authorizationUrl: string }>>> {
-    return this.request("/api/provider-discovery/commands/oauth-authorize", {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<OpenCodeAuthBeginV1>>> {
+    return this.request("/api/provider-discovery/commands/oauth-begin", {
       method: "POST",
-      body: { idempotencyKey, connectionId, providerId },
+      body: { idempotencyKey, connectionId, providerId, methodIndex },
     });
   }
 
-  /** Audited: complete the OpenCode OAuth flow after the operator
-   *  authorized in the provider's own UI. */
-  async openCodeOauthCallback(
-    connectionId: string,
-    providerId: string,
+  /** Audited: COMPLETE the flow through the same live session. The bounded
+   *  code (code flow only) is sent once and never logged/persisted. */
+  async openCodeOauthComplete(
+    authFlowId: string,
+    code?: string,
     idempotencyKey: string = crypto.randomUUID(),
   ): Promise<ApiResponse<WorkbenchCommandResultV1<{ connected: boolean }>>> {
-    return this.request("/api/provider-discovery/commands/oauth-callback", {
+    return this.request("/api/provider-discovery/commands/oauth-complete", {
       method: "POST",
-      body: { idempotencyKey, connectionId, providerId },
+      body: { idempotencyKey, authFlowId, ...(code !== undefined ? { code } : {}) },
+    });
+  }
+
+  /** Cancel an in-flight auth flow (closes its management session). */
+  async openCodeOauthCancel(authFlowId: string): Promise<ApiResponse<{ cancelled: boolean }>> {
+    return this.request("/api/provider-discovery/commands/oauth-cancel", {
+      method: "POST",
+      body: { authFlowId },
     });
   }
 

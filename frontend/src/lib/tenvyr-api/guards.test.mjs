@@ -4,6 +4,8 @@ import {
   MalformedResponseError,
   parseConnectionTestReceipt,
   parseConnectionTestResult,
+  parseOpenCodeAuthBegin,
+  parseProviderAuthMethods,
   parseProviderDiscovery,
   parseTestTargetEvidence,
   parseWorkbenchCommandResult,
@@ -291,5 +293,61 @@ describe("parseProviderDiscovery (P2 closure round 2)", () => {
       MalformedResponseError,
     );
     assert.throws(() => parseTestTargetEvidence({ ...ok, status: undefined }), MalformedResponseError);
+  });
+});
+
+describe("P2 final closure: OpenCode auth contract (type/label + method index)", () => {
+  test("auth methods parse the REAL contract {type,label} with stable list indexes — no fake string id", () => {
+    const parsed = parseProviderAuthMethods({
+      connectionId: "conn:opencode-A",
+      revisionNumber: 1,
+      runtimeKind: "opencode",
+      providerId: "openai",
+      methods: [
+        { methodIndex: 0, type: "oauth", label: "OAuth" },
+        { methodIndex: 1, type: "api", label: "API Key" },
+      ],
+    });
+    assert.equal(parsed.methods.length, 2);
+    assert.deepEqual(parsed.methods.map((m) => m.type), ["oauth", "api"]);
+    assert.deepEqual(parsed.methods.map((m) => m.methodIndex), [0, 1]);
+    assert.equal(parsed.methods[0].label, "OAuth");
+    assert.equal("id" in parsed.methods[0], false);
+    // Malformed entries are errors, never optimistic defaults.
+    for (const bad of [
+      { ...parsed, methods: [{ type: "oauth", label: "OAuth" }] }, // no methodIndex
+      { ...parsed, methods: [{ methodIndex: 0, type: "magic", label: "X" }] },
+      { ...parsed, methods: [{ methodIndex: 0, type: "oauth" }] }, // no label
+      { ...parsed, methods: "nope" },
+    ]) {
+      assert.throws(() => parseProviderAuthMethods(bad), MalformedResponseError);
+    }
+  });
+
+  test("oauth begin parses auto/code strictly; unknown flow method is malformed", () => {
+    const auto = parseOpenCodeAuthBegin({
+      authFlowId: "a".repeat(32),
+      url: "https://provider.example/authorize?state=x",
+      method: "auto",
+      instructions: "Complete in the provider window.",
+      connectionId: "conn:opencode-A",
+      connectionRevision: 1,
+      providerId: "openai",
+    });
+    assert.equal(auto.method, "auto");
+    assert.equal(auto.authFlowId, "a".repeat(32));
+
+    const code = parseOpenCodeAuthBegin({ ...auto, method: "code", instructions: null });
+    assert.equal(code.method, "code");
+    assert.equal(code.instructions, null);
+
+    for (const bad of [
+      { ...auto, method: "magic" },
+      { ...auto, url: "javascript:alert(1)" },
+      { ...auto, authFlowId: "short" },
+      null,
+    ]) {
+      assert.throws(() => parseOpenCodeAuthBegin(bad), MalformedResponseError);
+    }
   });
 });

@@ -4,6 +4,7 @@ import { TenvyrApiClient } from "./client.ts";
 import { TenvyrApiError } from "./errors.ts";
 import {
   parseConnectionTestResult,
+  parseOpenCodeAuthBegin,
   parseProviderDiscovery,
   parseTestTargetEvidence,
   parseWorkbenchCommandResult,
@@ -293,6 +294,69 @@ describe("TenvyrApiClient", () => {
       );
       assert.equal(targetCall.body.connectionId, "conn:opencode-A");
       assert.equal(targetCall.body.modelId, "openai/gpt-5.5");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("oauth begin posts the SELECTED METHOD INDEX; complete posts authFlowId + bounded code (P2 final closure)", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = mock.fn(async (url, options) => {
+      const body = options?.body ? JSON.parse(options.body) : undefined;
+      calls.push({ url, body });
+      if (String(url).endsWith("/oauth-begin")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              action: "opencode-oauth-begin",
+              idempotencyKey: body.idempotencyKey,
+              outcome: "executed",
+              result: {
+                authFlowId: "b".repeat(32),
+                url: "https://provider.example/authorize?state=x",
+                method: "code",
+                instructions: "Enter the code.",
+                connectionId: "conn:opencode-A",
+                connectionRevision: 1,
+                providerId: "openai",
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (String(url).endsWith("/oauth-complete")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              action: "opencode-oauth-complete",
+              idempotencyKey: body.idempotencyKey,
+              outcome: "executed",
+              result: { providerId: "openai", connectionId: "conn:opencode-A", connected: true },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+
+    try {
+      const client = new TenvyrApiClient(fakeBaseUrl);
+      const begun = await client.openCodeOauthBegin("conn:opencode-A", "openai", 1, "flow-key-1");
+      const flow = parseOpenCodeAuthBegin(parseWorkbenchCommandResult(begun.data).result);
+      assert.equal(flow.method, "code");
+      const beginCall = calls.find((c) => String(c.url).endsWith("/oauth-begin"));
+      assert.equal(beginCall.body.methodIndex, 1);
+
+      const completed = await client.openCodeOauthComplete(flow.authFlowId, "abc123", "flow-key-2");
+      const completeCall = calls.find((c) => String(c.url).endsWith("/oauth-complete"));
+      assert.equal(completeCall.body.authFlowId, "b".repeat(32));
+      assert.equal(completeCall.body.code, "abc123");
+      assert.equal(parseWorkbenchCommandResult(completed.data).result?.connected, true);
     } finally {
       globalThis.fetch = originalFetch;
     }

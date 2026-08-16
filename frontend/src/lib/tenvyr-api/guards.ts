@@ -14,6 +14,8 @@ import {
   type ConnectionStatusState,
   type ConnectionTestReceiptV1,
   type ConnectionTestResultV1,
+  type OpenCodeAuthBeginV1,
+  type OpenCodeAuthMethodV1,
   type ProviderAuthMethodsV1,
   type ProviderDiscoveryV1,
   type RuntimeModelsRefreshV1,
@@ -270,15 +272,68 @@ export function parseProviderAuthMethods(value: unknown): ProviderAuthMethodsV1 
   if (!isRecord(value) || !Array.isArray(value.methods)) {
     throw new MalformedResponseError("provider auth methods");
   }
+  const methods: OpenCodeAuthMethodV1[] = [];
+  for (const entry of value.methods) {
+    if (!isRecord(entry)) throw new MalformedResponseError("auth method entry");
+    if (typeof entry.methodIndex !== "number" || !Number.isInteger(entry.methodIndex)) {
+      throw new MalformedResponseError("auth method methodIndex");
+    }
+    if (entry.type !== "oauth" && entry.type !== "api") {
+      throw new MalformedResponseError(`auth method type (got ${String(entry.type)})`);
+    }
+    if (typeof entry.label !== "string" || entry.label.length === 0) {
+      throw new MalformedResponseError("auth method label");
+    }
+    methods.push({
+      methodIndex: entry.methodIndex,
+      type: entry.type,
+      label: entry.label,
+      requiresPrompt: entry.requiresPrompt === true,
+    });
+  }
   return {
     connectionId: String(value.connectionId ?? ""),
     revisionNumber: typeof value.revisionNumber === "number" ? value.revisionNumber : 0,
     runtimeKind: typeof value.runtimeKind === "string" ? value.runtimeKind : "",
     providerId: String(value.providerId ?? ""),
-    methods: value.methods
-      .filter((m) => isRecord(m) && typeof m.id === "string")
-      .map((m) => ({ id: m.id, ...(typeof m.type === "string" ? { type: m.type } : {}) })),
+    methods,
   };
+}
+
+/** P2 final closure: strict parse of the BEGIN result — url validated,
+ *  method exhaustive auto|code (unknown is malformed, never optimistic),
+ *  bounded instructions. */
+export function parseOpenCodeAuthBegin(value: unknown): OpenCodeAuthBeginV1 {
+  if (!isRecord(value)) throw new MalformedResponseError("oauth begin");
+  if (typeof value.authFlowId !== "string" || !/^[0-9a-f]{32}$/.test(value.authFlowId)) {
+    throw new MalformedResponseError("authFlowId");
+  }
+  if (typeof value.url !== "string" || !isSafeHttpUrl(value.url)) {
+    throw new MalformedResponseError("authorization url");
+  }
+  if (value.method !== "auto" && value.method !== "code") {
+    throw new MalformedResponseError(`authorization method (got ${String(value.method)})`);
+  }
+  return {
+    authFlowId: value.authFlowId,
+    url: value.url,
+    method: value.method,
+    instructions: typeof value.instructions === "string" ? value.instructions : null,
+    connectionId: String(value.connectionId ?? ""),
+    connectionRevision: typeof value.connectionRevision === "number" ? value.connectionRevision : 0,
+    providerId: String(value.providerId ?? ""),
+  };
+}
+
+function isSafeHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (parsed.username !== "" || parsed.password !== "") return false;
+    return Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function parseTestTargetEvidence(value: unknown): TestTargetEvidenceV1 {

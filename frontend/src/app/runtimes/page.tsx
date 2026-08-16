@@ -19,6 +19,8 @@ import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
 import {
   MalformedResponseError,
   parseConnectionTestResult,
+  parseOpenCodeAuthBegin,
+  parseProviderAuthMethods,
   parseProviderDiscovery,
   parseWorkbenchCommandResult,
 } from "../../lib/tenvyr-api/guards.ts";
@@ -31,6 +33,8 @@ import type {
   ModelCatalogSnapshotV1,
   ModelCatalogEntryV1,
   RuntimeProviderV1,
+  OpenCodeAuthMethodV1,
+  OpenCodeAuthBeginV1,
 } from "../../lib/tenvyr-api/types.ts";
 import { StatusBadge } from "../../components/shared/StatusBadge.tsx";
 import { LoadingSpinner } from "../../components/shared/LoadingSpinner.tsx";
@@ -103,15 +107,22 @@ export default function RuntimesPage() {
   >({});
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
-  // OAuth connect flow per connection::provider
+  // OAuth connect flow per connection::provider — the SELECTED auth method
+  // travels by its stable method index; the flow keeps ONE live management
+  // session from begin to complete/cancel.
   const [connectFlow, setConnectFlow] = useState<{
     connectionId: string;
     providerId: string;
-    authorizationUrl: string | null;
-    step: "choose" | "authorizing" | "completed";
+    step: "choose" | "begin" | "completed";
     error: string | null;
-    authMethods: Array<{ id: string; type?: string }>;
+    authMethods: OpenCodeAuthMethodV1[];
     loading: boolean;
+    selectedMethodIndex: number | null;
+    authFlowId: string | null;
+    url: string | null;
+    method: "auto" | "code" | null;
+    instructions: string | null;
+    codeInput: string;
   } | null>(null);
 
   // Advanced Connection Form state
@@ -646,15 +657,20 @@ export default function RuntimesPage() {
     setConnectFlow({
       connectionId,
       providerId,
-      authorizationUrl: null,
       step: "choose",
       error: null,
       authMethods: [],
       loading: true,
+      selectedMethodIndex: null,
+      authFlowId: null,
+      url: null,
+      method: null,
+      instructions: null,
+      codeInput: "",
     });
     try {
       const res = await tenvyrApi.getRuntimeProviderAuthMethods(connectionId, providerId);
-      const methods = res.success ? (res.data?.methods ?? []) : [];
+      const methods = res.success ? parseProviderAuthMethods(res.data).methods : [];
       setConnectFlow((current) =>
         current ? { ...current, authMethods: methods, loading: false } : current,
       );
@@ -671,20 +687,30 @@ export default function RuntimesPage() {
     }
   };
 
-  const handleOauthAuthorize = async (connectionId: string, providerId: string) => {
-    setConnectFlow((current) =>
-      current ? { ...current, step: "authorizing", error: null, loading: true } : current,
-    );
+  /** Begin: start the flow with the SELECTED method index (one live
+   *  session retained). */
+  const handleOauthBegin = async (connectionId: string, providerId: string) => {
+    const flow = connectFlow;
+    if (!flow || flow.selectedMethodIndex === null) return;
+    setConnectFlow({ ...flow, step: "begin", error: null, loading: true });
     try {
-      const res = await tenvyrApi.openCodeOauthAuthorize(connectionId, providerId);
-      const command = parseWorkbenchCommandResult<{ authorizationUrl: string }>(res.data);
+      const res = await tenvyrApi.openCodeOauthBegin(
+        connectionId,
+        providerId,
+        flow.selectedMethodIndex,
+      );
+      const command = parseWorkbenchCommandResult<OpenCodeAuthBeginV1>(res.data);
       if (command.outcome === "executed" || command.outcome === "duplicate") {
+        const begun = parseOpenCodeAuthBegin(command.result);
         setConnectFlow((current) =>
           current
             ? {
                 ...current,
-                step: "authorizing",
-                authorizationUrl: command.result?.authorizationUrl ?? null,
+                step: "begin",
+                authFlowId: begun.authFlowId,
+                url: begun.url,
+                method: begun.method,
+                instructions: begun.instructions,
                 loading: false,
               }
             : current,
@@ -692,11 +718,7 @@ export default function RuntimesPage() {
       } else {
         setConnectFlow((current) =>
           current
-            ? {
-                ...current,
-                loading: false,
-                error: command.error?.message || "Authorization failed",
-              }
+            ? { ...current, loading: false, error: command.error?.message || "Authorization failed" }
             : current,
         );
       }
@@ -713,12 +735,17 @@ export default function RuntimesPage() {
     }
   };
 
-  const handleOauthCallback = async (connectionId: string, providerId: string) => {
-    setConnectFlow((current) =>
-      current ? { ...current, step: "completed", loading: true, error: null } : current,
-    );
+  /** Complete through the SAME live session; the bounded code (code flow)
+   *  is sent once, never logged. */
+  const handleOauthComplete = async () => {
+    const flow = connectFlow;
+    if (!flow || !flow.authFlowId) return;
+    setConnectFlow({ ...flow, loading: true, error: null });
     try {
-      const res = await tenvyrApi.openCodeOauthCallback(connectionId, providerId);
+      const res = await tenvyrApi.openCodeOauthComplete(
+        flow.authFlowId,
+        flow.method === "code" && flow.codeInput.trim() ? flow.codeInput.trim() : undefined,
+      );
       const command = parseWorkbenchCommandResult<{ connected: boolean }>(res.data);
       const connected = command.result?.connected === true;
       if (command.outcome === "executed" || command.outcome === "duplicate") {
@@ -728,16 +755,16 @@ export default function RuntimesPage() {
         setNotice({
           type: connected ? "success" : "warning",
           message: connected
-            ? `Provider "${providerId}" connected through ${connectionId}.`
-            : `Provider "${providerId}" is still not connected according to ${connectionId}.`,
+            ? `Provider "${flow.providerId}" connected through ${flow.connectionId}.`
+            : `Provider "${flow.providerId}" is still not connected according to ${flow.connectionId}.`,
         });
         // Refresh the connection's provider projection.
-        const res2 = await tenvyrApi.discoverRuntimeProviders(connectionId);
+        const res2 = await tenvyrApi.discoverRuntimeProviders(flow.connectionId);
         if (res2.success) {
           const discovery = parseProviderDiscovery(res2.data);
           setProvidersByConnection((current) => ({
             ...current,
-            [connectionId]: discovery.providers,
+            [flow.connectionId]: discovery.providers,
           }));
         }
       } else {
@@ -746,7 +773,7 @@ export default function RuntimesPage() {
             ? {
                 ...current,
                 loading: false,
-                error: command.error?.message || "OAuth callback failed",
+                error: command.error?.message || "OAuth completion failed",
               }
             : current,
         );
@@ -764,6 +791,21 @@ export default function RuntimesPage() {
     }
   };
 
+  /** Cancel: deterministic cleanup of the live management session. */
+  const handleOauthCancel = async () => {
+    const flow = connectFlow;
+    if (!flow) return;
+    if (flow.authFlowId) {
+      try {
+        await tenvyrApi.openCodeOauthCancel(flow.authFlowId);
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    setConnectFlow(null);
+  };
+
+  /** Key per-connection::provider state identity. */
   return (
     <div className="page-container">
       {/* Header */}
@@ -1562,118 +1604,144 @@ export default function RuntimesPage() {
                                 </div>
                               )}
                               {!connectFlow.loading &&
-                                connectFlow.authMethods.some((m) => m.id === "oauth") && (
-                                  <>
-                                    {!connectFlow.authorizationUrl ? (
+                                connectFlow.step === "choose" &&
+                                connectFlow.authMethods.length === 0 && (
+                                  <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                                    The runtime reports no auth methods for this provider.
+                                  </div>
+                                )}
+                              {!connectFlow.loading && connectFlow.step === "choose" && (
+                                <>
+                                  {/* Auth method selection: the REAL contract is
+                                  {type,label} identified by stable list index. */}
+                                  <select
+                                    value={connectFlow.selectedMethodIndex ?? ""}
+                                    onChange={(e) =>
+                                      setConnectFlow((current) =>
+                                        current
+                                          ? {
+                                              ...current,
+                                              selectedMethodIndex:
+                                                e.target.value === ""
+                                                  ? null
+                                                  : Number(e.target.value),
+                                            }
+                                          : current,
+                                      )
+                                    }
+                                    className="form-select"
+                                    aria-label="Auth method"
+                                  >
+                                    <option value="">Select auth method…</option>
+                                    {connectFlow.authMethods.map((method) => (
+                                      <option key={method.methodIndex} value={method.methodIndex}>
+                                        {method.label} ({method.type})
+                                        {method.requiresPrompt ? " — unsupported prompt" : ""}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {connectFlow.authMethods.some((m) => m.requiresPrompt) && (
+                                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                                      Methods requiring prompt inputs are not driven by Tenvyr
+                                      (fail closed) — use the official login command instead.
+                                    </div>
+                                  )}
+                                  {connectFlow.selectedMethodIndex !== null &&
+                                    !connectFlow.authMethods.find(
+                                      (m) => m.methodIndex === connectFlow.selectedMethodIndex,
+                                    )?.requiresPrompt && (
                                       <button
                                         type="button"
                                         className="btn btn-primary btn-sm"
                                         onClick={() =>
-                                          handleOauthAuthorize(connectFlow.connectionId, connectFlow.providerId)
+                                          handleOauthBegin(
+                                            connectFlow.connectionId,
+                                            connectFlow.providerId,
+                                          )
                                         }
                                       >
-                                        Authorize with OpenCode
+                                        Start Authorization
                                       </button>
-                                    ) : (
+                                    )}
+                                </>
+                              )}
+                              {!connectFlow.loading &&
+                                connectFlow.step === "begin" &&
+                                connectFlow.url && (
+                                  <>
+                                    <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                                      {connectFlow.instructions ||
+                                        "Complete authorization in the provider&apos;s own window, then come back."}
+                                    </div>
+                                    <a
+                                      href={connectFlow.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ overflowWrap: "anywhere" }}
+                                    >
+                                      <ExternalLink size={12} />
+                                      <span>Open authorization page</span>
+                                    </a>
+                                    {connectFlow.method === "auto" && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary btn-sm"
+                                        onClick={handleOauthComplete}
+                                      >
+                                        I&apos;ve completed authorization
+                                      </button>
+                                    )}
+                                    {connectFlow.method === "code" && (
                                       <>
-                                        <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-                                          Complete authorization in the provider&apos;s own
-                                          window, then come back:
-                                        </div>
-                                        <a
-                                          href={connectFlow.authorizationUrl}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="btn btn-secondary btn-sm"
-                                          style={{ overflowWrap: "anywhere" }}
-                                        >
-                                          <ExternalLink size={12} />
-                                          <span>Open authorization page</span>
-                                        </a>
+                                        <input
+                                          type="text"
+                                          value={connectFlow.codeInput}
+                                          onChange={(e) =>
+                                            setConnectFlow((current) =>
+                                              current
+                                                ? { ...current, codeInput: e.target.value }
+                                                : current,
+                                            )
+                                          }
+                                          className="form-input"
+                                          placeholder="Authorization code"
+                                          style={{
+                                            padding: "0.3rem 0.5rem",
+                                            fontSize: "0.8rem",
+                                            fontFamily: "var(--font-mono)",
+                                          }}
+                                        />
                                         <button
                                           type="button"
                                           className="btn btn-primary btn-sm"
-                                          onClick={() =>
-                                            handleOauthCallback(connectFlow.connectionId, connectFlow.providerId)
-                                          }
+                                          disabled={!connectFlow.codeInput.trim()}
+                                          onClick={handleOauthComplete}
                                         >
-                                          I&apos;ve completed authorization
+                                          Submit Code
                                         </button>
                                       </>
                                     )}
                                   </>
                                 )}
                               {!connectFlow.loading &&
-                                !connectFlow.authMethods.some((m) => m.id === "oauth") && (
-                                  <>
-                                    <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-                                      This provider uses API-key auth. The key stays
-                                      runtime-owned — run the official command in your
-                                      terminal (Tenvyr never receives raw keys):
-                                    </div>
-                                    <code
-                                      style={{
-                                        fontFamily: "var(--font-mono)",
-                                        fontSize: "0.75rem",
-                                        padding: "0.3rem 0.5rem",
-                                        backgroundColor: "var(--bg-surface)",
-                                        borderRadius: "var(--radius-sm)",
-                                        overflowWrap: "anywhere",
-                                      }}
-                                    >
-                                      {connectFlow
-                                        ? providersByConnection[connectFlow.connectionId]?.find(
-                                            (p) => p.providerId === connectFlow.providerId,
-                                          )?.loginCommand ?? ""
-                                        : ""}
-                                    </code>
-                                    <div style={{ display: "flex", gap: "0.5rem" }}>
-                                      <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={() =>
-                                          connectFlow &&
-                                          handleCopyLogin(
-                                            providersByConnection[connectFlow.connectionId]?.find(
-                                              (p) => p.providerId === connectFlow.providerId,
-                                            )?.loginCommand ?? "",
-                                            providerKey(
-                                              connectFlow.connectionId,
-                                              connectFlow.providerId,
-                                            ),
-                                          )
-                                        }
-                                      >
-                                        <Copy size={12} />
-                                        <span>
-                                          {connectFlow &&
-                                          copiedKind ===
-                                            providerKey(
-                                              connectFlow.connectionId,
-                                              connectFlow.providerId,
-                                            )
-                                            ? "Copied"
-                                            : "Copy Command"}
-                                        </span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={() => {
-                                          setConnectFlow(null);
-                                          handleCheckAuth(conn.connectionId);
-                                        }}
-                                      >
-                                        <RefreshCw size={12} />
-                                        <span>Check Again</span>
-                                      </button>
-                                    </div>
-                                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-                                      Limitation: API-key provider connections are
-                                      runtime-owned; Tenvyr stores no provider keys.
-                                    </div>
-                                  </>
+                                connectFlow.step === "completed" && (
+                                  <div style={{ fontSize: "0.75rem", color: "var(--accent-green)" }}>
+                                    Flow completed — check the provider row above for the
+                                    refreshed connection state.
+                                  </div>
                                 )}
+                              {!connectFlow.loading &&
+                                connectFlow.step === "begin" && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={handleOauthCancel}
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-sm"
