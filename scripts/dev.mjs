@@ -4,165 +4,54 @@
  *
  * A bounded supervisor for the local development stack: starts the Compose
  * infrastructure (PostgreSQL, Redis, Kafka), then the orchestrator,
- * gateway, and workbench (Next.js) watch services, polls REAL readiness
- * endpoints, formats service logs through one compact formatter, and
- * coordinates a graceful Ctrl+C shutdown (children receive SIGTERM so
- * Nest shutdown hooks — including the P2 OpenCodeAuthFlow closeAll —
- * always run). It deliberately does NOT reimplement pnpm/Turbo; each
- * child is the package's own start script.
+ * gateway and workbench watch services, polls REAL readiness endpoints
+ * (a live process is NOT readiness), prints a compact startup summary,
+ * formats every service line as `time service LEVEL message`, and
+ * coordinates graceful shutdown.
  *
- * Modes:
- *   pnpm dev           — TENVYR_LOG_LEVEL=normal (concise; Nest bootstrap
- *                        contexts suppressed at the application boundary)
- *   pnpm dev:verbose   — TENVYR_LOG_LEVEL=verbose (full framework logs)
+ * Shutdown semantics:
+ * - SIGINT/SIGTERM are registered BEFORE any infrastructure or child work
+ *   begins; at ANY phase they enter ONE idempotent shutdown path that
+ *   stops every already-created child (process-group SIGTERM so Nest
+ *   shutdown hooks run — including the P2 OpenCodeAuthFlow closeAll),
+ *   tears down launcher-owned Compose infrastructure, and returns the
+ *   correct exit code. No orphaned detached process groups.
+ * - An unexpected exit of a REQUIRED child at any phase marks the stack
+ *   FAILED and triggers the same automatic shutdown; launcher-initiated
+ *   shutdown exits are expected and never treated as failures.
+ * - Child exit promises are attached at SPAWN time, so an already-exited
+ *   child never makes shutdown wait out the grace deadline.
  *
- * TTY / CI / pipes: banner, spinners, and ANSI colors only on an
- * interactive stdout; NO_COLOR disables color, FORCE_COLOR=1 forces it,
- * CI disables decoration. Redirected output stays deterministic.
- *
- * Secrets policy: never prints database passwords, API keys, OAuth
- * secrets, or OpenCode server passwords — only URLs built from the
- * actual configured ports.
+ * State model: starting -> ready | failed -> shutting_down -> stopped.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/**
- * Load .env KEY=VALUE lines (parity with the legacy dev.sh sourcing) and
- * merge them into the process environment. Values are NEVER printed.
- */
-export function loadDotEnv(root, env = process.env) {
-  try {
-    const content = readFileSync(join(root, ".env"), "utf8");
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(trimmed);
-      if (match) {
-        const [, key, rawValue] = match;
-        if (env[key] === undefined) {
-          env[key] = rawValue.replace(/^["']|["']$/g, "");
-        }
-      }
-    }
-  } catch {
-    // no .env — defaults apply
-  }
-  return env;
-}
+const ANSI = { dim: "\u001b[2m", reset: "\u001b[0m", red: "\u001b[31m", yellow: "\u001b[33m", green: "\u001b[32m" };
+
+const INFRA_SERVICES = ["postgres", "redis", "zookeeper", "kafka", "kafka-ui"];
+const SHUTDOWN_GRACE_MS = 15_000;
+
 const DEFAULT_SERVICES = [
   { name: "orchestrator", dir: "services/orchestrator", script: "start:dev", portEnv: "ORCHESTRATOR_PORT", defaultPort: 3001, health: "/health" },
   { name: "gateway", dir: "services/gateway", script: "start:dev", portEnv: "GATEWAY_PORT", defaultPort: 3000, health: "/health" },
-  { name: "workbench", dir: "frontend", script: "dev", portEnv: null, defaultPort: 4000, health: "/" },
+  { name: "workbench", dir: "frontend", script: "dev", portEnv: "PORT", defaultPort: 4000, health: "/" },
 ];
-const INFRA_SERVICES = ["postgres", "redis", "zookeeper", "kafka", "kafka-ui"];
-
-/** Container names declared by the compose file (bounded lookup). */
-export function composeContainerNames(root) {
-  try {
-    const result = spawnSync("docker", ["compose", "config", "--format", "json"], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    if (result.status !== 0) return {};
-    const config = JSON.parse(result.stdout);
-    const names = {};
-    for (const [service, definition] of Object.entries(config.services ?? {})) {
-      names[service] = definition.container_name ?? service;
-    }
-    return names;
-  } catch {
-    return {};
-  }
-}
-
-function containerRunning(name) {
-  const result = spawnSync("docker", ["inspect", "-f", "{{.State.Running}}", name], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  return result.status === 0 && (result.stdout ?? "").trim() === "true";
-}
-
-/** Start an existing but stopped container (bounded, best-effort). */
-function startContainer(name) {
-  spawnSync("docker", ["start", name], { stdio: "ignore", timeout: 60_000 });
-}
 
 /* ------------------------------------------------------------------ */
-/* Presentation helpers (pure; exported for tests)                    */
+/* Presentation helpers                                               */
 /* ------------------------------------------------------------------ */
 
 export function useColor(env = process.env, stdout = process.stdout) {
-  if (env.FORCE_COLOR === "1" || env.FORCE_COLOR === "true") return true;
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") return false;
-  if (env.CI !== undefined && env.CI !== "") return false;
+  if (env.FORCE_COLOR !== undefined && env.FORCE_COLOR !== "") return true;
+  if (env.CI !== undefined) return false;
   return Boolean(stdout.isTTY);
-}
-
-const ANSI = {
-  reset: "\u001b[0m",
-  dim: "\u001b[2m",
-  green: "\u001b[32m",
-  yellow: "\u001b[33m",
-  red: "\u001b[31m",
-  cyan: "\u001b[36m",
-  bold: "\u001b[1m",
-};
-
-function now() {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-/** The compact per-line format emitted by the in-app TenvyrDevLogger. */
-export const DEV_LINE_PATTERN =
-  /^\d{2}:\d{2}:\d{2}\s{2}\S+\s{2}(INFO|WARN|ERROR|DEBUG|TRACE)\s{2}/;
-
-export function isDevLine(line) {
-  return DEV_LINE_PATTERN.test(line.replace(/\u001b\[[0-9;]*m/g, ""));
-}
-
-/** Central service-log formatter: time service level message. */
-export function formatServiceLine({ time, service, level, message, color = false }) {
-  const t = time ?? now();
-  const serviceCol = service.padEnd(11, " ");
-  const levelCol = level.padEnd(5, " ");
-  const firstBreak = message.indexOf("\n");
-  const single = firstBreak === -1 ? message : `${message.slice(0, firstBreak)} …`;
-  if (!color) return `${t}  ${serviceCol}  ${levelCol}  ${single}`;
-  const levelColor =
-    level === "WARN" ? ANSI.yellow : level === "ERROR" ? ANSI.red : level === "DEBUG" ? ANSI.dim : "";
-  const timeText = `${ANSI.dim}${t}${ANSI.reset}`;
-  return `${timeText}  ${serviceCol}  ${levelColor}${levelCol}${ANSI.reset}  ${single}`;
-}
-
-/** Tag a foreign (non-dev-format) line with the service + a level guess. */
-export function wrapForeignLine(line, service, color) {
-  const trimmed = line.replace(/\s+$/, "");
-  if (!trimmed) return null;
-  const lower = trimmed.toLowerCase();
-  const cleanError = /(^|\s)(0|no) errors?([.\s]|$)/.test(lower);
-  const level = !cleanError && /error|fail|exception/.test(lower)
-    ? "ERROR"
-    : /warn/.test(lower)
-      ? "WARN"
-      : "INFO";
-  return formatServiceLine({ service, level, message: trimmed, color });
-}
-
-export function bannerText(color) {
-  if (!color) return ["TENVYR — Agent Execution Control Plane"];
-  return [
-    `${ANSI.cyan}${ANSI.bold}  ◈ TENVYR${ANSI.reset}`,
-    `${ANSI.dim}  Agent Execution Control Plane${ANSI.reset}`,
-  ];
 }
 
 export function statusMark(state, color) {
@@ -176,25 +65,70 @@ export function statusMark(state, color) {
           : state === "warn"
             ? "!"
             : "?";
-  if (state === "ready") return `${ANSI.green}✓${ANSI.reset}`;
-  if (state === "disabled") return `${ANSI.dim}○${ANSI.reset}`;
-  if (state === "failed") return `${ANSI.red}✕${ANSI.reset}`;
-  if (state === "stopped") return `${ANSI.dim}✓${ANSI.reset}`;
-  return `${ANSI.yellow}!${ANSI.reset}`;
+  return state === "ready"
+    ? `${ANSI.green}✓${ANSI.reset}`
+    : state === "stopped"
+      ? `${ANSI.green}✓${ANSI.reset}`
+      : state === "disabled"
+        ? `${ANSI.dim}○${ANSI.reset}`
+        : state === "failed"
+          ? `${ANSI.red}✕${ANSI.reset}`
+          : state === "warn"
+            ? `${ANSI.yellow}!${ANSI.reset}`
+            : "?";
+}
+
+export function bannerText(color) {
+  const logo = "  ◈ TENVYR";
+  const tagline = "  Agent Execution Control Plane";
+  if (!color) return [logo, tagline];
+  return [`  ${ANSI.green}◈${ANSI.reset} TENVYR`, tagline];
+}
+
+/** Compact single-line formatter: `15:24:02  service  INFO   message`. */
+export function formatServiceLine({ time, service, level, message, color }) {
+  const t = time ?? new Date().toTimeString().slice(0, 8);
+  const text = String(message ?? "");
+  const firstBreak = text.indexOf("\n");
+  const single = firstBreak === -1 ? text : text.slice(0, firstBreak) + " …";
+  const withContext = single;
+  const levelColor = { ERROR: ANSI.red, WARN: ANSI.yellow, INFO: "", DEBUG: ANSI.dim }[level] ?? "";
+  const levelCol = String(level ?? "INFO").padEnd(5);
+  const serviceCol = String(service ?? "").padEnd(11);
+  if (!color) return `${t}  ${serviceCol}  ${levelCol}  ${withContext}`;
+  return `${ANSI.dim}${t}${ANSI.reset}  ${serviceCol}  ${levelColor}${levelCol}${ANSI.reset}  ${withContext}`;
+}
+
+const DEV_LINE_PATTERN = /^\d{2}:\d{2}:\d{2}\s{2}\S+\s{2}(INFO|WARN|ERROR|DEBUG|TRACE)\s{2}/;
+export { DEV_LINE_PATTERN };
+
+/** True when a child line is already in the app's dev format (passthrough). */
+export function isDevLine(line) {
+  return DEV_LINE_PATTERN.test(line.replace(/\u001b\[[0-9;]*m/g, ""));
+}
+
+/** Wrap a foreign (framework/watcher) line with the service tag. */
+export function wrapForeignLine(line, service, color) {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  const cleanError = /(^|\s)(0|no) errors?([.\s]|$)/.test(lower);
+  const level = !cleanError && /error|fail|exception/.test(lower)
+    ? "ERROR"
+    : /warn/.test(lower)
+      ? "WARN"
+      : "INFO";
+  return formatServiceLine({ service, level, message: trimmed, color });
 }
 
 export function summaryBlock({ mode, services, kafkaState, color }) {
   const lines = [];
   lines.push("");
-  lines.push(color ? `${ANSI.dim}  Runtime${ANSI.reset}` : "  Runtime");
+  lines.push("  Runtime");
   lines.push(`  ├─ Mode       ${mode}`);
   for (const service of services) {
-    const url = service.url
-      ? color
-        ? ` ${ANSI.dim}· ${service.url}${ANSI.reset}`
-        : ` · ${service.url}`
-      : "";
-    lines.push(`  ├─ ${service.label.padEnd(10)} ${service.state}${url}`);
+    const url = service.url ? ` ${ANSI.dim}· ${service.url}${ANSI.reset}` : "";
+    lines.push(`  ├─ ${service.label.padEnd(11)} ${service.state}${color ? url : url.replace(/\u001b\[[0-9;]*m/g, "")}`);
   }
   lines.push(`  ├─ Database   PostgreSQL · ${kafkaState.database}`);
   lines.push(`  └─ Kafka      ${kafkaState.broker}`);
@@ -205,7 +139,7 @@ export function summaryBlock({ mode, services, kafkaState, color }) {
     lines.push("  Tenvyr is ready.");
   }
   lines.push("");
-  lines.push(`  Workbench → http://localhost:${servicePort(services, "workbench")}`);
+  lines.push("  Workbench → http://localhost:4000");
   lines.push("");
   lines.push("  Ctrl+C to stop · `pnpm dev:verbose` for framework logs");
   return lines;
@@ -217,6 +151,30 @@ function servicePort(services, name) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Environment                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Load .env KEY=VALUE lines with the NATIVE Node env-file grammar
+ * (util.parseEnv — the same parser as `node --env-file`): inline
+ * comments, quotes, escapes and blank values are handled correctly.
+ * Values are NEVER printed. Existing environment takes precedence.
+ * .env is optional.
+ */
+export function loadDotEnv(root, env = process.env) {
+  try {
+    const content = readFileSync(join(root, ".env"), "utf8");
+    const parsed = parseEnv(content);
+    for (const [key, value] of Object.entries(parsed)) {
+      if (env[key] === undefined) env[key] = value;
+    }
+  } catch {
+    // no .env — defaults apply
+  }
+  return env;
+}
+
+/* ------------------------------------------------------------------ */
 /* Supervisor                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -224,13 +182,17 @@ function envWith(env, extra) {
   return { ...env, ...extra };
 }
 
-async function waitFor(predicate, timeoutMs, label, log) {
+async function waitFor(predicate, timeoutMs, label, log, shouldAbort) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await predicate()) return true;
+    if (shouldAbort()) return false;
+    const p = await predicate();
+    if (p) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  log("ERROR", `${label} did not become ready within ${Math.round(timeoutMs / 1000)}s`);
+  if (!shouldAbort()) {
+    log("ERROR", `${label} did not become ready within ${Math.round(timeoutMs / 1000)}s`);
+  }
   return false;
 }
 
@@ -252,9 +214,13 @@ async function fetchReady(url, timeoutMs, jsonHealth = true) {
   }
 }
 
-/** Run one child with piped stdio; forward formatted lines. */
-function startChild(child, io, log) {
-  const { command, args, env, name, label } = child;
+/**
+ * Run one child with piped stdio; forward formatted lines. The exit
+ * promise is attached AT SPAWN so an already-exited child never stalls
+ * shutdown waiting for a listener that would never fire.
+ */
+function startChild(child, io) {
+  const { command, args, env, name } = child;
   const process_ = spawn(command, args, {
     env,
     cwd: child.cwd,
@@ -265,19 +231,28 @@ function startChild(child, io, log) {
     detached: true,
   });
   process_.name = name;
-  process_.label = label;
+  process_.label = child.label;
+  process_.exitPromise = new Promise((resolve) => {
+    process_.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  process_.on("exit", (code, signal) => {
+    // NOTE: `child` here is the manifest object; the lifecycle callback is
+    // assigned onto the returned ChildProcess (process_.onExit) by the
+    // caller — read it from process_ so the assignment is visible.
+    process_.onExit?.(code, signal);
+  });
   const emit = (chunk, isStderr) => {
     let text = String(chunk)
       // Watcher CLIs (nest start --watch) emit full-screen clears that
       // would wipe the launcher's own summary in a real terminal —
       // neutralize them (well-defined ANSI, not a text-content filter).
-      .replace(/\x1b\[[0-9;]*[HJ]/g, "")
-      .replace(/\x1b\[\?[0-9]*[hl]/g, "");
+      .replace(/\u001b\[[0-9;]*[HJ]/g, "")
+      .replace(/\u001b\[\?[0-9]*[hl]/g, "");
     if (!io.color) {
       // Non-interactive / NO_COLOR / CI: strip framework ANSI (e.g. the
       // nest CLI's own gray timestamps) so redirects stay deterministic
       // and searchable.
-      text = text.replace(/\x1b\[[0-9;]*m/g, "");
+      text = text.replace(/\u001b\[[0-9;]*m/g, "");
     }
     for (const rawLine of text.split("\n")) {
       const line = rawLine.replace(/\r$/, "");
@@ -292,20 +267,12 @@ function startChild(child, io, log) {
   };
   process_.stdout?.on("data", (chunk) => emit(chunk, false));
   process_.stderr?.on("data", (chunk) => emit(chunk, true));
-  process_.on("exit", (code, signal) => {
-    log(
-      code === 0 || signal === "SIGTERM" ? "INFO" : "ERROR",
-      `${label} exited (${signal ? `signal ${signal}` : `code ${code}`})`,
-    );
-    child.onExit?.(code, signal);
-  });
   return process_;
 }
 
 /** Build the child manifest from repo truth. */
 export function buildManifest(env = process.env) {
-  const portOf = (service) =>
-    Number(env[service.portEnv] ?? service.defaultPort);
+  const portOf = (service) => Number(env[service.portEnv] ?? service.defaultPort);
   const services = DEFAULT_SERVICES.map((service) => {
     const port = portOf(service);
     const processEnv = envWith(env, { TENVYR_LOG_LEVEL: env.TENVYR_LOG_LEVEL ?? "normal" });
@@ -323,13 +290,44 @@ export function buildManifest(env = process.env) {
   return { services, infraServices: INFRA_SERVICES, root: ROOT };
 }
 
+function composeContainerNames(root) {
+  try {
+    const config = spawnSync("docker", ["compose", "config", "--format", "json"], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    if (config.status !== 0) return {};
+    const parsed = JSON.parse(config.stdout);
+    const names = {};
+    for (const [service, spec] of Object.entries(parsed.services ?? {})) {
+      names[service] = spec.container_name ?? service;
+    }
+    return names;
+  } catch {
+    return {};
+  }
+}
+
+function containerRunning(name) {
+  const result = spawnSync("docker", ["inspect", "-f", "{{.State.Running}}", name], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  return result.status === 0 && (result.stdout ?? "").trim() === "true";
+}
+
+/** Start an existing but stopped container (bounded, best-effort). */
+function startContainer(name) {
+  spawnSync("docker", ["start", name], { stdio: "ignore", timeout: 60_000 });
+}
+
 /** Real launcher entry. Exported for the deterministic tests. */
 export async function runLauncher(
   manifest,
   io = {
     write: (text) => process.stdout.write(text),
     color: useColor(),
-    log: () => undefined,
     mode: process.env.TENVYR_LOG_LEVEL ?? "normal",
     isInteractive: process.stdout.isTTY && !process.env.CI,
   },
@@ -340,158 +338,101 @@ export async function runLauncher(
     io.write(formatServiceLine({ service: "dev", level, message, color }) + "\n");
   };
 
-  if (io.isInteractive) {
-    for (const line of bannerText(color)) io.write(line + "\n");
-    io.write("\n  Starting development environment...\n\n");
-  }
-
+  // State machine: starting -> ready | failed -> shutting_down -> stopped.
+  let state = "starting";
+  let failed = false;
+  let terminationSignal = null;
+  let shutdownStarted = false;
   const children = [];
   const states = new Map();
   const serviceByName = new Map(manifest.services.map((s) => [s.name, s]));
-  let shutdownRequested = false;
-  let failed = false;
+  const abort = () => shutdownStarted;
 
-  /* --- infrastructure --- */
-  const infraServices = manifest.infraServices ?? [];
-  if (infraServices.length > 0) {
-    log("INFO", "Starting infrastructure (docker compose)...");
-    const compose = spawnSync(
-      "docker",
-      ["compose", "up", "-d", ...infraServices],
-      { cwd: manifest.root, stdio: "ignore", timeout: 120_000 },
-    );
-    if (compose.status !== 0) {
-      // Idempotent dev UX: `pnpm dev` with infra already running (e.g. a
-      // container renamed by the backup tooling, or a previous session)
-      // must not fail. Probe the declared container names; only fail when
-      // required containers are genuinely missing.
-      const names = composeContainerNames(manifest.root);
-      const unavailable = infraServices.filter((service) => {
-        const name = names[service] ?? service;
-        if (containerRunning(name)) return false;
-        // The container exists but is stopped (e.g. compose up conflicts
-        // with a renamed sibling, or a previous `compose down`) — start it.
-        startContainer(name);
-        return !containerRunning(name);
-      });
-      if (unavailable.length === 0) {
-        log("INFO", "Infrastructure already present — reusing it");
-      } else {
-        log("ERROR", `docker compose up failed; unavailable: ${unavailable.join(", ")}`);
-        return { exitCode: 1, ready: false };
+  // Shutdown is registered BEFORE any infrastructure or child work: at ANY
+  // phase a signal enters the ONE idempotent shutdown path (defect 1).
+  let shutdownResolve;
+  const shutdownPromise = new Promise((resolve) => {
+    shutdownResolve = resolve;
+  });
+  const finish = async () => {
+    io.write("\n  Stopping Tenvyr...\n\n");
+    for (const child of children) {
+      if (child.pid !== undefined && child.exitCode === null) {
+        try {
+          // Signal the whole tree so the Nest app receives SIGTERM and its
+          // shutdown hooks (P2 closeAll) run before the watchers exit.
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill("SIGTERM");
+        }
       }
     }
-  }
-
-  /* --- PostgreSQL readiness (real probe, not process liveness) --- */
-  let databaseReady = false;
-  if (infraServices.includes("postgres")) {
-    const containerName = composeContainerNames(manifest.root).postgres ?? "postgres";
-    const probe = () => {
-      const result = spawnSync(
-        "docker",
-        ["compose", "exec", "-T", "postgres", "pg_isready"],
-        { cwd: manifest.root, stdio: "ignore", timeout: 10_000 },
-      );
-      if (result.status === 0) return true;
-      // compose exec can fail when the container is not part of this
-      // project (renamed by tooling) — probe the container directly.
-      // (docker exec has no -T flag; that is compose exec syntax.)
-      const direct = spawnSync(
-        "docker",
-        ["exec", containerName, "pg_isready"],
-        { stdio: "ignore", timeout: 10_000 },
-      );
-      return direct.status === 0;
-    };
-    databaseReady = await waitFor(probe, 90_000, "PostgreSQL", log);
-    if (!databaseReady) {
-      log("ERROR", "PostgreSQL did not become ready");
-      failed = true;
-    } else {
-      log("INFO", "PostgreSQL ready");
+    const deadline = Date.now() + SHUTDOWN_GRACE_MS;
+    for (const child of children) {
+      const remaining = Math.max(1, deadline - Date.now());
+      // exitPromise was attached at spawn — an already-exited child
+      // resolves immediately and never waits out the deadline (defect 3).
+      const exited = await Promise.race([
+        child.exitPromise.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), remaining)),
+      ]);
+      if (!exited) {
+        io.write(
+          `  ${statusMark("warn", color)} ${child.label ?? child.name} did not exit within 15s — terminating\n`,
+        );
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+        await Promise.race([
+          child.exitPromise.then(() => true),
+          new Promise((resolve) => setTimeout(() => resolve(false), 3_000)),
+        ]);
+      } else {
+        io.write(`  ${statusMark("stopped", color)} ${child.label ?? child.name} stopped\n`);
+      }
     }
-  }
-
-  /* --- start children --- */
-  for (const service of manifest.services) {
-    const child = startChild(
-      {
-        ...service,
-        env: envWith(service.env, {
-          ...(service.portEnv ? { [service.portEnv]: String(service.port) } : {}),
-        }),
-      },
-      io,
-      log,
+    // Infra teardown (parity with the legacy dev.sh).
+    if ((manifest.infraServices ?? []).length > 0) {
+      spawnSync("docker", ["compose", "down"], { cwd: manifest.root, stdio: "ignore", timeout: 60_000 });
+    }
+    io.write(
+      failed
+        ? color
+          ? `\n  ${ANSI.red}Tenvyr stopped with failures.${ANSI.reset}\n`
+          : "\n  Tenvyr stopped with failures.\n"
+        : color
+          ? `\n  ${ANSI.green}Tenvyr stopped cleanly.${ANSI.reset}\n`
+          : "\n  Tenvyr stopped cleanly.\n",
     );
-    children.push(child);
-    states.set(service.name, "starting");
-  }
-
-  /* --- readiness gates: a live process is NOT readiness --- */
-  const readinessTimeoutMs = io.readinessTimeoutMs ?? 180_000;
-  for (const service of manifest.services) {
-    const url = `${service.url}${service.health}`;
-    const jsonHealth = service.health !== "/";
-    const ready = await waitFor(() => fetchReady(url, 3_000, jsonHealth), readinessTimeoutMs, service.label, log);
-    states.set(service.name, ready ? "ready" : "failed");
-    if (ready) {
-      log("INFO", `${service.label} ready · ${service.url}`);
-    } else {
-      failed = true;
-    }
-  }
-
-  /* --- Kafka: proven fact from the compose state --- */
-  let kafkaBroker = "disabled";
-  if (infraServices.includes("kafka")) {
+    state = "stopped";
+  };
+  const exitCodeFor = () => (failed ? 1 : terminationSignal === "SIGTERM" ? 143 : 0);
+  const requestShutdown = async (reason, signal) => {
+    if (shutdownStarted) return; // idempotent — ONE shutdown path
+    shutdownStarted = true;
+    if (signal) terminationSignal = signal;
+    if (reason === "failure") failed = true;
+    state = "shutting_down";
     try {
-      const kafkaUp = spawnSync("docker", ["compose", "ps", "-q", "kafka"], {
-        cwd: manifest.root,
-        encoding: "utf8",
-        timeout: 15_000,
-      });
-      const containerId = (kafkaUp.stdout ?? "").trim();
-      const running =
-        containerId.length > 0
-          ? spawnSync("docker", ["inspect", "-f", "{{.State.Running}}", containerId], {
-              encoding: "utf8",
-              timeout: 15_000,
-            })
-          : { status: 1, stdout: "" };
-      kafkaBroker =
-        kafkaUp.status === 0 &&
-        containerId.length > 0 &&
-        running.status === 0 &&
-        (running.stdout ?? "").trim() === "true"
-          ? "started"
-          : "disabled";
-    } catch {
-      kafkaBroker = "disabled";
+      await finish();
+    } finally {
+      shutdownResolve();
     }
-  }
+  };
+  const onSignal = (signal) => {
+    void requestShutdown("user", signal);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
 
-  /* --- summary --- */
-  if (!failed) {
-    for (const line of summaryBlock({
-      mode,
-      services: manifest.services.map((s) => ({
-        label: s.label,
-        state: states.get(s.name),
-        url: states.get(s.name) === "ready" ? s.url : undefined,
-      })),
-      kafkaState: { database: databaseReady ? "ready" : "failed", broker: kafkaBroker },
-      color,
-    })) {
-      io.write(line + "\n");
-    }
-  } else {
+  const printFailureSummary = () => {
     io.write("\n");
     for (const service of manifest.services) {
-      const state = states.get(service.name);
+      const state_ = states.get(service.name);
       io.write(
-        `  ${statusMark(state, color)} ${service.label.padEnd(12)} ${state === "ready" ? "ready" : state === "starting" ? "starting" : "failed"}\n`,
+        `  ${statusMark(state_, color)} ${service.label.padEnd(12)} ${state_ === "ready" ? "ready" : state_ === "starting" ? "starting" : "failed"}\n`,
       );
     }
     io.write(
@@ -499,67 +440,213 @@ export async function runLauncher(
         ? `\n  ${ANSI.red}Tenvyr did not start successfully.${ANSI.reset}\n\n  Run: pnpm dev:verbose\n`
         : "\n  Tenvyr did not start successfully.\n\n  Run: pnpm dev:verbose\n",
     );
-  }
+  };
+  const abortReturn = () => {
+    if (failed) printFailureSummary();
+    return { exitCode: exitCodeFor(), ready: false };
+  };
 
-  /* --- forward until shutdown: on startup failure the launcher shuts
-     down by itself and exits non-zero; on success it waits for Ctrl+C. --- */
-  if (!failed) {
-    await new Promise((resolve) => {
-      const onSignal = () => {
-        shutdownRequested = true;
-        resolve();
+  try {
+    if (io.isInteractive) {
+      for (const line of bannerText(color)) io.write(line + "\n");
+      io.write("\n  Starting development environment...\n\n");
+    }
+
+    /* --- infrastructure --- */
+    const infraServices = manifest.infraServices ?? [];
+    if (infraServices.length > 0) {
+      log("INFO", "Starting infrastructure (docker compose)...");
+      const compose = spawnSync(
+        "docker",
+        ["compose", "up", "-d", ...infraServices],
+        { cwd: manifest.root, stdio: "ignore", timeout: 120_000 },
+      );
+      if (compose.status !== 0) {
+        // Idempotent dev UX: `pnpm dev` with infra already running (e.g. a
+        // container renamed by the backup tooling, or a previous session)
+        // must not fail. The postgres container NAME can be held by a
+        // renamed sibling (backup tooling), which fails the whole compose
+        // up atomically — bring up the REST of the infra without postgres
+        // (postgres is probed separately below).
+        const rest = infraServices.filter((service) => service !== "postgres");
+        if (rest.length > 0) {
+          spawnSync("docker", ["compose", "up", "-d", ...rest], {
+            cwd: manifest.root,
+            stdio: "ignore",
+            timeout: 120_000,
+          });
+        }
+        // Probe the declared container names; only fail when required
+        // containers are genuinely missing.
+        const names = composeContainerNames(manifest.root);
+        const unavailable = infraServices.filter((service) => {
+          const name = names[service] ?? service;
+          if (containerRunning(name)) return false;
+          // The container exists but is stopped (e.g. compose up conflicts
+          // with a renamed sibling, or a previous `compose down`) — start it.
+          startContainer(name);
+          return !containerRunning(name);
+        });
+        if (unavailable.length === 0) {
+          log("INFO", "Infrastructure already present — reusing it");
+        } else {
+          log("ERROR", `docker compose up failed; unavailable: ${unavailable.join(", ")}`);
+          await requestShutdown("failure");
+          return { exitCode: exitCodeFor(), ready: false };
+        }
+      }
+      if (abort()) return abortReturn();
+    }
+
+    /* --- PostgreSQL readiness (real probe, not process liveness) --- */
+    let databaseReady = false;
+    if (infraServices.includes("postgres")) {
+      const containerName = composeContainerNames(manifest.root).postgres ?? "postgres";
+      const probe = () => {
+        const result = spawnSync(
+          "docker",
+          ["compose", "exec", "-T", "postgres", "pg_isready"],
+          { cwd: manifest.root, stdio: "ignore", timeout: 10_000 },
+        );
+        if (result.status === 0) return true;
+        // compose exec can fail when the container is not part of this
+        // project (renamed by tooling) — probe the container directly.
+        // (docker exec has no -T flag; that is compose exec syntax.)
+        const direct = spawnSync(
+          "docker",
+          ["exec", containerName, "pg_isready"],
+          { stdio: "ignore", timeout: 10_000 },
+        );
+        return direct.status === 0;
       };
-      process.once("SIGINT", onSignal);
-      process.once("SIGTERM", onSignal);
-    });
-  } else {
-    // Give the failure summary a beat to be read, then tear down.
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }
-
-  /* --- graceful shutdown: SIGTERM children, bounded, SIGKILL last --- */
-  io.write("\n  Stopping Tenvyr...\n\n");
-  for (const child of children) {
-    if (child.pid !== undefined && child.exitCode === null) {
-      try {
-        // Signal the whole tree so the Nest app receives SIGTERM and its
-        // shutdown hooks (P2 closeAll) run before the watchers exit.
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
+      databaseReady = await waitFor(probe, 90_000, "PostgreSQL", log, abort);
+      if (abort()) return abortReturn();
+      if (!databaseReady) {
+        log("ERROR", "PostgreSQL did not become ready");
+        failed = true;
+      } else {
+        log("INFO", "PostgreSQL ready");
       }
     }
-  }
-  const deadline = Date.now() + 15_000;
-  for (const child of children) {
-    const remaining = Math.max(1, deadline - Date.now());
-    const exited = await new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), remaining);
-      child.once("exit", () => {
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
-    if (!exited && child.exitCode === null) {
-      io.write(
-        `  ${statusMark("warn", color)} ${child.label ?? child.name} did not exit within 15s — terminating\n`,
+
+    /* --- start children --- */
+    for (const service of manifest.services) {
+      if (abort()) return abortReturn();
+      const child = startChild(
+        {
+          ...service,
+          env: envWith(service.env, {
+            ...(service.portEnv ? { [service.portEnv]: String(service.port) } : {}),
+          }),
+        },
+        io,
       );
+      // An unexpected exit of a REQUIRED child at ANY phase fails the stack
+      // and triggers automatic shutdown (defect 2). Exits during
+      // launcher-initiated shutdown are expected and ignored.
+      child.onExit = (code, signal) => {
+        const expected = state === "shutting_down" || state === "stopped";
+        log(
+          expected ? "INFO" : "ERROR",
+          `${child.label ?? child.name} exited (${signal ? `signal ${signal}` : `code ${code}`})`,
+        );
+        if (!expected) {
+          failed = true;
+          states.set(child.name, "failed");
+          void requestShutdown("failure");
+        }
+      };
+      children.push(child);
+      states.set(service.name, "starting");
+    }
+
+    /* --- readiness gates: a live process is NOT readiness --- */
+    const readinessTimeoutMs = io.readinessTimeoutMs ?? 180_000;
+    for (const service of manifest.services) {
+      if (abort()) return abortReturn();
+      const url = `${service.url}${service.health}`;
+      const jsonHealth = service.health !== "/";
+      const ready = await waitFor(
+        () => fetchReady(url, 3_000, jsonHealth),
+        readinessTimeoutMs,
+        service.label,
+        log,
+        abort,
+      );
+      if (abort()) return abortReturn();
+      states.set(service.name, ready ? "ready" : "failed");
+      if (ready) {
+        log("INFO", `${service.label} ready · ${service.url}`);
+      } else {
+        failed = true;
+      }
+    }
+
+    /* --- Kafka: proven fact from the compose state --- */
+    let kafkaBroker = "disabled";
+    if (infraServices.includes("kafka") && !abort()) {
       try {
-        process.kill(-child.pid, "SIGKILL");
+        const kafkaUp = spawnSync("docker", ["compose", "ps", "-q", "kafka"], {
+          cwd: manifest.root,
+          encoding: "utf8",
+          timeout: 15_000,
+        });
+        const containerId = (kafkaUp.stdout ?? "").trim();
+        const running =
+          containerId.length > 0
+            ? spawnSync("docker", ["inspect", "-f", "{{.State.Running}}", containerId], {
+                encoding: "utf8",
+                timeout: 15_000,
+              })
+            : { status: 1, stdout: "" };
+        kafkaBroker =
+          kafkaUp.status === 0 &&
+          containerId.length > 0 &&
+          running.status === 0 &&
+          (running.stdout ?? "").trim() === "true"
+            ? "started"
+            : "disabled";
       } catch {
-        child.kill("SIGKILL");
+        kafkaBroker = "disabled";
+      }
+    }
+
+    /* --- summary --- */
+    if (!failed) {
+      for (const line of summaryBlock({
+        mode,
+        services: manifest.services.map((s) => ({
+          label: s.label,
+          state: states.get(s.name),
+          url: states.get(s.name) === "ready" ? s.url : undefined,
+        })),
+        kafkaState: { database: databaseReady ? "ready" : "failed", broker: kafkaBroker },
+        color,
+      })) {
+        io.write(line + "\n");
       }
     } else {
-      io.write(`  ${statusMark("stopped", color)} ${child.label ?? child.name} stopped\n`);
+      printFailureSummary();
     }
-  }
 
-  /* --- infra teardown (parity with the legacy dev.sh) --- */
-  if (infraServices.length > 0) {
-    spawnSync("docker", ["compose", "down"], { cwd: manifest.root, stdio: "ignore", timeout: 60_000 });
+    /* --- run / wait for shutdown --- */
+    if (!failed) {
+      state = "ready";
+      await shutdownPromise;
+    } else {
+      // Give the failure summary a beat to be read, then tear down
+      // (requestShutdown is idempotent — a child-triggered shutdown may
+      // already be in flight).
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await requestShutdown("failure");
+      await shutdownPromise;
+    }
+
+    return { exitCode: exitCodeFor(), ready: state === "ready" && !failed };
+  } finally {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
   }
-  io.write(color ? `\n  ${ANSI.green}Tenvyr stopped cleanly.${ANSI.reset}\n` : "\n  Tenvyr stopped cleanly.\n");
-  return { exitCode: failed ? 1 : 0, ready: !failed && !shutdownRequested };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

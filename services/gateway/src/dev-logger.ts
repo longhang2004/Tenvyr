@@ -22,6 +22,22 @@ const SERVICE_NAME = process.env.SERVICE_NAME ?? "gateway";
 
 export type TenvyrLogMode = "normal" | "verbose";
 
+/**
+ * Explicit bootstrap logger selection (terminal-UX closure):
+ * - NODE_ENV=production            -> native Nest logging (production
+ *   logging semantics untouched — the compact presenter is NOT installed)
+ * - TENVYR_LOG_LEVEL=verbose       -> native Nest logging (lossless
+ *   framework diagnostics; the compact formatter never truncates them)
+ * - development + normal           -> the concise TenvyrDevLogger
+ */
+export function selectBootstrapLogger(
+  env: NodeJS.ProcessEnv = process.env,
+): "dev-normal" | "default" {
+  if (env.NODE_ENV === "production") return "default";
+  if (env.TENVYR_LOG_LEVEL === "verbose") return "default";
+  return "dev-normal";
+}
+
 export function detectLogMode(env: NodeJS.ProcessEnv = process.env): TenvyrLogMode {
   const explicit = env.TENVYR_LOG_LEVEL;
   if (explicit === "verbose") return "verbose";

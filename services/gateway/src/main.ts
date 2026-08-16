@@ -1,17 +1,22 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { TenvyrDevLogger } from './dev-logger';
+import { selectBootstrapLogger, TenvyrDevLogger } from './dev-logger';
 
 async function bootstrap() {
   const port = process.env.GATEWAY_PORT || 3000;
-  const logger = new TenvyrDevLogger();
-  const app = await NestFactory.create(AppModule, { logger });
-  app.useLogger(logger);
-  
+  // Terminal-UX closure: the compact presenter is a DEVELOPMENT-only
+  // presentation. Production and verbose use NATIVE Nest logging.
+  const loggerMode = selectBootstrapLogger();
+  const devLogger = loggerMode === 'dev-normal' ? new TenvyrDevLogger() : undefined;
+  const app = await NestFactory.create(AppModule, {
+    ...(devLogger ? { logger: devLogger } : {}),
+  });
+  if (devLogger) app.useLogger(devLogger);
+
   // Enable CORS
   app.enableCors();
 
   await app.listen(port);
-  logger.log(`Gateway listening on http://localhost:${port}`);
+  (devLogger ?? console).log(`Gateway listening on http://localhost:${port}`);
 }
 bootstrap();

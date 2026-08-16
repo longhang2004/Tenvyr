@@ -8,6 +8,7 @@ import {
   DEV_LINE_PATTERN,
   formatServiceLine,
   isDevLine,
+  loadDotEnv,
   runLauncher,
   statusMark,
   useColor,
@@ -315,5 +316,284 @@ process.on("SIGTERM", () => {
     assert.match(output, /SigApp stopped/);
     assert.match(output, /TermApp stopped/);
     assert.match(output, /Tenvyr stopped cleanly\./);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Final closure: signal/lifecycle regressions with REAL children      */
+/* ------------------------------------------------------------------ */
+
+const closureFixtureDir = mkdtempSync(join(tmpdir(), "tenvyr-closure-"));
+const writeFixture = (name, content) => {
+  const path = join(closureFixtureDir, name);
+  writeFileSync(path, `#!/usr/bin/env node\n${content}`, { mode: 0o755 });
+  return path;
+};
+const capturedIo = () => {
+  const buffer = [];
+  return {
+    write: (text) => buffer.push(text),
+    color: false,
+    log: () => undefined,
+    mode: "normal",
+    isInteractive: false,
+    buffer,
+  };
+};
+
+const processAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const waitUntil = async (predicate, timeoutMs, label) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+};
+
+/** Long-running fake service: writes its pid, never serves health. */
+const lingerChild = (markerFile, pidFile) =>
+  `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(markerFile)}, "up");
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1000);`;
+
+/** Fake service with a health server that stays up. */
+const stayingHealth = (port) =>
+  `const http = require("node:http");
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(port + ".pid")}, String(process.pid));
+const server = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ data: { status: "UP" } }));
+  } else {
+    res.end("ok");
+  }
+});
+server.listen(${port}, "127.0.0.1");
+setInterval(() => {}, 1000);`;
+
+/** Fake service with a health server that exits after N ms with code C. */
+const healthWithExit = (port, exitAfterMs, exitCode) =>
+  `const http = require("node:http");
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(port + ".pid")}, String(process.pid));
+const server = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ data: { status: "UP" } }));
+  } else {
+    res.end("ok");
+  }
+});
+server.listen(${port}, "127.0.0.1");
+setTimeout(() => process.exit(${exitCode}), ${exitAfterMs});`;
+
+const waitForFile = async (path, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timed out waiting for file ${path}`);
+};
+
+describe("final closure: signals from the start of launch", () => {
+  const signals = ["SIGINT", "SIGTERM"];
+  for (const signal of signals) {
+    test(`${signal} during startup: launcher exits and the spawned child is gone`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "tenvyr-signal-"));
+      const marker = join(dir, "child-up");
+      const pidFile = join(dir, "child.pid");
+      const childBin = writeFixture("linger.cjs", lingerChild(marker, pidFile));
+      const io = { ...capturedIo(), readinessTimeoutMs: 60_000, isInteractive: false };
+      const manifest = {
+        services: [
+          {
+            name: "linger",
+            label: "Linger",
+            command: "node",
+            args: [childBin],
+            cwd: dir,
+            env: { ...process.env },
+            url: "http://127.0.0.1:1",
+            health: "/health",
+            port: 1,
+          },
+        ],
+        infraServices: [],
+        root: dir,
+      };
+      const run = runLauncher(manifest, io);
+      await waitForFile(marker, 5_000);
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      assert.ok(processAlive(pid), "fake service must be alive before the signal");
+      // process.emit does not pass the signal name as an argument (a real
+      // signal does) — pass it explicitly so the handler sees it.
+      process.emit(signal, signal);
+      const result = await run;
+      assert.equal(result.exitCode, signal === "SIGTERM" ? 143 : 0, `exit code for ${signal}`);
+      await waitUntil(() => !processAlive(pid), 5_000, "fake service to be terminated");
+    });
+  }
+
+  test("SIGINT with MULTIPLE children started: all process groups are terminated", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tenvyr-signal2-"));
+    const markers = [];
+    const pidFiles = [];
+    const services = [];
+    for (const name of ["alpha", "beta"]) {
+      const marker = join(dir, `${name}-up`);
+      const pidFile = join(dir, `${name}.pid`);
+      markers.push(marker);
+      pidFiles.push(pidFile);
+      const childBin = writeFixture(`${name}.cjs`, lingerChild(marker, pidFile));
+      services.push({
+        name,
+        label: name[0].toUpperCase() + name.slice(1),
+        command: "node",
+        args: [childBin],
+        cwd: dir,
+        env: { ...process.env },
+        url: `http://127.0.0.1:${1 + services.length}`,
+        health: "/health",
+        port: 1 + services.length,
+      });
+    }
+    const io = { ...capturedIo(), readinessTimeoutMs: 60_000, isInteractive: false };
+    const run = runLauncher({ services, infraServices: [], root: dir }, io);
+    await waitForFile(markers[0], 5_000);
+    await waitForFile(markers[1], 5_000);
+    const pids = pidFiles.map((f) => Number(readFileSync(f, "utf8")));
+    process.emit("SIGINT", "SIGINT");
+    const result = await run;
+    assert.equal(result.exitCode, 0);
+    for (const pid of pids) {
+      await waitUntil(() => !processAlive(pid), 5_000, `child ${pid} terminated`);
+    }
+  });
+});
+
+describe("final closure: required child failure semantics", () => {
+  test("child dies AFTER ready: automatic failed shutdown of siblings, non-zero exit", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tenvyr-fail-"));
+    const okBin = writeFixture("ok.cjs", stayingHealth(43151));
+    const dierBin = writeFixture("dier.cjs", healthWithExit(43152, 2_500, 7));
+    const io = { ...capturedIo(), readinessTimeoutMs: 10_000, isInteractive: false };
+    const services = [
+      {
+        name: "ok",
+        label: "Ok",
+        command: "node",
+        args: [okBin],
+        cwd: dir,
+        env: { ...process.env },
+        url: "http://127.0.0.1:43151",
+        health: "/health",
+        port: 43151,
+      },
+      {
+        name: "dier",
+        label: "Dier",
+        command: "node",
+        args: [dierBin],
+        cwd: dir,
+        env: { ...process.env },
+        url: "http://127.0.0.1:43152",
+        health: "/health",
+        port: 43152,
+      },
+    ];
+    const started = Date.now();
+    const run = runLauncher({ services, infraServices: [], root: dir }, io);
+    const result = await run;
+    const duration = Date.now() - started;
+    assert.equal(result.exitCode, 1, "stack must fail non-zero after a required child dies");
+    if (!(duration < 20_000)) {
+      // eslint-disable-next-line no-console
+      console.error("BUFFER:\n" + io.buffer.join(""));
+    }
+    assert.ok(duration < 20_000, `auto shutdown should be fast, took ${duration}ms`);
+    const okPid = Number(readFileSync(join(dir, "43151.pid"), "utf8"));
+    await waitUntil(() => !processAlive(okPid), 5_000, "sibling to be shut down automatically");
+    const output = io.buffer.join("");
+    assert.match(output, /Dier exited \(code 7\)/);
+    // Never a clean running result after the failure.
+    const readyIndex = output.indexOf("Tenvyr is ready.");
+    const stoppedIndex = output.indexOf("Tenvyr stopped");
+    if (readyIndex !== -1) {
+      assert.ok(stoppedIndex === -1 || stoppedIndex > readyIndex, "no clean result after failure");
+    }
+    assert.match(output, /Stopping Tenvyr/);
+  });
+
+  test("child already exited: shutdown does NOT wait the full grace period", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tenvyr-exit-"));
+    const crasherBin = writeFixture(
+      "crash.cjs",
+      `process.stdout.write("boom\n"); process.exit(1);`,
+    );
+    const io = { ...capturedIo(), readinessTimeoutMs: 1_500, isInteractive: false };
+    const services = [
+      {
+        name: "crash",
+        label: "Crash",
+        command: "node",
+        args: [crasherBin],
+        cwd: dir,
+        env: { ...process.env },
+        url: "http://127.0.0.1:43160",
+        health: "/health",
+        port: 43160,
+      },
+    ];
+    const started = Date.now();
+    const run = runLauncher({ services, infraServices: [], root: dir }, io);
+    const result = await run;
+    const duration = Date.now() - started;
+    assert.equal(result.exitCode, 1);
+    assert.ok(
+      duration < 10_000,
+      `already-exited child must not stall shutdown (took ${duration}ms)`,
+    );
+  });
+});
+
+describe("final closure: env file semantics", () => {
+  test("loadDotEnv: inline comment, quoted spaces, # in quotes, blank, precedence", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tenvyr-env-"));
+    writeFileSync(
+      join(dir, ".env"),
+      [
+        "LLM_PROVIDER=mock # mock | openai",
+        'TITLE="hello world"',
+        'TOKEN="a#b"',
+        "EMPTY=",
+        "EXISTING=from-file",
+      ].join("\n"),
+    );
+    const env = { EXISTING: "from-shell" };
+    loadDotEnv(dir, env);
+    assert.equal(env.LLM_PROVIDER, "mock");
+    assert.equal(env.TITLE, "hello world");
+    assert.equal(env.TOKEN, "a#b");
+    assert.equal(env.EMPTY, "");
+    assert.equal(env.EXISTING, "from-shell");
+  });
+
+  test("loadDotEnv: missing .env is optional", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tenvyr-env2-"));
+    const env = { A: "1" };
+    loadDotEnv(dir, env);
+    assert.equal(env.A, "1");
   });
 });

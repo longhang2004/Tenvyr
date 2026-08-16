@@ -1,10 +1,32 @@
-import { TenvyrDevLogger, detectLogMode, shouldEmitLogLine } from "./dev-logger";
+import { TenvyrDevLogger, detectLogMode, selectBootstrapLogger, shouldEmitLogLine } from "./dev-logger";
 
 const FAKE_ENV = (extra: Record<string, string> = {}) => ({
   ...process.env,
   NODE_ENV: "development",
   NO_COLOR: "1",
   ...extra,
+});
+
+describe("bootstrap logger selection (terminal-UX closure)", () => {
+  test("production never installs the compact dev presenter", () => {
+    expect(selectBootstrapLogger({ NODE_ENV: "production" })).toBe("default");
+    expect(
+      selectBootstrapLogger({ NODE_ENV: "production", TENVYR_LOG_LEVEL: "normal" }),
+    ).toBe("default");
+  });
+
+  test("verbose development uses native (lossless) Nest logging", () => {
+    expect(selectBootstrapLogger({ NODE_ENV: "development", TENVYR_LOG_LEVEL: "verbose" })).toBe(
+      "default",
+    );
+  });
+
+  test("development + normal uses the concise presenter", () => {
+    expect(selectBootstrapLogger({ NODE_ENV: "development" })).toBe("dev-normal");
+    expect(selectBootstrapLogger({ NODE_ENV: "development", TENVYR_LOG_LEVEL: "normal" })).toBe(
+      "dev-normal",
+    );
+  });
 });
 
 describe("TenvyrDevLogger (development terminal UX)", () => {

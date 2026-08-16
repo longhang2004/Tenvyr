@@ -216,3 +216,30 @@ on an interactive stdout; `NO_COLOR=1` disables ANSI; `CI` and redirected
 output stay deterministic and plain. Colors are semantic only (INFO
 neutral, WARN yellow, ERROR red). Full logs can be captured with
 `pnpm dev > /tmp/tenvyr-dev.log`.
+
+
+### Lifecycle semantics (final closure)
+
+- **Signals from the start**: SIGINT/SIGTERM are handled at ANY phase
+  (infra startup, PostgreSQL wait, child spawn, readiness, running).
+  One idempotent shutdown path stops every already-created child
+  (process-group SIGTERM so Nest shutdown hooks run), tears down
+  launcher-owned Compose infra, and exits with the correct code
+  (Ctrl+C after a healthy start -> 0; SIGTERM -> 143; failure -> 1).
+  No orphaned watch processes.
+- **Required-child failures**: an unexpected exit of a required service
+  at ANY phase (before or after readiness, exit code 0 included) marks
+  the stack FAILED and triggers automatic shutdown of the remaining
+  services, then a non-zero exit. Exits during launcher-initiated
+  shutdown are expected and not treated as failures.
+- **Fast shutdown**: child exit promises are attached at spawn, so an
+  already-exited child never waits out the 15s grace period.
+- **Logger boundary**: the compact presenter is DEVELOPMENT-normal only.
+  `pnpm dev:verbose` and production (`NODE_ENV=production`) use NATIVE
+  Nest logging — lossless framework diagnostics, never truncated for
+  terminal aesthetics.
+- **.env parsing**: uses Node's native env-file grammar
+  (`util.parseEnv`, the same parser as `node --env-file`) — inline
+  comments, quotes, escapes and blank values behave like `source .env`,
+  existing environment wins, values are never printed, no shell
+  execution.

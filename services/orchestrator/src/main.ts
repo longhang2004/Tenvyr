@@ -1,12 +1,20 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { TenvyrDevLogger } from './dev-logger';
+import { selectBootstrapLogger, TenvyrDevLogger } from './dev-logger';
 
 async function bootstrap() {
   const port = process.env.ORCHESTRATOR_PORT || 3001;
-  const logger = new TenvyrDevLogger();
-  const app = await NestFactory.create(AppModule, { rawBody: true, logger });
-  app.useLogger(logger);
+  // Terminal-UX closure: the compact presenter is a DEVELOPMENT-only
+  // presentation. Production (NODE_ENV=production) and verbose
+  // (TENVYR_LOG_LEVEL=verbose) use NATIVE Nest logging — lossless,
+  // untruncated diagnostics; production semantics are never rewritten.
+  const loggerMode = selectBootstrapLogger();
+  const devLogger = loggerMode === 'dev-normal' ? new TenvyrDevLogger() : undefined;
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,
+    ...(devLogger ? { logger: devLogger } : {}),
+  });
+  if (devLogger) app.useLogger(devLogger);
 
   app.enableCors();
 
@@ -17,6 +25,8 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   await app.listen(port);
-  logger.log(`Orchestrator listening on http://localhost:${port}`);
+  (devLogger ?? console).log(
+    devLogger ? `Orchestrator listening on http://localhost:${port}` : `Nest application successfully started (orchestrator on :${port})`,
+  );
 }
 bootstrap();
