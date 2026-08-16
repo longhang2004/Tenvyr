@@ -103,3 +103,22 @@ envelope, provider reframe — the work this closure audits and completes) is
 archived at
 [IMPLEMENTATION_REPORT-2026-08-15.md](IMPLEMENTATION_REPORT-2026-08-15.md),
 superseded by this closure report.
+
+
+## Final closure (shutdown lifecycle, 2026-08-16)
+
+- `main.ts`: `app.enableShutdownHooks()` before listen.
+- `OpenCodeAuthFlowService` implements OnModuleDestroy; graceful
+  shutdown runs closeAll() — every live management session terminated,
+  every expiry timer cleared. The `closeAll` helper is now exercised by
+  production shutdown AND by the signal-lifecycle regression.
+- Deterministic TTL: real unref'd expiry timers per flow; expiry removes
+  the flow atomically and closes its session with no further auth call;
+  complete/cancel/closeAll/expiry are race-safe (session closed at most
+  once; flow never resurrected).
+- Real prompts[] contract (plural) with oauth/api separation
+  (AUTH_METHOD_NOT_OAUTH before any authorize) and runtime-owned guided
+  login for API methods.
+- Signal regression (Postgres): disposable real Orchestrator child with a
+  live fake management session; SIGTERM -> child exits within a bound and
+  the management child is proven terminated.

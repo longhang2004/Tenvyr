@@ -122,3 +122,18 @@ rewrites history. Model IDs are bounded data
 - Model IDs are data with fixed argv separation.
 - SSRF documented (single-owner operator feature; External Production
   Exposure Gate stays open).
+
+
+## Shutdown lifecycle (final closure)
+
+- `main.ts` calls `app.enableShutdownHooks()` before listen: a graceful
+  SIGTERM/SIGINT runs every provider's OnModuleDestroy.
+- `OpenCodeAuthFlowService` implements OnModuleDestroy -> `closeAll()`:
+  every live management session is terminated and every expiry timer is
+  cleared on Orchestrator shutdown.
+- The OAuth management session is RETAINED from authorize through
+  callback; teardown occurs on complete, cancel, deterministic TTL
+  expiry (real unref'd timers), or shutdown — never earlier, never later.
+- Signal regression: a disposable real Orchestrator child (AppModule +
+  hooks) with a live fake management session, SIGTERM'd, proves the
+  management child is terminated and the child exits within a bound.

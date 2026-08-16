@@ -66,3 +66,18 @@ All gates green; no fabricated READY anywhere; no credential value (incl.
 session password) in any persisted/returned/logged shape; docs +
 implementation-status updated; EXECUTION_STATUS receipt appended; commit
 pushed and the exact GitHub Actions commit watched until green.
+
+
+## Current verification state (final closure)
+
+- provider-discovery-p2: 20/20 (real prompts[] contract, oauth/api
+  separation, one-live-session flow, deterministic TTL, shutdown, races)
+- phase2-provider-command (Postgres): 15/15 (incl. direct-REST api-method
+  rejection, server-side startTeamRun authority, fault injection)
+- signal-lifecycle (Postgres): 1/1 (SIGTERM -> OnModuleDestroy -> closeAll
+  -> management child terminated)
+- app-boot (Postgres): 1/1 (full AppModule DI compile)
+- frontend: 30/30 + lint/typecheck/build
+- orchestrator unit: 740 passed / 0 failed; Postgres suite: 1095 passed x2
+- test:all / build:all green; identity 25/25; contract-test 42/42;
+  pytest 261; docs 20/20 + verify (135 files)

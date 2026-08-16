@@ -7,6 +7,12 @@ async function bootstrap() {
 
   app.enableCors();
 
+  // P2 shutdown-lifecycle closure: Nest signal hooks so a graceful
+  // SIGTERM/SIGINT runs onModuleDestroy (OpenCodeAuthFlowService.closeAll
+  // terminates every live management session and clears every timer)
+  // before the process exits.
+  app.enableShutdownHooks();
+
   await app.listen(port);
   console.log(`Orchestrator Service is running on: http://localhost:${port}`);
 }

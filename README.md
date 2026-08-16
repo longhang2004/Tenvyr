@@ -23,8 +23,10 @@ Tenvyr validates it against the frozen target allowlist, and the exact
 requested model is frozen into every attempt, invocation, and Capsule —
 retries never silently switch models and later catalog refreshes never
 rewrite history. Provider Connections (P2) are runtime-owned projections
-discovered through official CLI surfaces — `opencode auth list` /
-`opencode models`, `codex login status`, `claude auth status` — so Tenvyr
+discovered through the STRUCTURED OpenCode Server API (`opencode serve`:
+`GET /provider`, `GET /provider/auth`, OAuth authorize/callback — TUI
+`auth list` output is never parsed) plus `opencode models`, `codex login
+status`, `claude auth status` — so Tenvyr
 never stores provider credentials. There is no first-class 9Router: it
 inspired the provider-management UX only, and an existing instance connects
 as a generic OpenAI-compatible endpoint. Tenvyr performs no routing,
