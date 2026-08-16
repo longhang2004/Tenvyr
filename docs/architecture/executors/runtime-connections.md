@@ -132,7 +132,7 @@ in `RESEARCH_REGISTER.md` and in the templates themselves):
 | ------- | ---------------- | --------------------- | ----- | ---- |
 | Codex | 0.147.0 | `exec --json --ephemeral -` | `login status` (exit 0 = logged in; version output NOT documented) | local login or `CODEX_API_KEY` reference |
 | Claude | 2.1.228 | `-p --output-format json` | `--version` + `auth status` (exit 1 = not logged in, JSON output never parsed) | local login or `ANTHROPIC_API_KEY` reference |
-| OpenCode | 1.18.16 | `run --format json` | `--version` | runtime-owned (provider auth); `auth list` is discovery, not a Tenvyr probe |
+| OpenCode | 1.18.16 | `run --format json` | `--version` | runtime-owned (provider auth); discovery is the STRUCTURED `opencode serve` API, never TUI parsing |
 
 - `buildRuntimeConnectionProfile` produces a validated, version-pinned
   connection profile: only the executable path and bounded overrides are

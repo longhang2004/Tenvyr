@@ -59,6 +59,8 @@ export const TABLES = [
   "coordination_runs",
   "coordination_iterations",
   "operator_actions",
+  "workspace_executions",
+  "handoffs",
 ];
 
 export const fingerprint = (value) =>

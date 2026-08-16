@@ -333,7 +333,10 @@ export class WorkbenchCommandService {
         config: summarizeConfig(config),
         workspace,
         acceptanceEvidence,
-        executionIsolation: workspace ? executionIsolation : undefined,
+        // Only include the key when a workspace exists: an undefined value
+        // would canonicalize to null in the idempotency hash while JSONB
+        // storage drops it — a false IDEMPOTENCY_CONFLICT.
+        ...(workspace ? { executionIsolation } : {}),
       },
       async (manager) => {
         const pipeline = await manager.getRepository(PipelineEntity).save(

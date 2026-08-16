@@ -1,11 +1,13 @@
 ---
 title: "P3 VERIFY: Runtime Harness Optimization & Context Efficiency — bounded baseline"
-status: planned
+status: historical
 audience:
   - developer
 last_verified: 2026-08-16
+superseded_by:
+  - docs/architecture/executors/invocation-efficiency.md
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/P3-runtime-harness-optimization/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/SPEC.md
 ---
 
 # P3 VERIFY — verification gates

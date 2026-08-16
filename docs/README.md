@@ -34,7 +34,10 @@ prose. The conflict must still be corrected rather than ignored.
 - [System overview](architecture/overview.md)
 - [Control plane](architecture/control-plane.md)
 - [Coordinator loop domain](architecture/coordination-loop.md)
-- [Operator Workbench](architecture/workbench.md)
+- [Operator Workbench](architecture/workbench.md),
+  [workspace execution / isolation](architecture/workspace-execution.md),
+  the [attention queue](architecture/attention.md), and the
+  [portable handoff](architecture/handoff.md)
 - Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md), [supervised coding team runs](operations/supervised-coding-team.md)
 - [Agents and runners](architecture/agents-and-runners.md)
 - Contracts: [agent protocol v1](architecture/contracts/agent-protocol-v1.md)
@@ -91,7 +94,8 @@ Developer tooling is not a Tenvyr production runtime feature.
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
   the [P2 runtime model sources + model selection slice](plans/active/tenvyr-productization-roadmap/P2-runtime-model-sources/GOAL.md),
-  the [P3 runtime harness optimization + context efficiency slice](plans/active/tenvyr-productization-roadmap/P3-runtime-harness-optimization/GOAL.md),
+  the [PP1 coding-agent wedge slice](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md),
+  the [P3 runtime harness optimization + context efficiency slice (implemented; plan archived)](archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/GOAL.md),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take

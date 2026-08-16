@@ -37,7 +37,16 @@ deployment configuration is the trust boundary.
 - **No shell**: `child_process.spawn` with an argv array and `shell: false`.
   Shell metacharacters in arguments are literal characters (tested).
 - **Allowlisted working root**: every `cwd` must resolve inside
-  `EXECUTOR_HOST_ALLOWED_ROOT`; both paths are canonicalized through the
+  `EXECUTOR_HOST_ALLOWED_ROOT`; both paths are canonicalized.
+- **PP1 workspace execution**: when an invocation carries the reserved
+  `metadata.tenvyr.executionWorkspace` member, the child spawns at that
+  validated path (absolute, existing directory, realpath inside
+  `EXECUTOR_HOST_ALLOWED_ROOT` — no traversal, no symlink escape; the
+  spawn uses the resolved real path). Agents may declare
+  `requireExecutionWorkspace: true` — workspace-less invocations are
+  refused before spawn (fail closed). Absent member → the static
+  configured `cwd` (backward compatible). See
+  [workspace execution / isolation](../workspace-execution.md). through the
   filesystem, so traversal and symlink escapes are rejected at startup.
 - **Environment allowlist**: the child environment is EXACTLY the configured
   `env` (child var -> host env var) plus resolved `secrets` references. No

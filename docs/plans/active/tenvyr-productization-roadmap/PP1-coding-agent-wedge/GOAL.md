@@ -13,6 +13,8 @@ sources:
 
 # PP1 Goal: Coding-Agent Control Plane Wedge
 
+Slice documents: [PLAN](PLAN.md) · [SPEC](SPEC.md) · [VERIFY](VERIFY.md)
+
 Product wedge: **"Run your coding agents as a team — without babysitting
 terminals."**
 

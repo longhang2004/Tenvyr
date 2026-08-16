@@ -30,9 +30,13 @@ A complete Vietnamese translation is available in the
 
 ## 1. What Tenvyr is
 
-Tenvyr is a framework-neutral execution control plane for supervised agent
-workflows. It runs Python, TypeScript, and Java-backed agents as persisted
-steps, with standardized results, retries, timeouts, idempotency, callback
+Tenvyr is a supervised coding-agent control plane: run Codex, Claude Code,
+OpenCode, and other runtime-owned agent harnesses as a team — without
+babysitting terminals. Tenvyr controls execution authority, workspace
+boundaries (shared or isolated git worktrees), supervision, attention,
+approval, provenance, and evidence; the runtimes keep their intelligence.
+Tenvyr also runs Python, TypeScript, and Java-backed agents as persisted
+steps with standardized results, retries, timeouts, idempotency, callback
 security, and one dashboard for inspecting what happened.
 
 Tenvyr owns **when** work runs, **which runtime and transport** execute it, and

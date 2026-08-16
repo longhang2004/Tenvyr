@@ -142,7 +142,7 @@ logs, chain of thought, or artifact bytes.
 - Canonical Operator Workbench UI hosted via Next.js on port 4000:
   - `/dashboard`: System readiness, runtime connection summary, active/recent runs, pending approvals attention, New Team Run CTA.
   - `/runtimes`: Two tabs — **Agent Runtimes** (guided onboarding for Codex, Claude Code, OpenCode: CLI auth guidance, runtime-owned provider rows, connection testing, revision, revocation) and **Advanced Catalogs** (P2).
-  - `/workspaces`: Workspace repository management, frozen snapshot views, mutable working tree contract clarity.
+  - `/workspaces`: Workspace repository management, frozen snapshot views, execution isolation (shared | git-worktree), preserved execution workspaces.
   - `/runs/new`: Progressive team run wizard (Goal -> Workspace -> Team selection with template defaults -> Guardrails -> Acceptance evidence -> Client-side UUID idempotency launch).
   - `/runs/[executionId]`: Supervised loop visibility (phase pipeline, iteration history, planner proposal cards, worker manifests, verifier decision outcome/reason/recommendation, WAITING_FOR_HUMAN approval/denial banner, Capsule drawer/tab, replay/cancel actions).
   - `/runs`: All executions table with filter and pagination.

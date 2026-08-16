@@ -15,9 +15,13 @@ sources:
 
 # Tenvyr productization roadmap
 
-This is the accepted planning authority after the independently closed M0–M7
-program. It does not claim that M8–M11 exist. Current contracts, code, tests,
-architecture, and the implementation ledger remain runtime truth.
+This was the accepted planning authority for M8–M11. M8–M11 are now
+IMPLEMENTED (implementer status; independent verification remains the
+owner's decision) and the near-term product sequence has pivoted to the
+coding-agent wedge — see the
+[PP1 slice](PP1-coding-agent-wedge/GOAL.md) and
+[the current roadmap](../../../roadmap/README.md). Current contracts, code,
+tests, architecture, and the implementation ledger remain runtime truth.
 
 ## Current baseline
 

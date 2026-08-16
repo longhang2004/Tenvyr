@@ -49,7 +49,7 @@ Four distinct concepts, never conflated:
 
 - **OpenCode (first-class provider management)**: official CLI only —
   `opencode auth login`, `opencode auth login --provider <id>`, `opencode
-  auth list`, `opencode models [provider]`, `opencode models --refresh`.
+  Server API (`opencode serve`), `opencode models [provider]`, `opencode models --refresh`.
   The auth file is NEVER read; raw auth output is never persisted; Tenvyr
   never proxies credentials. The UI renders the official command with
   [Copy Command] / [Check Again].

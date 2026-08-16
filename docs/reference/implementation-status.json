@@ -1013,7 +1013,7 @@
     "docs/architecture/provider-connections.md"
    ],
    "limitations": [
-    "model_sources is the GENERIC OpenAI-compatible catalog endpoint configuration only (advanced surface); provider state is RUNTIME-OWNED (official CLI discovery: OpenCode auth list/models, codex login status, claude auth status) and never a source row",
+    "model_sources is the GENERIC OpenAI-compatible catalog endpoint configuration only (advanced surface); provider state is RUNTIME-OWNED (STRUCTURED OpenCode Server API discovery \u2014 opencode serve GET /provider + /provider/auth, TUI output never parsed \u2014 plus codex login status, claude auth status) and never a source row",
     "9Router is NOT a first-class Tenvyr concept (it inspired the provider-management UX only); an existing instance connects as a generic OpenAI-compatible endpoint \u2014 Tenvyr contains no routing/fallback/quota/rotation/alias logic",
     "Catalogs are bounded on-demand projections, never persisted as authority; catalog visibility never equals execution compatibility",
     "External Production Exposure Gate stays open: catalog endpoints are a single-owner operator feature (SSRF threat documented)"
@@ -1055,6 +1055,89 @@
     "Coordination worker inputs remain planner-authored; the bundle covers the context-envelope projection path only",
     "Full runtime session reuse is not implemented; all current invocations are single-shot FRESH",
     "Usage evidence appears only when the runtime reports it; Tenvyr never infers cache hits from ContextBundle matches"
+   ]
+  },
+  {
+   "id": "workspace-execution-isolation",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/workspace-execution.ts",
+    "services/orchestrator/src/services/workspace-execution.service.ts",
+    "services/orchestrator/src/entities/workspace-execution.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270021000-WorkspaceExecutionIsolation.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/approval.service.ts",
+    "services/orchestrator/src/services/workbench-command.service.ts",
+    "services/local-executor-host/src/config.ts",
+    "services/local-executor-host/src/main.ts",
+    "services/local-executor-host/src/supervisor.ts",
+    "frontend/src/app/runs/new/page.tsx",
+    "frontend/src/app/runs/[executionId]/page.tsx"
+   ],
+   "tests": [
+    "services/orchestrator/src/services/workspace-execution.service.spec.ts",
+    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
+    "services/local-executor-host/test/config.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/workspace-execution.md"
+   ],
+   "limitations": [
+    "Trusted-code-only; not a sandbox and no snapshot isolation of the source tree in shared mode",
+    "External git mutations are never transactional with PostgreSQL; the ALLOCATING-before-git lifecycle + reconciliation fail closed (never falsely READY)",
+    "Workspace dirty CONTENT is not hashed; git-worktree isolation is opt-in per run (default shared)",
+    "No automatic merge/push/branch deletion; cleanup refuses dirty worktrees by default"
+   ]
+  },
+  {
+   "id": "attention-queue",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/attention.ts",
+    "services/orchestrator/src/services/attention.service.ts",
+    "services/orchestrator/src/workbench.controller.ts",
+    "frontend/src/app/attention/page.tsx",
+    "frontend/src/app/dashboard/page.tsx",
+    "frontend/src/components/app-shell/AppShell.tsx"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/attention.spec.ts",
+    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/attention.md"
+   ],
+   "limitations": [
+    "Read projection only \u2014 items exist exactly while their durable source condition exists; resolution always uses the existing authority commands",
+    "Classes are limited to what durable rows prove today (approval/FAILED/LIMIT_REACHED/preserved uncommitted workspace)",
+    "Workspace attention requires the lazy lease reconciliation to have run (run start or attention read)"
+   ]
+  },
+  {
+   "id": "portable-handoff",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/handoff.ts",
+    "services/orchestrator/src/services/handoff.service.ts",
+    "services/orchestrator/src/entities/handoff.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270022000-Handoff.ts",
+    "services/orchestrator/src/services/workbench-command.service.ts",
+    "services/orchestrator/src/workbench-commands.controller.ts",
+    "services/orchestrator/src/services/execution-capsule.service.ts",
+    "frontend/src/app/runs/[executionId]/page.tsx",
+    "frontend/src/app/runs/new/page.tsx"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/handoff.spec.ts",
+    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/handoff.md"
+   ],
+   "limitations": [
+    "Source run must be TERMINAL; preserved git-worktree transfer is exclusive (source lease TRANSFERRED, destination gets a NEW lease \u2014 concurrent continuation fails closed)",
+    "Bundle is a bounded projection of durable truth (references only); it is not session migration, chat-history copying, or deterministic replay",
+    "No automatic merge-to-main/push/branch deletion; no task-collision guard"
    ]
   }
  ]

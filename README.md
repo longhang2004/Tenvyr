@@ -1,36 +1,89 @@
 # Tenvyr
 
-## What Tenvyr is
+## Run your coding agents as a team — without babysitting terminals.
 
-Tenvyr is a framework-neutral execution control plane for supervised agent
-workflows. It runs Python, TypeScript, and Java-backed agents as persisted
-steps, with standardized results, retries, timeouts, idempotency, callback
-security, and one dashboard for inspecting what happened.
+Connect **Codex, Claude Code, OpenCode**, and other runtime-owned agent
+harnesses. Tenvyr supervises execution, isolates workspace work, routes
+exceptional decisions to you, and preserves one durable evidence trail.
 
-Tenvyr owns when work runs, which runtime and transport execute it, and how the
-workflow records success or failure. Agent applications keep ownership of
-prompts, tools, reasoning, frameworks, and model-provider calls.
+> **Bring your agents. Tenvyr controls the work.**
 
-Runtime Connections (M8) let an operator configure, detect, health-check,
-revoke, and freeze Codex, Claude, OpenCode, Generic CLI, HTTP Worker, and
-Kafka Worker connections. Every claimed attempt freezes a secret-free
-connection revision and conservative capability set; provider selection and
-authentication stay inside the runtime.
+Agent runtimes own intelligence — prompts, tools, reasoning, sessions,
+models, and provider calls stay inside the runtime. Tenvyr owns execution
+authority, lifecycle, workspace boundaries, supervision, bounded context,
+approval, provenance, and evidence.
 
-Runtime Targets (P2) make model choice execution provenance: the operator
-picks a model per Planner / Worker / Verifier role (or Runtime default),
-Tenvyr validates it against the frozen target allowlist, and the exact
-requested model is frozen into every attempt, invocation, and Capsule —
-retries never silently switch models and later catalog refreshes never
-rewrite history. Provider Connections (P2) are runtime-owned projections
-discovered through the STRUCTURED OpenCode Server API (`opencode serve`:
-`GET /provider`, `GET /provider/auth`, OAuth authorize/callback — TUI
-`auth list` output is never parsed) plus `opencode models`, `codex login
-status`, `claude auth status` — so Tenvyr
-never stores provider credentials. There is no first-class 9Router: it
-inspired the provider-management UX only, and an existing instance connects
-as a generic OpenAI-compatible endpoint. Tenvyr performs no routing,
-fallback, or account rotation.
+### How it works
+
+```text
+Connect Runtime
+→ Select Repository (Workspace)
+→ Goal
+→ Planner
+→ Workers
+→ Verifier
+→ Attention only when needed
+→ Result / Handoff / Evidence
+```
+
+1. **Connect Runtime** — onboard Codex / Claude Code / OpenCode (or a generic
+   CLI / HTTP Worker / Kafka Worker). Tenvyr detects, version-probes, and
+   freezes a secret-free connection revision per attempt.
+2. **Select Workspace** — choose the repository. Every Team Run picks its
+   execution isolation: a **Git worktree** (Tenvyr-owned isolated execution
+   workspace — the source tree stays untouched) or the **shared working
+   tree**. Every runtime child of the run executes against Tenvyr's
+   authoritative execution path — planner-authored JSON can never choose or
+   override `cwd`.
+3. **Goal → Planner → Workers → Verifier** — the deterministic Coordinator
+   runs bounded iterations under policy, budgets, deadlines, and approvals.
+4. **Attention only when needed** — an exception-driven queue
+   (human approval required, run failed, limits reached, preserved
+   workspace with uncommitted work) is the default supervision experience;
+   resolution always goes through the existing authority commands.
+5. **Result / Handoff / Evidence** — a terminal run can be **continued with
+   another runtime** through a bounded HandoffBundle (references, never raw
+   logs/credentials); every attempt freezes context bundles, efficiency
+   evidence, and a reconstructable Capsule.
+
+### What it is not
+
+Tenvyr is not a Codex / Claude Code / OpenCode replacement, an LLM gateway,
+a provider router, a memory/RAG/vector platform, a sandbox, a new workflow
+language, or an agent-result cache. Local execution is trusted-code-only;
+credentials are runtime-owned or reference-only. Tenvyr does not claim
+secure sandboxing, deterministic LLM output, universal runtime support,
+conflict-free merging, or guaranteed prompt caching.
+
+## Technical architecture
+
+Tenvyr is an **Agent Execution Control Plane**:
+
+- **Control plane** (`services/orchestrator`): PostgreSQL-authoritative
+  executions, immutable plan revisions, logical steps and attempts,
+  policy/budget/approvals, runtime connections with frozen revisions,
+  workspace execution leases (shared | git-worktree), the supervised
+  Planner/Worker/Verifier loop, Capsules, attention, and handoffs.
+- **Runtime boundary** (`services/local-executor-host`): trusted-code-only
+  process execution of fixed operator-configured commands; every child
+  spawns at the invocation's Tenvyr-validated execution workspace path
+  (containment-checked inside `EXECUTOR_HOST_ALLOWED_ROOT`); structured
+  results, signed callbacks, deadline/cancel supervision.
+- **Operator Workbench** (`services/gateway` + `frontend`): Work / Setup /
+  Advanced IA — New Run, Runs, Attention, Runtimes, Workspaces, Pipelines,
+  Audit.
+- **Framework-neutral SDKs**: `@tenvyr/worker` (TypeScript),
+  `tenvyr-worker` (Python), and the Java Agent Runner remain supported
+  execution surfaces (their showcase is documented below).
+
+### Legacy showcase (Python / TypeScript / Kafka / Java)
+
+Tenvyr's original showcase — Python `echo-analyzer` + TypeScript Workers +
+Kafka-runtime Java `quality-gate` — remains a supported, verified surface:
+Kafka runtime v1 (the legacy compatibility topics) routes to the specialized
+agents, HTTP adapter v1 routes to Python/TypeScript Workers, and both
+produce the same versioned `AgentResultV1` contract. See
+[the showcase guide](docs/showcase/demo-guide.md) for the offline demo.
 
 ## Why it exists
 
@@ -39,15 +92,6 @@ durable execution record, bounded retries and timeouts, authenticated callbacks,
 failure classification, and a consistent contract across languages. Tenvyr
 puts those controls outside the agent process so each Worker stays isolated and
 replaceable.
-
-## What it is not
-
-Tenvyr is not a universal LLM gateway, model router, agent framework, prompt
-playground, or substitute for a model's native reasoning tools. It is not a
-provider registry, credential vault, or sandbox: local execution is
-trusted-code-only, Runtime Connections store credential references (never
-values), and the External Production Exposure Gate keeps administration
-local/self-hosted.
 
 ## Native subagents vs Tenvyr
 
@@ -59,16 +103,20 @@ Tenvyr Worker may call native subagents; the boundaries are complementary.
 ## Architecture
 
 ```text
-Dashboard -> Gateway -> Orchestrator -> persisted pipeline state
-                              |-> Kafka -> specialized agent -> Java Runner -> model
-                              `-> HTTP  -> Python/TypeScript Worker -> model or framework
-                                           `-> signed callback -> Orchestrator
+Workbench (UI) -> Gateway -> Orchestrator (PostgreSQL authority)
+                                  |-> local executor host -> Codex / Claude Code / OpenCode / CLI
+                                  |      `-> child cwd = Tenvyr execution workspace (worktree/shared)
+                                  |-> HTTP adapter v1 -> Python/TypeScript Worker -> model or framework
+                                  `-> Kafka runtime v1 -> specialized agent -> Java Runner -> model
+                                  `-> signed callbacks -> Orchestrator
 ```
 
-Kafka runtime v1 supports the current specialized agents. HTTP protocol v1
-dispatches asynchronously to TypeScript or Python Workers and authenticates
-callbacks with HMAC signatures. Both paths produce the same versioned
-`AgentResultV1` contract.
+The local executor host is the primary coding-runtime boundary (fixed
+operator commands, trusted-code-only, workspace-validated cwd). HTTP
+protocol v1 dispatches asynchronously to TypeScript or Python Workers and
+authenticates callbacks with HMAC signatures. Kafka runtime v1 supports the
+specialized agents. All paths produce the same versioned `AgentResultV1`
+contract.
 
 ## Supported runtimes and model providers
 
@@ -99,7 +147,24 @@ Gemini, Azure OpenAI, Bedrock, Vertex AI, and other compatible providers can be
 called from Worker application code, but they are not first-class verified
 v0.1.0 integrations. See [using model providers](docs/showcase/using-model-providers.md).
 
-## Quick start
+## Quick start (coding-agent team)
+
+```bash
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev          # concise local dev launcher (orchestrator + gateway + host + UI)
+```
+
+Then in the Workbench: **Runtimes** → onboard a runtime (Codex / Claude Code
+/ OpenCode) → **Workspaces** → add your repository → **New Run** → pick the
+workspace + execution isolation (Git worktree / Shared) + the team + the
+goal → launch. Supervise from **Attention**; continue terminal runs with
+another runtime from the run page.
+
+See [the supervised coding team guide](docs/operations/supervised-coding-team.md)
+and [local development](docs/operations/local-development.md).
+
+### Offline showcase (original)
 
 Requirements: Node.js 22+, pnpm 9.0.0, Python 3.11+, JDK 17, Docker, and Docker
 Compose v2.

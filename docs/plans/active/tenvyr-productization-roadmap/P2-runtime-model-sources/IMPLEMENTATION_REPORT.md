@@ -59,7 +59,7 @@ misunderstanding. This closure addresses all of them.
 - **Provider Connection** replaces "Model Source" as the product concept:
   which provider/account/key is available THROUGH a runtime, its auth
   state, its models, and its testability. Provider state is RUNTIME-OWNED
-  (official CLI discovery only — OpenCode `auth list` / `models` /
+  (official discovery only — OpenCode structured Server API / `models` /
   `models <provider>`, Codex `login status`, Claude `auth status`).
 - `model_sources` keeps only the GENERIC role: OpenAI-compatible catalog
   endpoint configuration (advanced surface). No table change (Option A);

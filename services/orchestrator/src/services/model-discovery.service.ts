@@ -17,7 +17,8 @@ import { runBoundedCliCommand } from "./cli-probe";
  * P2: bounded model DISCOVERY — where Tenvyr safely learns model
  * identifiers. Discovery is a projection, never execution authority:
  *
- * - OpenCode: official CLI only (`opencode auth list`, `opencode models`,
+ * - OpenCode: official structured Server API (`opencode serve`: GET /provider,
+ *   GET /provider/auth, OAuth) plus `opencode models`,
  *   `opencode models --refresh`). The auth file is NEVER read.
  * - Codex: `codex debug models` is EXPERIMENTAL — best-effort bounded JSON
  *   parse; execution never depends on it (Runtime default / manual entry).

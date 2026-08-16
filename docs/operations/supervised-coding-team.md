@@ -92,9 +92,14 @@ In the **Launch a supervised team run** form:
    `workspace path, git root, branch, HEAD SHA, dirty state` (when
    detectable). The snapshot is injected into every worker input and the
    verifier context, and is stored on the run, the Capsule, and the
-   Workbench projection. Execution runs against the mutable local working
-   tree — NO snapshot isolation is claimed. Non-git directories are valid
-   workspaces with nullable repository identity.
+   Workbench projection. Each launch also chooses its **execution
+   isolation**: `Git worktree` creates a Tenvyr-owned isolated worktree
+   that every runtime child executes against (the source tree stays
+   untouched), or `Shared working tree` executes against the mutable local
+   working tree — see
+   [workspace execution / isolation](../architecture/workspace-execution.md).
+   Non-git directories are valid workspaces with nullable repository
+   identity (shared mode only).
 3. **Planner / Verifier / Workers** — choose agent roles or M8 runtime
    connections (connection-kind selections route through the executor
    host's frozen runtime binding). You may also pick a model per role —

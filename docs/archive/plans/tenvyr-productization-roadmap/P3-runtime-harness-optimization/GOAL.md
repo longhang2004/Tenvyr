@@ -1,15 +1,17 @@
 ---
 title: "P3 Goal: Runtime Harness Optimization & Context Efficiency — bounded baseline"
-status: planned
+status: historical
 audience:
   - developer
   - operator
   - product
 last_verified: 2026-08-16
+superseded_by:
+  - docs/architecture/executors/invocation-efficiency.md
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/P3-runtime-harness-optimization/PLAN.md
-  - docs/plans/active/tenvyr-productization-roadmap/P3-runtime-harness-optimization/SPEC.md
-  - docs/plans/active/tenvyr-productization-roadmap/P3-runtime-harness-optimization/VERIFY.md
+  - docs/archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/VERIFY.md
 ---
 
 # P3 Goal: Runtime Harness Optimization & Context Efficiency — bounded baseline

@@ -753,10 +753,12 @@ test("the canonical backup inventory matches the authoritative entity/schema inv
     [],
     "unexpected non-entity schema tables",
   );
-  // Spot-check the two tables this closure added.
+  // Spot-check tables across the closures (M0-M11 + PP1).
   assert.ok(backupSet.has("pipelines"));
   assert.ok(backupSet.has("plan_proposals"));
-  assert.equal(TABLES.length, 33);
+  assert.ok(backupSet.has("workspace_executions"));
+  assert.ok(backupSet.has("handoffs"));
+  assert.equal(TABLES.length, 35);
 });
 
 test("restore verifies BEFORE quiescing and swaps via a rollback-capable state machine", async () => {

@@ -119,6 +119,14 @@ workspace structural identity (including clean↔dirty transitions), plan
 revision hash, artifact references, harness configuration, and the bundle
 schema versions.
 
+### Workspace execution boundary
+
+PP1 makes workspaces EXECUTION boundaries (shared or isolated git
+worktree), not just provenance — see
+[workspace execution / isolation](../workspace-execution.md). The bundle
+fingerprint still contains only bounded workspace STRUCTURAL identity;
+execution-workspace paths never enter fingerprints.
+
 ### Workspace dirty-state tradeoff
 
 `dirty` participates in the fingerprint (a clean↔dirty transition misses,
