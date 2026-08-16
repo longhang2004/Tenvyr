@@ -7,14 +7,14 @@
   "scripts": {
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
-    "dev": "sh ./scripts/dev.sh",
+    "dev": "node scripts/dev.mjs",
     "dev:orchestrator": "pnpm --filter orchestrator run start:dev",
     "dev:gateway": "pnpm --filter gateway run start:dev",
     "dev:reviewer": "pnpm --filter agent-code-reviewer run start:dev",
     "dev:observability": "pnpm --filter agent-observability run start:dev",
     "dev:frontend": "pnpm --filter frontend run dev",
     "build:all": "pnpm -r build",
-    "test:all": "pnpm -r test",
+    "test:all": "pnpm -r --include-workspace-root test",
     "setup:check": "node scripts/setup-check.mjs",
     "showcase:up": "export LLM_PROVIDER=\"${LLM_PROVIDER-mock}\" LLM_FAILURE_MODE=\"${LLM_FAILURE_MODE-}\"; docker compose -p tenvyr-showcase -f docker-compose.yml -f docker-compose.showcase.yml up -d --build && node scripts/smoke-e2e.mjs --health",
     "showcase:seed": "node scripts/smoke-e2e.mjs --seed",
@@ -37,7 +37,10 @@
     "self-hosted:invariants": "node scripts/self-hosted/invariants.mjs",
     "self-hosted:contract-test": "node --test scripts/self-hosted/contract.test.mjs",
     "self-hosted:recovery-test": "node --test scripts/self-hosted/recovery.test.mjs",
-    "self-hosted:health": "curl -s http://127.0.0.1:3001/health"
+    "self-hosted:health": "curl -s http://127.0.0.1:3001/health",
+    "dev:verbose": "TENVYR_LOG_LEVEL=verbose node scripts/dev.mjs",
+    "test:dev-ux": "node --test scripts/dev-ux.test.mjs",
+    "test": "node --test scripts/dev-ux.test.mjs"
   },
   "devDependencies": {
     "prettier": "^3.0.0"

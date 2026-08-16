@@ -184,3 +184,35 @@ pnpm dev:infra:down
 ```
 
 Use the same `-f` arguments on `docker compose down` when the stack was started with override files.
+
+
+## Development terminal UX
+
+`pnpm dev` runs the whole stack through a small repository-owned launcher
+(`scripts/dev.mjs`) with two logging modes:
+
+- **normal (default)** — concise: Nest bootstrap contexts
+  (`RouterExplorer`, `RoutesResolver`, `InstanceLoader`, …) are suppressed
+  at the application boundary by a bounded dev logger; WARN/ERROR and
+  application-domain logs always survive; a startup summary shows real
+  readiness from the health endpoints, and Ctrl+C shuts services down
+  gracefully (SIGTERM — Nest shutdown hooks, including the OpenCode
+  auth-flow closeAll, always run).
+- **verbose** — `pnpm dev:verbose` (or `TENVYR_LOG_LEVEL=verbose`):
+  every framework/debug line is emitted for diagnosis.
+
+Service URLs: Gateway `http://localhost:3000`, Orchestrator
+`http://localhost:3001`, Workbench `http://localhost:4000` (ports follow
+`GATEWAY_PORT` / `ORCHESTRATOR_PORT` / the frontend dev port).
+
+READY means the service's own health endpoint answered `UP` — a running
+process is not readiness. A required service that fails to become ready
+(or exits non-zero) makes the launcher exit non-zero and never prints
+"Tenvyr is ready". Optional capabilities (e.g. Kafka) are reported as
+`disabled` rather than failures.
+
+Terminal behavior is TTY-safe: decoration (banner, colors) only appears
+on an interactive stdout; `NO_COLOR=1` disables ANSI; `CI` and redirected
+output stay deterministic and plain. Colors are semantic only (INFO
+neutral, WARN yellow, ERROR red). Full logs can be captured with
+`pnpm dev > /tmp/tenvyr-dev.log`.

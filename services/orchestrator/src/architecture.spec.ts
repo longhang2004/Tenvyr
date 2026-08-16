@@ -72,8 +72,10 @@ describe("application transport boundary", () => {
   it("captures raw body narrowly through Nest bootstrap", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
 
+    // The dev logger is passed alongside rawBody; the contract is that
+    // rawBody stays true at bootstrap.
     expect(source).toMatch(
-      /NestFactory\.create\(AppModule,\s*\{\s*rawBody:\s*true\s*\}\)/,
+      /NestFactory\.create\(AppModule,\s*\{\s*rawBody:\s*true\b/,
     );
   });
 

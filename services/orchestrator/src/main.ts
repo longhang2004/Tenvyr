@@ -1,9 +1,12 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { TenvyrDevLogger } from './dev-logger';
 
 async function bootstrap() {
   const port = process.env.ORCHESTRATOR_PORT || 3001;
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const logger = new TenvyrDevLogger();
+  const app = await NestFactory.create(AppModule, { rawBody: true, logger });
+  app.useLogger(logger);
 
   app.enableCors();
 
@@ -14,6 +17,6 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   await app.listen(port);
-  console.log(`Orchestrator Service is running on: http://localhost:${port}`);
+  logger.log(`Orchestrator listening on http://localhost:${port}`);
 }
 bootstrap();
