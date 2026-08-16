@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRuntimeConnectionProfile } from "./executors/runtime-profiles";
@@ -7,6 +7,7 @@ import {
   ProviderDiscoveryService,
 } from "./services/provider-discovery.service";
 import { OpenCodeManagementSession } from "./services/opencode-management.service";
+import { OpenCodeAuthFlowService } from "./services/opencode-auth-flow.service";
 import { OpenCodeServerError } from "./executors/opencode-server";
 import {
   isSafeOauthUrl,
@@ -33,8 +34,13 @@ function fakeFixture(name: string, script: string): string {
   return path;
 }
 
-/** Fake `opencode serve`: a real HTTP server implementing the documented
- *  Server API, honoring basic auth + --port/--hostname. */
+/** Fake `opencode serve` implementing the REAL OpenCode auth contract:
+ *  auth methods are `{ type: "oauth" | "api", label }` identified by list
+ *  index; authorize receives `{ method }` and returns
+ *  `{ url, method: "auto"|"code", instructions }`; callback receives
+ *  `{ method, code? }` and FAILS unless authorize happened on THIS live
+ *  instance (instance-local pending state). Request bodies are recorded
+ *  to the fixture dir for assertions. */
 const FAKE_SERVER_SCRIPT = `
 const http = require("node:http");
 const fs = require("node:fs");
@@ -45,10 +51,17 @@ const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
 const password = process.env.OPENCODE_SERVER_PASSWORD;
 const expected = "Basic " + Buffer.from("opencode:" + password).toString("base64");
 fs.writeFileSync(fixturePath + ".pid", String(process.pid));
+let pending = null;
+const record = (name, body) => {
+  try { fs.appendFileSync(fixturePath + "." + name, JSON.stringify(body) + "\\n"); } catch {}
+};
 const server = http.createServer((req, res) => {
   if (req.headers.authorization !== expected) {
     res.writeHead(401); res.end(); return;
   }
+  let raw = "";
+  req.on("data", (c) => { raw += c; });
+  req.on("end", () => {
   const url = req.url || "/";
   const send = (status, body) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -57,18 +70,26 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && url === "/provider") return send(200, fixture.providers);
   if (req.method === "GET" && url === "/provider/auth") return send(200, fixture.authMethods);
   if (req.method === "POST" && url.startsWith("/provider/") && url.endsWith("/oauth/authorize")) {
-    return send(200, fixture.authorization ?? { url: "https://provider.example/authorize?state=abc" });
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    record("authorize", body);
+    pending = body;
+    return send(200, fixture.authorization ?? { url: "https://provider.example/authorize?state=abc", method: "auto", instructions: "Complete authorization in the provider window." });
   }
   if (req.method === "POST" && url.startsWith("/provider/") && url.endsWith("/oauth/callback")) {
-    fs.appendFileSync(fixturePath + ".callback", "1");
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    record("callback", body);
+    if (pending === null) return send(200, fixture.callbackWithoutAuthorize ?? false);
+    pending = null;
     return send(200, fixture.callbackResult ?? true);
   }
   send(404, { error: "not found" });
+  });
 });
 server.listen(port, "127.0.0.1");
 process.on("SIGTERM", () => { server.close(); process.exit(0); });
 `;
-
 /** Fake `opencode models [provider]` CLI through the connection profile. */
 const FAKE_MODELS_SCRIPT = `
 const [,,sub,provider] = process.argv;
@@ -105,7 +126,7 @@ function makeConnection(
     fixturePath,
     JSON.stringify({
       providers: { all: [{ id: providerId }], default: {}, connected: [providerId] },
-      authMethods: { [providerId]: [{ id: "oauth" }] },
+      authMethods: { [providerId]: [{ type: "oauth", label: "OAuth" }] },
     }),
   );
   const serverExecutable = fakeFixture(`server-${connectionId}`, FAKE_SERVER_SCRIPT);
@@ -180,14 +201,36 @@ describe("P2 closure round 2: OpenCode management session (structured Server API
     ).toThrow(OpenCodeServerError);
 
     const methods = parseOpenCodeAuthMethods({
-      openai: [{ id: "oauth" }, { id: "api" }],
+      openai: [
+        { type: "oauth", label: "OAuth" },
+        { type: "api", label: "API Key" },
+      ],
     });
-    expect(methods.openai.map((m) => m.id)).toEqual(["oauth", "api"]);
+    expect(methods.openai.map((m) => m.type)).toEqual(["oauth", "api"]);
+    expect(methods.openai.map((m) => m.methodIndex)).toEqual([0, 1]);
+    // Unknown types are dropped; a fake string id is never synthesized.
+    const withJunk = parseOpenCodeAuthMethods({
+      openai: [
+        { type: "oauth", label: "OAuth" },
+        { id: "oauth" },
+        { type: "mystery", label: "?" },
+      ],
+    });
+    expect(withJunk.openai.map((m) => m.type)).toEqual(["oauth"]);
+    expect("id" in withJunk.openai[0]).toBe(false);
 
     const authorization = parseOpenCodeAuthAuthorization({
       url: "https://provider.example/authorize?state=abc",
+      method: "auto",
+      instructions: "Complete authorization in the provider window.",
     });
     expect(isSafeOauthUrl(authorization.url)).toBe(true);
+    expect(authorization.method).toBe("auto");
+    expect(authorization.instructions).toBeTruthy();
+    // Unknown flow methods are malformed, never optimistic.
+    expect(() =>
+      parseOpenCodeAuthAuthorization({ url: "https://x.example/a", method: "magic" }),
+    ).toThrow(OpenCodeServerError);
     expect(isSafeOauthUrl("javascript:alert(1)")).toBe(false);
     expect(isSafeOauthUrl("https://user:pass@provider.example/")).toBe(false);
     let badUrlCode: string | null = null;
@@ -210,7 +253,7 @@ describe("P2 closure round 2: OpenCode management session (structured Server API
           default: {},
           connected: ["openai"],
         },
-        authMethods: { openai: [{ id: "oauth" }] },
+        authMethods: { openai: [{ type: "oauth", label: "OAuth" }] },
       }),
     );
     const serverExecutable = fakeFixture("server", FAKE_SERVER_SCRIPT);
@@ -224,10 +267,14 @@ describe("P2 closure round 2: OpenCode management session (structured Server API
       expect(list.all.map((p) => p.id)).toEqual(["openai", "anthropic"]);
       expect(list.connected).toEqual(["openai"]);
       const methods = await session.authMethods();
-      expect(methods.openai.map((m) => m.id)).toEqual(["oauth"]);
-      const authorization = await session.authorize("openai");
+      expect(methods.openai[0].type).toBe("oauth");
+      expect(methods.openai[0].label).toBe("OAuth");
+      expect(methods.openai[0].methodIndex).toBe(0);
+      const authorization = await session.authorize("openai", 0);
       expect(authorization.url.startsWith("https://")).toBe(true);
-      expect(await session.completeOauth("openai")).toBe(true);
+      expect(authorization.method).toBe("auto");
+      expect(authorization.instructions).toBeTruthy();
+      expect(await session.completeOauth("openai", 0)).toBe(true);
     } finally {
       await session.close();
     }
@@ -343,7 +390,13 @@ describe("P2 closure round 2: connection-scoped provider discovery", () => {
     process.env.OPENCODE_FAKE_FIXTURE = c.fixturePath;
     const result = await svc.getRuntimeProviderAuthMethods("conn:opencode-A", "openai");
     expect(result.providerId).toBe("openai");
-    expect(result.methods.map((m) => m.id)).toEqual(["oauth"]);
+    expect(result.methods[0]).toMatchObject({
+      methodIndex: 0,
+      type: "oauth",
+      label: "OAuth",
+      requiresPrompt: false,
+    });
+    expect("id" in result.methods[0]).toBe(false);
     expect(result.revisionNumber).toBe(2);
     delete process.env.OPENCODE_FAKE_FIXTURE;
   });
@@ -411,5 +464,237 @@ describe("P2 closure round 2: connection-scoped provider discovery", () => {
     await expect(
       svc.testRuntimeTarget("conn:missing", "not a model id!"),
     ).rejects.toMatchObject({ code: "CONNECTION_NOT_FOUND" });
+  });
+});
+
+describe("P2 final closure: OpenCode auth flow — one live session, method index, auto/code", () => {
+  const flowFixture = (
+    name: string,
+    options: {
+      methods?: unknown[];
+      authorization?: unknown;
+      connected?: string[];
+    } = {},
+  ) => {
+    const dir = mkdtempSync(join(tmpdir(), `tenvyr-flow-${name}-`));
+    const fixturePath = join(dir, "fixture.json");
+    writeFileSync(
+      fixturePath,
+      JSON.stringify({
+        providers: {
+          all: [{ id: "openai" }],
+          default: {},
+          connected: options.connected ?? ["openai"],
+        },
+        authMethods: {
+          openai:
+            options.methods ?? [
+              { type: "oauth", label: "OAuth" },
+              { type: "api", label: "API Key" },
+            ],
+        },
+        ...(options.authorization !== undefined
+          ? { authorization: options.authorization }
+          : {}),
+      }),
+    );
+    const executable = fakeFixture(`flow-server-${name}`, FAKE_SERVER_SCRIPT);
+    return { executable, fixturePath, dir };
+  };
+
+  const flowRevisions = (
+    connectionId: string,
+    executable: string,
+    fixturePath: string,
+  ) =>
+    new Map<string, ConnectionRevisionV1>([
+      [
+        connectionId,
+        openCodeRevision(connectionId, executable, {
+          OPENCODE_FAKE_FIXTURE: "OPENCODE_FAKE_FIXTURE",
+        }),
+      ],
+    ]);
+
+  test("begin: selected methodIndex travels as { method: N }; same live session completes the flow", async () => {
+    const fx = flowFixture("same-session");
+    const svc = service(flowRevisions("conn:flow", fx.executable, fx.fixturePath));
+    process.env.OPENCODE_FAKE_FIXTURE = fx.fixturePath;
+
+    const begun = await svc.beginAuthFlow({
+      connectionId: "conn:flow",
+      providerId: "openai",
+      methodIndex: 1, // API Key method
+    });
+    expect(begun.authFlowId).toMatch(/^[0-9a-f]{32}$/);
+    expect(begun.method).toBe("auto");
+    expect(begun.url.startsWith("https://")).toBe(true);
+    expect(begun.connectionRevision).toBe(1);
+
+    // The authorize request carried the EXACT method index.
+    const authorizeBodies = readFileSync(`${fx.fixturePath}.authorize`, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(authorizeBodies[authorizeBodies.length - 1]).toEqual({ method: 1 });
+
+    // Completion goes through the SAME live session.
+    const completed = await svc.completeAuthFlow(begun.authFlowId);
+    expect(completed.connected).toBe(true);
+    expect(completed.providerId).toBe("openai");
+
+    // The callback carried the same method index (no code for auto).
+    const callbackBodies = readFileSync(`${fx.fixturePath}.callback`, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(callbackBodies[callbackBodies.length - 1]).toEqual({ method: 1 });
+
+    // The flow is removed and its management process is gone.
+    await expect(svc.completeAuthFlow(begun.authFlowId)).rejects.toMatchObject({
+      code: "AUTH_FLOW_NOT_FOUND",
+    });
+    delete process.env.OPENCODE_FAKE_FIXTURE;
+  });
+
+  test("code flow: callback receives the exact method + bounded code", async () => {
+    const fx = flowFixture("code-flow", {
+      authorization: {
+        url: "https://provider.example/authorize?state=xyz",
+        method: "code",
+        instructions: "Enter the code shown on the provider page.",
+      },
+    });
+    const svc = service(flowRevisions("conn:flow-code", fx.executable, fx.fixturePath));
+    process.env.OPENCODE_FAKE_FIXTURE = fx.fixturePath;
+
+    const begun = await svc.beginAuthFlow({
+      connectionId: "conn:flow-code",
+      providerId: "openai",
+      methodIndex: 0,
+    });
+    expect(begun.method).toBe("code");
+    expect(begun.instructions).toContain("code");
+
+    const completed = await svc.completeAuthFlow(begun.authFlowId, "abc123==");
+    expect(completed.connected).toBe(true);
+
+    const callbackBodies = readFileSync(`${fx.fixturePath}.callback`, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(callbackBodies[callbackBodies.length - 1]).toEqual({
+      method: 0,
+      code: "abc123==",
+    });
+    delete process.env.OPENCODE_FAKE_FIXTURE;
+  });
+
+  test("pending state is INSTANCE-LOCAL: a fresh session callback without authorize fails (fake contract)", async () => {
+    const fx = flowFixture("pending-state");
+    process.env.OPENCODE_FAKE_FIXTURE = fx.fixturePath;
+    // Session A performs authorize (via a flow).
+    const svc = service(flowRevisions("conn:flow-pending", fx.executable, fx.fixturePath));
+    const begun = await svc.beginAuthFlow({
+      connectionId: "conn:flow-pending",
+      providerId: "openai",
+      methodIndex: 0,
+    });
+    // Session B is a DIFFERENT live instance: its callback has no pending
+    // state and MUST fail.
+    const sessionB = await OpenCodeManagementSession.start({
+      command: fx.executable,
+      env: { OPENCODE_FAKE_FIXTURE: fx.fixturePath },
+    });
+    try {
+      expect(await sessionB.completeOauth("openai", 0)).toBe(false);
+    } finally {
+      await sessionB.close();
+    }
+    // Completing through the SAME flow/session still succeeds.
+    const completed = await svc.completeAuthFlow(begun.authFlowId);
+    expect(completed.connected).toBe(true);
+    delete process.env.OPENCODE_FAKE_FIXTURE;
+  });
+
+  test("expired auth flow fails closed and the management process is gone", async () => {
+    const fx = flowFixture("expiry");
+    const svc = service(flowRevisions("conn:flow-exp", fx.executable, fx.fixturePath));
+    process.env.OPENCODE_FAKE_FIXTURE = fx.fixturePath;
+    const flowService = new OpenCodeAuthFlowService(1); // 1ms TTL
+    const svcAny = svc as unknown as { authFlows: OpenCodeAuthFlowService };
+    const original = svcAny.authFlows;
+    svcAny.authFlows = flowService;
+    try {
+      const begun = await svc.beginAuthFlow({
+        connectionId: "conn:flow-exp",
+        providerId: "openai",
+        methodIndex: 0,
+      });
+      const pidPath = `${fx.fixturePath}.pid`;
+      const pid = Number(readFileSync(pidPath, "utf8"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Expired: completion fails closed.
+      await expect(svc.completeAuthFlow(begun.authFlowId)).rejects.toMatchObject({
+        code: "AUTH_FLOW_NOT_FOUND",
+      });
+      // The management process was cleaned up.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      let alive = true;
+      try {
+        process.kill(pid, 0);
+      } catch {
+        alive = false;
+      }
+      expect(alive).toBe(false);
+    } finally {
+      svcAny.authFlows = original;
+      delete process.env.OPENCODE_FAKE_FIXTURE;
+    }
+  });
+
+  test("cancel closes the flow and its management process; a second complete fails closed", async () => {
+    const fx = flowFixture("cancel");
+    const svc = service(flowRevisions("conn:flow-cancel", fx.executable, fx.fixturePath));
+    process.env.OPENCODE_FAKE_FIXTURE = fx.fixturePath;
+    const begun = await svc.beginAuthFlow({
+      connectionId: "conn:flow-cancel",
+      providerId: "openai",
+      methodIndex: 0,
+    });
+    const pidPath = `${fx.fixturePath}.pid`;
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    const cancelled = await svc.cancelAuthFlow(begun.authFlowId);
+    expect(cancelled.cancelled).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    expect(alive).toBe(false);
+    await expect(svc.completeAuthFlow(begun.authFlowId)).rejects.toMatchObject({
+      code: "AUTH_FLOW_NOT_FOUND",
+    });
+    delete process.env.OPENCODE_FAKE_FIXTURE;
+  });
+
+  test("unsupported prompt methods fail closed (never authorize with missing inputs)", async () => {
+    const fx = flowFixture("prompt", {
+      methods: [{ type: "oauth", label: "OAuth", prompt: [{ id: "token", label: "Token" }] }],
+    });
+    const svc = service(flowRevisions("conn:flow-prompt", fx.executable, fx.fixturePath));
+    process.env.OPENCODE_FAKE_FIXTURE = fx.fixturePath;
+    await expect(
+      svc.beginAuthFlow({
+        connectionId: "conn:flow-prompt",
+        providerId: "openai",
+        methodIndex: 0,
+      }),
+    ).rejects.toMatchObject({ code: "AUTH_METHOD_UNSUPPORTED" });
+    // No authorize request was ever sent.
+    expect(existsSync(`${fx.fixturePath}.authorize`)).toBe(false);
+    delete process.env.OPENCODE_FAKE_FIXTURE;
   });
 });

@@ -295,22 +295,40 @@ describeWithPostgres(
       }
     `;
 
-    // Fake `opencode serve`: the documented Server API on 127.0.0.1 with
-    // basic auth (OPENCODE_SERVER_PASSWORD).
+    // Fake `opencode serve`: the REAL OpenCode auth contract — methods are
+    // {type,label} by list index; authorize receives {method} and returns
+    // {url, method, instructions}; callback receives {method, code?} and
+    // fails unless authorize happened on THIS instance.
     const serveScript = `
       const http = require("node:http");
       const argv = process.argv.slice(2);
       const port = Number(argv[argv.indexOf("--port") + 1]);
       const password = process.env.OPENCODE_SERVER_PASSWORD;
       const expected = "Basic " + Buffer.from("opencode:" + password).toString("base64");
+      let raw = "";
+      let pending = null;
       const server = http.createServer((req, res) => {
         if (req.headers.authorization !== expected) { res.writeHead(401); res.end(); return; }
-        const send = (status, body) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
-        if (req.method === "GET" && req.url === "/provider") return send(200, { all: [{ id: "deepseek" }], default: {}, connected: ["deepseek"] });
-        if (req.method === "GET" && req.url === "/provider/auth") return send(200, { deepseek: [{ id: "oauth" }] });
-        if (req.method === "POST" && req.url.endsWith("/oauth/authorize")) return send(200, { url: "https://provider.example/authorize?state=x" });
-        if (req.method === "POST" && req.url.endsWith("/oauth/callback")) return send(200, true);
-        send(404, { error: "not found" });
+        req.on("data", (c) => { raw += c; });
+        req.on("end", () => {
+          const send = (status, body) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
+          const url = req.url || "/";
+          let body = {};
+          try { body = JSON.parse(raw || "{}"); } catch {}
+          const connected = (process.env.P2C_CONNECTED === undefined ? "deepseek" : process.env.P2C_CONNECTED).split(",").filter(Boolean);
+          if (req.method === "GET" && url === "/provider") return send(200, { all: [{ id: "deepseek" }, { id: "other" }], default: {}, connected });
+          if (req.method === "GET" && url === "/provider/auth") return send(200, { deepseek: [{ type: "oauth", label: "OAuth" }, { type: "api", label: "API Key" }] });
+          if (req.method === "POST" && url.endsWith("/oauth/authorize")) {
+            pending = body;
+            return send(200, { url: "https://provider.example/authorize?state=x", method: "auto", instructions: "Complete in the provider window." });
+          }
+          if (req.method === "POST" && url.endsWith("/oauth/callback")) {
+            if (pending === null) return send(200, false);
+            pending = null;
+            return send(200, true);
+          }
+          send(404, { error: "not found" });
+        });
       });
       server.listen(port, "127.0.0.1");
       process.on("SIGTERM", () => { server.close(); process.exit(0); });
@@ -338,6 +356,20 @@ describeWithPostgres(
     afterAll(async () => {
       await dataSource?.destroy();
     });
+
+    const errorCodeOf = async (action: () => Promise<unknown>): Promise<string> => {
+      try {
+        await action();
+      } catch (error) {
+        // Direct command errors carry the code on the error; controller
+        // errors carry it in the HttpException response body.
+        const direct = String((error as { code?: string }).code ?? "");
+        if (direct) return direct;
+        const response = (error as { getResponse?: () => unknown }).getResponse?.();
+        return String((response as { error?: { code?: string } })?.error?.code ?? "");
+      }
+      return "NO_ERROR";
+    };
 
     const profileWith = (command: string, envAllowlist: Record<string, string> = {}) => ({
       name: "p2c-connection",
@@ -418,42 +450,168 @@ describeWithPostgres(
       delete process.env.P2C_FAIL;
     });
 
-    it("opencode oauth authorize + callback are audited and URL-validated", async () => {
+    it("opencode oauth begin + complete are audited; the method index travels; same live session", async () => {
       const serveExecutable = writeFixture("serve.cjs", serveScript);
       await createConnection("conn:p2c-serve", serveExecutable);
 
-      const authorized = await controller.oauthAuthorize({
-        idempotencyKey: "p2c-oauth-1",
+      const begun = await controller.oauthBegin({
+        idempotencyKey: "p2c-oauth-begin-1",
         connectionId: "conn:p2c-serve",
         providerId: "deepseek",
+        methodIndex: 1,
       });
-      const authEnvelope = (authorized as { data: Record<string, unknown> }).data;
-      expect(authEnvelope.outcome).toBe("executed");
-      const authorizationUrl = String(
-        (authEnvelope.result as { authorizationUrl: string }).authorizationUrl,
-      );
-      expect(authorizationUrl.startsWith("https://")).toBe(true);
+      const beginEnvelope = (begun as { data: Record<string, unknown> }).data;
+      expect(beginEnvelope.outcome).toBe("executed");
+      const beginResult = beginEnvelope.result as {
+        authFlowId: string;
+        url: string;
+        method: string;
+        instructions: string | null;
+        connectionRevision: number;
+      };
+      expect(beginResult.authFlowId).toMatch(/^[0-9a-f]{32}$/);
+      expect(beginResult.url.startsWith("https://")).toBe(true);
+      expect(beginResult.method).toBe("auto");
+      expect(beginResult.connectionRevision).toBe(1);
       expect(
         await dataSource.query(
-          `SELECT outcome FROM operator_actions WHERE "idempotencyKey" = 'p2c-oauth-1'`,
+          `SELECT outcome FROM operator_actions WHERE "idempotencyKey" = 'p2c-oauth-begin-1'`,
         ),
       ).toHaveLength(1);
 
-      const completed = await controller.oauthCallback({
-        idempotencyKey: "p2c-oauth-2",
-        connectionId: "conn:p2c-serve",
-        providerId: "deepseek",
+      const completed = await controller.oauthComplete({
+        idempotencyKey: "p2c-oauth-complete-1",
+        authFlowId: beginResult.authFlowId,
       });
-      const callbackEnvelope = (completed as { data: Record<string, unknown> }).data;
-      expect(callbackEnvelope.outcome).toBe("executed");
+      const completeEnvelope = (completed as { data: Record<string, unknown> }).data;
+      expect(completeEnvelope.outcome).toBe("executed");
       expect(
-        (callbackEnvelope.result as { connected: boolean }).connected,
+        (completeEnvelope.result as { connected: boolean }).connected,
       ).toBe(true);
       expect(
         await dataSource.query(
-          `SELECT outcome FROM operator_actions WHERE "idempotencyKey" = 'p2c-oauth-2'`,
+          `SELECT outcome FROM operator_actions WHERE "idempotencyKey" = 'p2c-oauth-complete-1'`,
         ),
       ).toHaveLength(1);
+    });
+
+    it("oauth complete with an unknown/expired authFlowId fails closed", async () => {
+      const code = await errorCodeOf(() =>
+        controller.oauthComplete({
+          idempotencyKey: "p2c-oauth-complete-missing",
+          authFlowId: "0".repeat(32),
+        }),
+      );
+      expect(code).toBe("AUTH_FLOW_NOT_FOUND");
+    });
+
+    it("server-side enforcement: startTeamRun BLOCKS an explicit opencode model when ZERO providers are connected", async () => {
+      const serveExecutable = writeFixture("serve-zero.cjs", serveScript);
+      await createConnection("conn:p2c-zero", serveExecutable);
+      process.env.P2C_CONNECTED = "";
+      try {
+        const code = await errorCodeOf(() =>
+          commands.startTeamRun({
+            idempotencyKey: "p2c-zero-launch-1",
+            name: "zero-connected",
+            goal: "test",
+            config: {
+              schemaVersion: 1,
+              planner: { kind: "connection", name: "conn:p2c-zero", agent: "planner" },
+              verifier: { kind: "connection", name: "conn:p2c-zero", agent: "verifier" },
+              allowedTargets: [{ connectionId: "conn:p2c-zero", modelId: "deepseek/deepseek-v4" }],
+              allowedWorkers: [{ kind: "connection", name: "conn:p2c-zero", agent: "worker" }],
+              maxIterations: 1,
+              maxWorkersPerIteration: 1,
+              maxTotalWorkers: 1,
+              loopDeadlineMs: 60000,
+              delegationDepthMax: 1,
+              allowedExecutors: ["local-host"],
+            },
+          }),
+        );
+        expect(code).toBe("PROVIDER_NOT_AUTHENTICATED");
+        // The validation runs BEFORE the authority transaction: no audit
+        // row, no execution.
+        expect(
+          await dataSource.query(
+            `SELECT count(*)::text AS n FROM operator_actions WHERE "idempotencyKey" = 'p2c-zero-launch-1'`,
+          ),
+        ).toEqual([{ n: "0" }]);
+      } finally {
+        delete process.env.P2C_CONNECTED;
+      }
+    });
+
+    it("server-side enforcement: provider A connected, model from provider B -> BLOCK (direct backend bypass)", async () => {
+      const serveExecutable = writeFixture("serve-mixed.cjs", serveScript);
+      await createConnection("conn:p2c-mixed", serveExecutable);
+      process.env.P2C_CONNECTED = "deepseek";
+      try {
+        const code = await errorCodeOf(() =>
+          commands.startTeamRun({
+            idempotencyKey: "p2c-mixed-launch-1",
+            name: "mixed",
+            goal: "test",
+            config: {
+              schemaVersion: 1,
+              planner: { kind: "connection", name: "conn:p2c-mixed", agent: "planner" },
+              verifier: { kind: "connection", name: "conn:p2c-mixed", agent: "verifier" },
+              allowedTargets: [{ connectionId: "conn:p2c-mixed", modelId: "other/not-connected-model" }],
+              allowedWorkers: [{ kind: "connection", name: "conn:p2c-mixed", agent: "worker" }],
+              maxIterations: 1,
+              maxWorkersPerIteration: 1,
+              maxTotalWorkers: 1,
+              loopDeadlineMs: 60000,
+              delegationDepthMax: 1,
+              allowedExecutors: ["local-host"],
+            },
+          }),
+        );
+        expect(code).toBe("PROVIDER_NOT_AUTHENTICATED");
+        expect(
+          await dataSource.query(
+            `SELECT count(*)::text AS n FROM operator_actions WHERE "idempotencyKey" = 'p2c-mixed-launch-1'`,
+          ),
+        ).toEqual([{ n: "0" }]);
+      } finally {
+        delete process.env.P2C_CONNECTED;
+      }
+    });
+
+    it("server-side enforcement: connected provider/model -> launch succeeds", async () => {
+      const serveExecutable = writeFixture("serve-ok.cjs", serveScript);
+      await createConnection("conn:p2c-ok", serveExecutable);
+      process.env.P2C_CONNECTED = "deepseek";
+      try {
+        const result = await commands.startTeamRun({
+          idempotencyKey: "p2c-ok-launch-1",
+          name: "connected-ok",
+          goal: "test",
+          config: {
+            schemaVersion: 1,
+            planner: { kind: "connection", name: "conn:p2c-ok", agent: "planner" },
+            verifier: { kind: "connection", name: "conn:p2c-ok", agent: "verifier" },
+            allowedTargets: [{ connectionId: "conn:p2c-ok", modelId: "deepseek/deepseek-v4" }],
+            allowedWorkers: [{ kind: "connection", name: "conn:p2c-ok", agent: "worker" }],
+            maxIterations: 1,
+            maxWorkersPerIteration: 1,
+            maxTotalWorkers: 1,
+            loopDeadlineMs: 60000,
+            delegationDepthMax: 1,
+            allowedExecutors: ["local-host"],
+          },
+        });
+        expect(result.outcome).toBe("executed");
+        // The audited launch committed.
+        expect(
+          await dataSource.query(
+            `SELECT outcome FROM operator_actions WHERE "idempotencyKey" = 'p2c-ok-launch-1'`,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        delete process.env.P2C_CONNECTED;
+      }
     });
 
     it("test-runtime-target on a revoked connection is DENIED", async () => {

@@ -218,18 +218,26 @@ export class AppController {
     });
   }
 
-  @Post("api/provider-discovery/commands/oauth-authorize")
-  async openCodeOauthAuthorize(@Body() body: any) {
+  @Post("api/provider-discovery/commands/oauth-begin")
+  async openCodeOauthBegin(@Body() body: any) {
     return this.forwardToOrchestrator(
-      "/provider-discovery/commands/oauth-authorize",
+      "/provider-discovery/commands/oauth-begin",
       { method: "POST", body },
     );
   }
 
-  @Post("api/provider-discovery/commands/oauth-callback")
-  async openCodeOauthCallback(@Body() body: any) {
+  @Post("api/provider-discovery/commands/oauth-complete")
+  async openCodeOauthComplete(@Body() body: any) {
     return this.forwardToOrchestrator(
-      "/provider-discovery/commands/oauth-callback",
+      "/provider-discovery/commands/oauth-complete",
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/provider-discovery/commands/oauth-cancel")
+  async openCodeOauthCancel(@Body() body: any) {
+    return this.forwardToOrchestrator(
+      "/provider-discovery/commands/oauth-cancel",
       { method: "POST", body },
     );
   }

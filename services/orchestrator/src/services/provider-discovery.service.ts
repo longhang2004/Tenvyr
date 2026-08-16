@@ -33,6 +33,11 @@ import {
   toRuntimeProviderV1,
   type OpenCodeProviderAuthMethodV1,
 } from "../executors/opencode-server";
+import { OpenCodeServerError } from "../executors/opencode-server";
+import {
+  OpenCodeAuthFlowError,
+  OpenCodeAuthFlowService,
+} from "./opencode-auth-flow.service";
 import {
   OpenCodeManagementSession,
   withOpenCodeSession,
@@ -57,6 +62,9 @@ export class ProviderDiscoveryError extends Error {
       | "MODEL_NOT_SUPPORTED"
       | "OPENCODE_SERVER_FAILED"
       | "INVALID_OAUTH_URL"
+      | "INVALID_METHOD_INDEX"
+      | "AUTH_METHOD_UNSUPPORTED"
+      | "PROVIDER_NOT_AUTHENTICATED"
       | "INVALID_MODEL_ID",
     message: string,
   ) {
@@ -108,10 +116,14 @@ export class ProviderDiscoveryService {
     @Inject("DATA_SOURCE") private readonly dataSource: DataSource,
     connections?: RuntimeConnectionService,
     discovery?: ModelDiscoveryService,
+    authFlows?: OpenCodeAuthFlowService,
   ) {
     this.connections = connections ?? new RuntimeConnectionService(this.dataSource);
     this.discovery = discovery ?? new ModelDiscoveryService();
+    this.authFlows = authFlows ?? new OpenCodeAuthFlowService();
   }
+
+  private readonly authFlows: OpenCodeAuthFlowService;
 
   /** Load the connection, reject revoked/missing, return its CURRENT
    *  revision (the connection service enforces both). */
@@ -245,56 +257,117 @@ export class ProviderDiscoveryService {
     return { connectionId, revisionNumber: revision.revisionNumber, runtimeKind, providerId, methods };
   }
 
-  /** Start the runtime-owned OAuth flow: returns a VALIDATED authorization
-   *  URL for the operator to complete in the provider's own UI. Tenvyr
-   *  never sees or stores tokens. */
-  async authorizeOpenCodeOAuth(
-    connectionId: string,
-    providerId: string,
-  ): Promise<{ authorizationUrl: string }> {
-    const revision = await this.resolveRevision(connectionId);
+  /** Begin the runtime-owned auth flow for one provider of one connection.
+   *  Resolves the EXACT current revision, starts a LIVE management server
+   *  (RETAINED — never closed here; the flow owns its lifecycle), fetches
+   *  the fresh auth-method snapshot, VALIDATES the methodIndex and prompt
+   *  support BEFORE any authorize call, then performs POST authorize.
+   *  The same live session completes the flow (OpenCode pending state is
+   *  instance-local). */
+  async beginAuthFlow(input: {
+    connectionId: string;
+    providerId: string;
+    methodIndex: number;
+  }): Promise<{
+    authFlowId: string;
+    url: string;
+    method: "auto" | "code";
+    instructions: string | null;
+    connectionId: string;
+    connectionRevision: number;
+    providerId: string;
+  }> {
+    const revision = await this.resolveRevision(input.connectionId);
     this.requireOpenCode(revision);
+    if (
+      !Number.isInteger(input.methodIndex) ||
+      input.methodIndex < 0 ||
+      input.methodIndex > 32
+    ) {
+      throw new ProviderDiscoveryError(
+        "INVALID_METHOD_INDEX",
+        "method index must be a bounded non-negative integer",
+      );
+    }
+    const session = await OpenCodeManagementSession.start(
+      this.sessionProfile(revision),
+    );
     try {
-      return await withOpenCodeSession(this.sessionProfile(revision), async (session) => {
-        const authorization = await session.authorize(providerId);
-        return { authorizationUrl: authorization.url };
-      });
-    } catch (error) {
-      if (String((error as Error).name) === "OpenCodeServerError") {
+      const methodsByProvider = await session.authMethods();
+      const methods = methodsByProvider[input.providerId] ?? [];
+      const method = methods.find(
+        (candidate) => candidate.methodIndex === input.methodIndex,
+      );
+      if (!method) {
+        await session.close();
         throw new ProviderDiscoveryError(
-          "INVALID_OAUTH_URL",
+          "INVALID_METHOD_INDEX",
+          `method index ${input.methodIndex} is not in the auth-method snapshot for ${input.providerId}`,
+        );
+      }
+      if (method.requiresPrompt) {
+        // Fail closed: never authorize with missing required inputs and
+        // never collect credentials. The guided runtime-owned fallback
+        // (opencode auth login --provider <id>) is the supported path.
+        await session.close();
+        throw new ProviderDiscoveryError(
+          "AUTH_METHOD_UNSUPPORTED",
+          `auth method "${method.label}" requires prompt inputs Tenvyr does not drive — use the official login command instead`,
+        );
+      }
+      const authorization = await session.authorize(
+        input.providerId,
+        input.methodIndex,
+      );
+      const flow = this.authFlows.begin({
+        connectionId: input.connectionId,
+        connectionRevision: revision.revisionNumber,
+        providerId: input.providerId,
+        methodIndex: input.methodIndex,
+        methods,
+        session,
+        authorization,
+      });
+      return {
+        authFlowId: flow.authFlowId,
+        url: authorization.url,
+        method: authorization.method,
+        instructions: authorization.instructions,
+        connectionId: input.connectionId,
+        connectionRevision: revision.revisionNumber,
+        providerId: input.providerId,
+      };
+    } catch (error) {
+      await session.close();
+      if (
+        error instanceof OpenCodeAuthFlowError ||
+        error instanceof OpenCodeServerError
+      ) {
+        throw new ProviderDiscoveryError(
+          error instanceof OpenCodeAuthFlowError &&
+            error.code === "AUTH_METHOD_UNSUPPORTED"
+            ? "AUTH_METHOD_UNSUPPORTED"
+            : "OPENCODE_SERVER_FAILED",
           String((error as Error).message),
         );
       }
-      throw new ProviderDiscoveryError(
-        "OPENCODE_SERVER_FAILED",
-        String((error as Error).message),
-      );
+      throw error;
     }
   }
 
-  /** Complete the runtime-owned OAuth flow and report connected state from
-   *  a refreshed GET /provider. */
-  async completeOpenCodeOAuth(
-    connectionId: string,
-    providerId: string,
-  ): Promise<{ connected: boolean }> {
-    const revision = await this.resolveRevision(connectionId);
-    this.requireOpenCode(revision);
-    try {
-      const connected = await withOpenCodeSession(this.sessionProfile(revision), async (session) => {
-        const completed = await session.completeOauth(providerId);
-        if (!completed) return false;
-        const list = await session.providers();
-        return list.connected.includes(providerId);
-      });
-      return { connected };
-    } catch (error) {
-      throw new ProviderDiscoveryError(
-        "OPENCODE_SERVER_FAILED",
-        String((error as Error).message),
-      );
-    }
+  /** Complete the runtime-owned flow through the SAME live session that
+   *  performed authorize; proves connected via a refreshed GET /provider;
+   *  then closes the server and removes the flow. */
+  async completeAuthFlow(
+    authFlowId: string,
+    code?: string,
+  ): Promise<{ connected: boolean; providerId: string; connectionId: string }> {
+    return this.authFlows.complete(authFlowId, code);
+  }
+
+  /** Cancel: deterministic cleanup of the live management session. */
+  async cancelAuthFlow(authFlowId: string): Promise<{ cancelled: boolean }> {
+    return { cancelled: await this.authFlows.cancel(authFlowId) };
   }
 
   /**

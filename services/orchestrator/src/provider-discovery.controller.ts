@@ -35,6 +35,13 @@ export class ProviderDiscoveryController {
         code === "MODEL_NOT_SUPPORTED" ||
         code === "INVALID_MODEL_ID" ||
         code === "INVALID_OAUTH_URL" ||
+        code === "INVALID_METHOD_INDEX" ||
+        code === "AUTH_METHOD_UNSUPPORTED" ||
+        code === "PROVIDER_NOT_AUTHENTICATED" ||
+        code === "AUTH_FLOW_NOT_FOUND" ||
+        code === "AUTH_FLOW_EXPIRED" ||
+        code === "AUTH_FLOW_LIMIT" ||
+        code === "AUTH_FLOW_CONFLICT" ||
         code === "OPENCODE_SERVER_FAILED"
       ) {
         throw new HttpException({ success: false, error: { code, message } }, HttpStatus.UNPROCESSABLE_ENTITY);
@@ -96,31 +103,47 @@ export class ProviderDiscoveryController {
     });
   }
 
-  @Post("commands/oauth-authorize")
-  async oauthAuthorize(
-    @Body() body: { idempotencyKey: string; connectionId: string; providerId: string },
+  @Post("commands/oauth-begin")
+  async oauthBegin(
+    @Body()
+    body: {
+      idempotencyKey: string;
+      connectionId: string;
+      providerId: string;
+      methodIndex: number;
+    },
   ) {
     return this.withMapping(async () => {
-      const data = await this.commands.openCodeOauthAuthorize({
+      const data = await this.commands.openCodeOauthBegin({
         idempotencyKey: body.idempotencyKey,
         connectionId: body.connectionId,
         providerId: body.providerId,
+        methodIndex: body.methodIndex,
       });
       return { success: true, data };
     });
   }
 
-  @Post("commands/oauth-callback")
-  async oauthCallback(
-    @Body() body: { idempotencyKey: string; connectionId: string; providerId: string },
+  @Post("commands/oauth-complete")
+  async oauthComplete(
+    @Body() body: { idempotencyKey: string; authFlowId: string; code?: string },
   ) {
     return this.withMapping(async () => {
-      const data = await this.commands.openCodeOauthCallback({
+      const data = await this.commands.openCodeOauthComplete({
         idempotencyKey: body.idempotencyKey,
-        connectionId: body.connectionId,
-        providerId: body.providerId,
+        authFlowId: body.authFlowId,
+        ...(body.code !== undefined ? { code: body.code } : {}),
       });
       return { success: true, data };
     });
   }
+
+  @Post("commands/oauth-cancel")
+  async oauthCancel(@Body() body: { authFlowId: string }) {
+    return this.withMapping(async () => {
+      const data = await this.discovery.cancelAuthFlow(body.authFlowId);
+      return { success: true, data };
+    });
+  }
+
 }

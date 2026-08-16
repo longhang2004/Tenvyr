@@ -250,6 +250,16 @@ export class WorkbenchCommandService {
     const config = parseCoordinationConfig(input.config);
     const acceptanceEvidence: AcceptanceEvidenceV1 | null =
       parseAcceptanceEvidence(input.acceptanceEvidence);
+
+    // P2 final closure: SERVER-SIDE provider readiness enforcement BEFORE
+    // the authority transaction. A NEW Team Run may freeze an explicit
+    // opencode provider/model target ONLY when the provider is
+    // authenticated through that exact connection's CURRENT revision.
+    // The probe is external/runtime-owned and runs before the authority
+    // transaction; the validated targets are frozen unchanged (never
+    // silently rewritten). Frontend bypass, direct REST callers, and
+    // stale browser state are all blocked here.
+    await this.assertExplicitTargetsReady(config);
     // Freeze the workspace snapshot BEFORE the authority transaction: the
     // snapshot is deterministic run context, never operator-controlled
     // after this point.
@@ -733,6 +743,67 @@ export class WorkbenchCommandService {
   }
 
   /**
+   * Server-side provider readiness: every explicit model target on an
+   * opencode connection must reference a provider authenticated through
+   * that EXACT connection revision. Zero authenticated providers means NO
+   * explicit provider/model target may launch. Runtime default (no
+   * modelId) remains available with its documented semantics: no model
+   * argument is composed and the runtime resolves its own default.
+   * Historical frozen executions are never touched.
+   */
+  private async assertExplicitTargetsReady(config: CoordinationConfigV1): Promise<void> {
+    const targets: Array<{ connectionId: string; modelId?: string }> = [];
+    if (config.plannerTarget?.connectionId) {
+      targets.push(config.plannerTarget);
+    }
+    if (config.verifierTarget?.connectionId) {
+      targets.push(config.verifierTarget);
+    }
+    for (const target of config.allowedTargets ?? []) {
+      targets.push(target);
+    }
+    const explicitByConnection = new Map<string, string[]>();
+    for (const target of targets) {
+      if (!target.modelId) continue;
+      const list = explicitByConnection.get(target.connectionId) ?? [];
+      list.push(target.modelId);
+      explicitByConnection.set(target.connectionId, list);
+    }
+    for (const [connectionId, modelIds] of explicitByConnection) {
+      // Resolve the exact revision (rejects missing/revoked) and discover
+      // the CURRENT provider state through it.
+      let discovery: Awaited<
+        ReturnType<ProviderDiscoveryService["discoverRuntimeProviders"]>
+      >;
+      try {
+        discovery = await this.providerDiscovery.discoverRuntimeProviders(connectionId);
+      } catch (error) {
+        // CONNECTION_NOT_FOUND / CONNECTION_REVOKED propagate as-is.
+        throw error;
+      }
+      if (discovery.runtimeKind !== "opencode") continue;
+      const connected = discovery.providers.filter((p) => p.authenticated);
+      for (const modelId of modelIds) {
+        const providerId = modelId.includes("/") ? modelId.split("/")[0] : null;
+        if (!providerId) {
+          // An explicit model without a provider prefix cannot be proven
+          // against the runtime's provider state — fail closed.
+          throw new WorkbenchCommandError(
+            "PROVIDER_NOT_AUTHENTICATED",
+            `model "${modelId}" on "${connectionId}" has no provider prefix; explicit opencode targets must reference a connected provider`,
+          );
+        }
+        if (!connected.some((p) => p.providerId === providerId)) {
+          throw new WorkbenchCommandError(
+            "PROVIDER_NOT_AUTHENTICATED",
+            `provider "${providerId}" is not authenticated through "${connectionId}" (revision ${discovery.revisionNumber}) — connect it on the Runtimes page first`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
    * Test Runtime Target (P2 closure round 2): a SMALL BOUNDED REAL
    * INVOCATION through the selected Runtime Connection's frozen profile
    * and the requested model — audited because it may consume external
@@ -760,52 +831,63 @@ export class WorkbenchCommandService {
     );
   }
 
-  /** OpenCode OAuth: start the runtime-owned authorization flow. Returns a
-   *  VALIDATED authorization URL for the operator; Tenvyr never sees or
-   *  stores tokens. Audited (runtime-state side effect). */
-  async openCodeOauthAuthorize(input: {
+  /** OpenCode OAuth: BEGIN the runtime-owned auth flow. Resolves the exact
+   *  connection revision, starts a LIVE management server, validates the
+   *  methodIndex against the fresh auth-method snapshot, performs POST
+   *  authorize — and RETAINS the same live session for the completion
+   *  step (OpenCode pending state is instance-local). Audited. */
+  async openCodeOauthBegin(input: {
     idempotencyKey: string;
     connectionId: string;
     providerId: string;
+    methodIndex: number;
   }): Promise<CommandResult> {
     const connectionId = input.connectionId.slice(0, 255);
     const providerId = input.providerId.slice(0, 255);
+    const methodIndex = input.methodIndex;
     return this.runCommand(
-      "opencode-oauth-authorize",
+      "opencode-oauth-begin",
       input.idempotencyKey,
       connectionId,
-      { connectionId, providerId },
+      { connectionId, providerId, methodIndex },
       async () => {
-        const { authorizationUrl } =
-          await this.providerDiscovery.authorizeOpenCodeOAuth(
-            connectionId,
-            providerId,
-          );
-        return { providerId, authorizationUrl };
+        const flow = await this.providerDiscovery.beginAuthFlow({
+          connectionId,
+          providerId,
+          methodIndex,
+        });
+        return {
+          authFlowId: flow.authFlowId,
+          url: flow.url,
+          method: flow.method,
+          instructions: flow.instructions,
+          connectionId: flow.connectionId,
+          connectionRevision: flow.connectionRevision,
+          providerId: flow.providerId,
+        };
       },
     );
   }
 
-  /** OpenCode OAuth: complete the flow after the operator authorized in
-   *  the provider's own UI and report connected state. Audited. */
-  async openCodeOauthCallback(input: {
+  /** OpenCode OAuth: COMPLETE through the SAME live session that performed
+   *  authorize; proves connected via a refreshed GET /provider; then
+   *  closes the server and removes the flow. The bounded code (code flow
+   *  only) is never logged or persisted. Audited. */
+  async openCodeOauthComplete(input: {
     idempotencyKey: string;
-    connectionId: string;
-    providerId: string;
+    authFlowId: string;
+    code?: string;
   }): Promise<CommandResult> {
-    const connectionId = input.connectionId.slice(0, 255);
-    const providerId = input.providerId.slice(0, 255);
+    const authFlowId = input.authFlowId.slice(0, 64);
     return this.runCommand(
-      "opencode-oauth-callback",
+      "opencode-oauth-complete",
       input.idempotencyKey,
-      connectionId,
-      { connectionId, providerId },
+      authFlowId,
+      { authFlowId, ...(input.code !== undefined ? { hasCode: true } : {}) },
       async () => {
-        const { connected } = await this.providerDiscovery.completeOpenCodeOAuth(
-          connectionId,
-          providerId,
-        );
-        return { providerId, connected };
+        const { connected, providerId, connectionId } =
+          await this.providerDiscovery.completeAuthFlow(authFlowId, input.code);
+        return { providerId, connectionId, connected };
       },
     );
   }

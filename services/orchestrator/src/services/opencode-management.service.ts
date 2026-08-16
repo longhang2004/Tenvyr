@@ -127,9 +127,12 @@ export class OpenCodeManagementSession {
     let lastError: OpenCodeServerError | null = null;
     while (Date.now() < deadline) {
       if (this.child.exitCode !== null) {
+        const tail = this.stderrTail.join("").slice(0, 600);
         throw new OpenCodeServerError(
           "start-failed",
-          `management server exited early (code ${this.child.exitCode})`,
+          `management server exited early (code ${this.child.exitCode})${
+            tail ? ` (stderr head: ${tail})` : ""
+          }`,
         );
       }
       try {
@@ -219,18 +222,30 @@ export class OpenCodeManagementSession {
     return parseOpenCodeAuthMethods(await this.call("/provider/auth"));
   }
 
-  async authorize(providerId: string): Promise<OpenCodeAuthAuthorizationV1> {
+  /** P2 final closure: POST oauth/authorize with the SELECTED METHOD INDEX
+   *  (the real OpenCode contract: `{ method: number }`). */
+  async authorize(
+    providerId: string,
+    methodIndex: number,
+  ): Promise<OpenCodeAuthAuthorizationV1> {
     const raw = await this.call(`/provider/${encodeURIComponent(providerId)}/oauth/authorize`, {
       method: "POST",
-      body: {},
+      body: { method: methodIndex },
     });
     return parseOpenCodeAuthAuthorization(raw);
   }
 
-  async completeOauth(providerId: string): Promise<boolean> {
+  /** P2 final closure: POST oauth/callback with `{ method, code? }` — the
+   *  bounded code is only ever sent to the SAME live instance that
+   *  performed authorize (instance-local pending state). */
+  async completeOauth(
+    providerId: string,
+    methodIndex: number,
+    code?: string,
+  ): Promise<boolean> {
     const raw = await this.call(`/provider/${encodeURIComponent(providerId)}/oauth/callback`, {
       method: "POST",
-      body: {},
+      body: code === undefined ? { method: methodIndex } : { method: methodIndex, code },
     });
     return raw === true;
   }

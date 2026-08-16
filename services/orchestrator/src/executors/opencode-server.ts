@@ -50,16 +50,33 @@ export type OpenCodeProviderListV1 = {
   connected: string[];
 };
 
+/**
+ * P2 final closure: OpenCode 1.18.16 auth method — the runtime exposes
+ * `{ type: "oauth" | "api", label }` (no stable string id). A method is
+ * identified by its STABLE LIST INDEX within the current discovery
+ * snapshot (`methodIndex`), never by a synthesized identifier. Bounded
+ * prompt metadata is preserved ONLY as a fail-closed flag: Tenvyr never
+ * collects credentials for prompts it cannot safely drive.
+ */
 export type OpenCodeProviderAuthMethodV1 = {
-  /** Method id (e.g. "oauth", "api"). */
-  id: string;
-  /** Method type when the server provides one. */
-  type?: string;
+  /** Stable index within the auth-method snapshot (0-based). */
+  methodIndex: number;
+  type: "oauth" | "api";
+  /** Bounded runtime-provided label. */
+  label: string;
+  /** True when the runtime declares prompt inputs Tenvyr will not drive
+   *  (fail closed -> guided official login command instead). */
+  requiresPrompt: boolean;
 };
 
 export type OpenCodeAuthAuthorizationV1 = {
   /** Validated http(s) authorization URL. */
   url: string;
+  /** "auto": complete via the same live session; "code": the operator
+   *  must submit the bounded authorization code. */
+  method: "auto" | "code";
+  /** Bounded runtime instructions for the operator. */
+  instructions: string | null;
 };
 
 export type OpenCodeAuthMethodsV1 = Record<
@@ -147,7 +164,11 @@ export function parseOpenCodeProviderList(value: unknown): OpenCodeProviderListV
   return { all, default: defaults, connected };
 }
 
-/** Strict parse of GET /provider/auth (methods BY provider). */
+/** Strict parse of GET /provider/auth (methods BY provider) — the REAL
+ *  OpenCode contract: `{ type: "oauth" | "api", label, ... }`. Each method
+ *  is referenced by its stable list index; a method whose type is unknown
+ *  or whose label is missing is DROPPED (never optimistic). Prompt
+ *  metadata is reduced to a fail-closed `requiresPrompt` flag. */
 export function parseOpenCodeAuthMethods(
   value: unknown,
 ): OpenCodeAuthMethodsV1 {
@@ -159,15 +180,25 @@ export function parseOpenCodeAuthMethods(
     if (!/^[A-Za-z0-9_.:-]{1,255}$/.test(providerId)) continue;
     if (!Array.isArray(rawMethods)) continue;
     const methods: OpenCodeProviderAuthMethodV1[] = [];
+    let index = 0;
     for (const raw of rawMethods) {
       if (!isRecord(raw)) continue;
-      const method: OpenCodeProviderAuthMethodV1 = {
-        id: boundedString(raw.id, "method id", 64),
-      };
-      if (typeof raw.type === "string" && raw.type.length <= 64) {
-        method.type = raw.type;
+      if (raw.type !== "oauth" && raw.type !== "api") {
+        index += 1;
+        continue;
       }
-      methods.push(method);
+      const label = typeof raw.label === "string" ? raw.label.trim() : "";
+      if (label.length === 0 || label.length > 255) {
+        index += 1;
+        continue;
+      }
+      methods.push({
+        methodIndex: index,
+        type: raw.type,
+        label,
+        requiresPrompt: Array.isArray(raw.prompt) && raw.prompt.length > 0,
+      });
+      index += 1;
       if (methods.length >= OPENCODE_SERVER_BOUNDS.authMethodsMax) break;
     }
     result[providerId] = methods;
@@ -175,8 +206,10 @@ export function parseOpenCodeAuthMethods(
   return result;
 }
 
-/** Strict parse of POST oauth/authorize; the URL is validated BEFORE it is
- *  surfaced. Only http(s), no userinfo, bounded length. */
+/** Strict parse of POST oauth/authorize — the REAL contract:
+ *  `{ url, method: "auto" | "code", instructions }`. The URL is validated
+ *  BEFORE it is surfaced; the flow method is an exhaustive enum; unknown
+ *  values are malformed, never optimistic. */
 export function parseOpenCodeAuthAuthorization(
   value: unknown,
 ): OpenCodeAuthAuthorizationV1 {
@@ -194,7 +227,28 @@ export function parseOpenCodeAuthAuthorization(
       "authorization url is not a safe http(s) url",
     );
   }
-  return { url };
+  if (value.method !== "auto" && value.method !== "code") {
+    throw new OpenCodeServerError(
+      "malformed",
+      `authorization method must be auto|code (got ${String(value.method)})`,
+    );
+  }
+  const instructions =
+    typeof value.instructions === "string" && value.instructions.length > 0
+      ? value.instructions.slice(0, 512)
+      : null;
+  return { url, method: value.method, instructions };
+}
+
+/** Bounded authorization code for the "code" flow — never logged, never
+ *  persisted. */
+export function isBoundedAuthCode(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 1024 &&
+    /^[A-Za-z0-9._~+/=-]+$/.test(value)
+  );
 }
 
 /** http/https only; no userinfo; no localhost restrictions beyond scheme
