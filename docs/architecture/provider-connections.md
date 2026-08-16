@@ -208,3 +208,66 @@ Historical frozen executions are unchanged.
   ("may consume provider credits/tokens"), audited operator action.
   Catalog enumeration is never a successful test; runtime failure is
   surfaced as failure, never READY.
+
+
+## Round 3 (final closure): OpenCode auth contract + target authority
+
+### Auth method contract (OpenCode 1.18.16)
+
+`GET /provider/auth` methods are `{ type: "oauth" | "api", label }` — there
+is NO stable string id. A method is referenced by its STABLE LIST INDEX
+(`methodIndex`) within the current discovery snapshot; Tenvyr never
+synthesizes an identifier the runtime does not supply. `POST
+/provider/{id}/oauth/authorize` carries `{ method: methodIndex }` and
+returns `{ url, method: "auto" | "code", instructions }`; the callback
+carries `{ method: methodIndex, code? }`.
+
+### One live auth session across the flow
+
+OpenCode keeps the pending OAuth result in INSTANCE-LOCAL memory — the
+callback MUST target the same live `opencode serve` instance that
+performed authorize. `OpenCodeAuthFlow` owns that lifecycle:
+
+```text
+begin (resolve exact revision -> start 127.0.0.1 server -> fetch methods
+       -> validate methodIndex/prompts -> POST authorize {method}
+       -> RETAIN the session)
+  -> bounded { authFlowId, url, method: auto|code, instructions }
+operator completes provider-owned flow
+complete (SAME session -> POST callback {method, code?} -> GET /provider
+       -> prove connected -> close server -> remove flow)
+```
+
+Bounds: cryptographically random opaque authFlowId, 5-minute TTL, max 8
+active flows, one flow per (connection, provider), cancel endpoint,
+deterministic cleanup (TTL sweep closes the session), fail-closed on
+process restart (the OpenCode pending state is gone — start again). The
+server stays 127.0.0.1 with a random password; passwords, tokens, and
+codes are never returned, logged, or persisted.
+
+### auto vs code
+
+- `method: "auto"` — show the instructions/URL; completion goes through
+  the same live session per the runtime contract.
+- `method: "code"` — the UI shows a bounded authorization-code input and
+  completes with `{ method, code }`. The code is sent once, never logged
+  or persisted. There is no universal "I've completed" button.
+
+### Unsupported prompts fail closed
+
+Auth methods declaring prompt inputs Tenvyr cannot safely drive are
+refused BEFORE any authorize call (`AUTH_METHOD_UNSUPPORTED`): the guided
+runtime-owned fallback is `opencode auth login --provider <id>` with
+[Check Again]. Tenvyr is never a credential collector.
+
+### Server-side target authority
+
+`startTeamRun` validates every explicit opencode provider/model target
+against the CURRENT runtime/provider state BEFORE the authority
+transaction: the provider (model-id prefix before "/") must be
+authenticated through that exact connection revision. Zero authenticated
+providers means NO explicit provider/model target can launch (only
+"Runtime default" remains, with its documented no-model-argument
+semantics). Frontend bypass, direct REST callers, and stale browser state
+are all blocked; validated targets are frozen unchanged and historical
+frozen executions are never rewritten.
