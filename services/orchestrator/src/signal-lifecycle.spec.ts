@@ -137,12 +137,15 @@ describeWithPostgres("Orchestrator signal lifecycle (SIGTERM -> closeAll)", () =
   });
 
   afterAll(async () => {
-    await dataSource.query(
-      'DELETE FROM "runtime_connections" WHERE "connectionId" LIKE \'conn:signal-%\'',
-    );
-    await dataSource.query(
-      'DELETE FROM "operator_actions" WHERE "action" = \'connection-create\' AND "targetId" LIKE \'conn:signal-%\'',
-    );
+    // The DB guards raw deletes (revisions are immutable) — revoke only.
+    try {
+      await commands.revokeConnection({
+        idempotencyKey: `signal-revoke-cleanup-${runNonce}`,
+        connectionId,
+      });
+    } catch {
+      // best-effort cleanup
+    }
     await dataSource.destroy();
   });
 
