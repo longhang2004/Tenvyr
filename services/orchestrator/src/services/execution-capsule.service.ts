@@ -5,6 +5,7 @@ import { ExecutionEntity } from "../entities/execution.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
 import { CoordinationRunEntity } from "../entities/coordination-run.entity";
 import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
+import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
@@ -221,6 +222,18 @@ export type ExecutionCapsuleV1 = {
       workspace: unknown;
       /** Operator-declared acceptance evidence (run metadata only). */
       acceptanceEvidence: unknown;
+      /** PP1: the run's Tenvyr-owned execution workspace lease (bounded:
+       *  mode, execution path, frozen base, lifecycle state); null for
+       *  runs without a workspace execution. */
+      executionWorkspace: {
+        workspaceExecutionId: string;
+        mode: string;
+        path: string;
+        baseBranch: string | null;
+        baseHeadSha: string | null;
+        state: string;
+        hasUncommittedWork: boolean | null;
+      } | null;
     };
     iterations: Array<{
       iterationNumber: number;
@@ -916,6 +929,12 @@ export class ExecutionCapsuleService {
             config: coordinationRun.config,
             workspace: coordinationRun.workspace,
             acceptanceEvidence: coordinationRun.acceptanceEvidence,
+            // PP1: the run's Tenvyr-owned execution workspace lease
+            // (mode/path/base/state — bounded provenance + lifecycle).
+            executionWorkspace: await this.executionWorkspaceProjection(
+              manager,
+              coordinationRun.id,
+            ),
           },
           iterations: coordinationIterations.map((iteration) => ({
             iterationNumber: iteration.iterationNumber,
@@ -1218,5 +1237,26 @@ export class ExecutionCapsuleService {
       capsule.contentHash = sha256Json(stableForHash);
       return capsule;
     });
+  }
+
+  /** PP1: bounded execution-workspace lease projection for a run (null for
+   *  runs without a lease). */
+  private async executionWorkspaceProjection(
+    manager: EntityManager,
+    runId: string,
+  ): Promise<ExecutionCapsuleV1["coordination"]["run"]["executionWorkspace"]> {
+    const lease = await manager
+      .getRepository(WorkspaceExecutionEntity)
+      .findOne({ where: { ownerRunId: runId } });
+    if (!lease || !lease.executionPath) return null;
+    return {
+      workspaceExecutionId: lease.id,
+      mode: lease.mode,
+      path: lease.executionPath,
+      baseBranch: lease.baseBranch ?? null,
+      baseHeadSha: lease.baseHeadSha ?? null,
+      state: lease.state,
+      hasUncommittedWork: lease.hasUncommittedWork ?? null,
+    };
   }
 }

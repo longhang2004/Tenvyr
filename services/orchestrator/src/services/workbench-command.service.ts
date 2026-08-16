@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { OperatorActionEntity } from "../entities/operator-action.entity";
 import { PipelineEntity } from "../entities/pipeline.entity";
@@ -14,6 +14,7 @@ import { RuntimeConnectionService } from "./runtime-connection.service";
 import { WorkspaceService } from "./workspace.service";
 import { ModelSourceService } from "./model-source.service";
 import { ProviderDiscoveryService } from "./provider-discovery.service";
+import { WorkspaceExecutionService } from "./workspace-execution.service";
 import type { ConnectionProfileV1 } from "../executors/runtime-connection";
 import { sha256Json } from "../domain/canonical-json";
 import {
@@ -80,6 +81,7 @@ export class WorkbenchCommandService {
     workspaces?: WorkspaceService,
     modelSources?: ModelSourceService,
     providerDiscovery?: ProviderDiscoveryService,
+    @Optional() workspaceExecutions?: WorkspaceExecutionService,
   ) {
     this.executionService =
       executionService ??
@@ -111,6 +113,9 @@ export class WorkbenchCommandService {
     // model-source service above (the round-1 DI crash must not repeat).
     this.providerDiscovery =
       providerDiscovery ?? new ProviderDiscoveryService(this.dataSource);
+    // PP1: workspace execution / isolation leases (shared | git-worktree).
+    this.workspaceExecutions =
+      workspaceExecutions ?? new WorkspaceExecutionService(this.dataSource);
   }
 
   private readonly executionService: ExecutionService;
@@ -120,6 +125,7 @@ export class WorkbenchCommandService {
   private readonly workspaces: WorkspaceService;
   private readonly modelSources: ModelSourceService;
   private readonly providerDiscovery: ProviderDiscoveryService;
+  private readonly workspaceExecutions: WorkspaceExecutionService;
 
   private boundedKey(idempotencyKey: string): string {
     if (
@@ -233,7 +239,13 @@ export class WorkbenchCommandService {
   }
 
   /** Launch: pipeline (goal) + execution + coordination run + iteration 1.
-   *  The recovery tick drives the engine from here. */
+   *  The recovery tick drives the engine from here.
+   *
+   *  PP1: `executionIsolation` (shared | git-worktree) allocates the run's
+   *  Tenvyr-owned execution workspace BEFORE the authority transaction
+   *  (external git mutations are never transactional); the lease binds to
+   *  the run inside it. Allocation failure aborts the launch with the
+   *  precise code — never a silent fallback to shared. */
   async startTeamRun(input: {
     idempotencyKey: string;
     name: string;
@@ -244,12 +256,19 @@ export class WorkbenchCommandService {
     workspace?: { workspaceId: string } | { path: string };
     /** Optional operator-declared acceptance evidence (run metadata). */
     acceptanceEvidence?: unknown;
+    /** PP1: execution isolation mode for the run's workspace (default
+     *  shared = execute against the source workspace itself). */
+    executionIsolation?: "shared" | "git-worktree";
   }): Promise<CommandResult> {
     const name = input.name.slice(0, COMMAND_BOUNDS.runNameMax);
     const goal = this.boundedGoal(input.goal);
     const config = parseCoordinationConfig(input.config);
     const acceptanceEvidence: AcceptanceEvidenceV1 | null =
       parseAcceptanceEvidence(input.acceptanceEvidence);
+    const executionIsolation =
+      input.executionIsolation === "git-worktree"
+        ? ("git-worktree" as const)
+        : ("shared" as const);
 
     // P2 final closure: SERVER-SIDE provider readiness enforcement BEFORE
     // the authority transaction. A NEW Team Run may freeze an explicit
@@ -277,11 +296,32 @@ export class WorkbenchCommandService {
         workspace = created.snapshot;
       }
     }
+    // PP1: allocate the Tenvyr-owned execution workspace BEFORE the
+    // authority transaction. External git mutations are not transactional;
+    // a crash leaves a durable ALLOCATING/READY row that reconciliation
+    // fails closed. A failed allocation aborts the launch with the precise
+    // code — git-worktree is never silently downgraded to shared.
+    let executionWorkspaceAllocation:
+      | Awaited<ReturnType<WorkspaceExecutionService["allocateExecutionWorkspace"]>>
+      | null = null;
+    if (workspace) {
+      executionWorkspaceAllocation =
+        await this.workspaceExecutions.allocateExecutionWorkspace(
+          workspace,
+          executionIsolation,
+        );
+    }
     return this.runCommand(
       "start-team-run",
       input.idempotencyKey,
       null,
-      { name, config: summarizeConfig(config), workspace, acceptanceEvidence },
+      {
+        name,
+        config: summarizeConfig(config),
+        workspace,
+        acceptanceEvidence,
+        executionIsolation: workspace ? executionIsolation : undefined,
+      },
       async (manager) => {
         const pipeline = await manager.getRepository(PipelineEntity).save(
           manager.getRepository(PipelineEntity).create({
@@ -304,6 +344,22 @@ export class WorkbenchCommandService {
           workspace,
           acceptanceEvidence,
         );
+        // PP1: bind the lease to its exclusive run owner inside the
+        // authority transaction (UNIQUE ownerRunId; guarded UPDATE).
+        let executionWorkspace: unknown = null;
+        if (executionWorkspaceAllocation) {
+          const bound = await this.workspaceExecutions.bindExecutionWorkspace(
+            manager,
+            executionWorkspaceAllocation.id,
+            run.id,
+          );
+          executionWorkspace = {
+            workspaceExecutionId: bound.id,
+            mode: bound.mode,
+            path: bound.executionPath,
+            baseHeadSha: bound.baseHeadSha,
+          };
+        }
         const iteration =
           await this.coordination.createNextIterationWithManager(
             manager,
@@ -314,6 +370,7 @@ export class WorkbenchCommandService {
           runId: run.id,
           iterationNumber: iteration.iterationNumber,
           ...(workspace ? { workspace: workspace.path } : {}),
+          ...(executionWorkspace ? { executionWorkspace } : {}),
         };
       },
     );

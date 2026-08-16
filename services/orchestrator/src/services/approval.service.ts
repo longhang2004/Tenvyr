@@ -22,6 +22,12 @@ import { ConditionEvaluatorService } from "./condition-evaluator.service";
 import { AgentTransportConfigService } from "../agent-adapters/agent-transport-config.service";
 import { BudgetError } from "../domain/budget";
 import type { PipelineStepConfig } from "../domain/pipeline-definition";
+import { CoordinationRunEntity } from "../entities/coordination-run.entity";
+import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
+import {
+  executionWorkspaceIdentityFromRow,
+  type ExecutionWorkspaceIdentityV1,
+} from "../domain/workspace-execution";
 
 /**
  * M4-S4: durable approval service.
@@ -274,6 +280,22 @@ export class ApprovalService {
       step.status = "RUNNING";
       await manager.getRepository(LogicalStepEntity).save(step);
       const maxAttempts = (stepConfig.retries ?? 0) + 1;
+      // PP1: the resumed invocation carries the SAME Tenvyr-owned execution
+      // workspace as the original claim (reserved metadata member), so the
+      // local executor host spawns the runtime child at the authoritative
+      // execution path on resume too.
+      const resumedCoordinationRun = await manager
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { executionId: request.executionId } });
+      const resumedExecutionWorkspace: ExecutionWorkspaceIdentityV1 | null =
+        resumedCoordinationRun
+          ? await manager
+              .getRepository(WorkspaceExecutionEntity)
+              .findOne({ where: { ownerRunId: resumedCoordinationRun.id } })
+              .then((row) =>
+                row ? executionWorkspaceIdentityFromRow(row) : null,
+              )
+          : null;
       await manager.getRepository(DispatchOutboxEntity).save(
         manager.getRepository(DispatchOutboxEntity).create({
           stepAttemptId: attempt.id,
@@ -295,7 +317,12 @@ export class ApprovalService {
               traceId: request.executionId,
               correlationId: attempt.invocationId,
             },
-            metadata: { orchestration: { maxAttempts } },
+            metadata: {
+              orchestration: { maxAttempts },
+              ...(resumedExecutionWorkspace
+                ? { tenvyr: { executionWorkspace: resumedExecutionWorkspace } }
+                : {}),
+            },
           },
         }),
       );

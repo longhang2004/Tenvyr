@@ -1,6 +1,8 @@
 import { createTenvyrWorker, defineAgent } from "@tenvyr/worker";
 import {
   parseHostConfig,
+  resolveExecutionCwd,
+  ExecutionWorkspacePathError,
   type HostAgentConfig,
   type HostConfig,
 } from "./config";
@@ -27,6 +29,15 @@ import { clearRunState, terminateOrphan, writeRunState } from "./state";
  * validates every invocation's frozen connection reference against its own
  * fixed configuration and FAILS CLOSED before spawn on any mismatch — the
  * immutable connection revision is authoritative for what the host runs.
+ *
+ * PP1 (Pivot Invariant 1): the WORKING DIRECTORY of every runtime child is
+ * Tenvyr authority too. When the invocation carries the reserved
+ * `metadata.tenvyr.executionWorkspace` member, `resolveExecutionCwd`
+ * validates the path (absolute, existing directory, realpath inside
+ * EXECUTOR_HOST_ALLOWED_ROOT — no traversal, no symlink escape) and the
+ * child spawns there; agents declaring `requireExecutionWorkspace` refuse
+ * workspace-less invocations. Planner/worker task input can never choose or
+ * override cwd.
  */
 
 export function main(): Promise<void> {
@@ -82,6 +93,25 @@ export async function startHostWorkers(config: HostConfig): Promise<
               retryable: false,
             });
           }
+          // PP1 — Pivot Invariant 1: the Tenvyr execution workspace
+          // determines the child cwd; validation fails closed BEFORE spawn.
+          let spawnCwd: string;
+          try {
+            spawnCwd = resolveExecutionCwd(
+              profile,
+              invocation,
+              config.allowedRoot,
+            );
+          } catch (error) {
+            if (error instanceof ExecutionWorkspacePathError) {
+              return context.fail({
+                code: "EXECUTOR_HOST_WORKSPACE_PATH_INVALID",
+                message: error.message,
+                retryable: false,
+              });
+            }
+            throw error;
+          }
           const startedAt = new Date().toISOString();
           try {
             const outcome = await superviseProcess({
@@ -94,6 +124,7 @@ export async function startHostWorkers(config: HostConfig): Promise<
                   : undefined,
               signal: context.signal,
               invocationDeadlineAt: invocation.deadlineAt,
+              cwdOverride: spawnCwd,
               onSpawn: (pid) => {
                 // Restart/orphan policy state: the CHILD pid is the process
                 // group a future host restart must terminate.

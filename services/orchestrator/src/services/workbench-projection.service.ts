@@ -11,6 +11,7 @@ import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
 import { ApprovalRequestEntity } from "../entities/approval-request.entity";
 import { ArtifactEntity } from "../entities/artifact.entity";
+import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { DelegationService } from "./delegation.service";
 import { ExecutionService } from "./execution.service";
 import { ExecutionCapsuleService } from "./execution-capsule.service";
@@ -128,6 +129,17 @@ export type WorkbenchExecutionProjectionV1 = {
       workspace: unknown;
       /** Operator-declared acceptance evidence (run metadata only). */
       acceptanceEvidence: unknown;
+      /** PP1: the run's Tenvyr-owned execution workspace lease (bounded);
+       *  null for runs without one. */
+      executionWorkspace: {
+        workspaceExecutionId: string;
+        mode: string;
+        path: string;
+        baseBranch: string | null;
+        baseHeadSha: string | null;
+        state: string;
+        hasUncommittedWork: boolean | null;
+      } | null;
     };
     iterations: Array<{
       iterationNumber: number;
@@ -349,6 +361,26 @@ export class WorkbenchProjectionService {
     };
   }
 
+  /** PP1: bounded execution-workspace lease projection for a run (null for
+   *  runs without a lease). */
+  private async executionWorkspaceProjection(runId: string): Promise<
+    WorkbenchExecutionProjectionV1["coordination"]["run"]["executionWorkspace"]
+  > {
+    const lease = await this.dataSource
+      .getRepository(WorkspaceExecutionEntity)
+      .findOne({ where: { ownerRunId: runId } });
+    if (!lease || !lease.executionPath) return null;
+    return {
+      workspaceExecutionId: lease.id,
+      mode: lease.mode,
+      path: lease.executionPath,
+      baseBranch: lease.baseBranch ?? null,
+      baseHeadSha: lease.baseHeadSha ?? null,
+      state: lease.state,
+      hasUncommittedWork: lease.hasUncommittedWork ?? null,
+    };
+  }
+
   async connectionCards(): Promise<{
     cards: WorkbenchConnectionCardV1[];
     serverTime: string;
@@ -514,6 +546,9 @@ export class WorkbenchProjectionService {
           waitReason: run.waitReason,
           workspace: run.workspace,
           acceptanceEvidence: run.acceptanceEvidence,
+          executionWorkspace: await this.executionWorkspaceProjection(
+            run.id,
+          ),
         },
         iterations: boundedIterations.map((iteration) => ({
           iterationNumber: iteration.iterationNumber,

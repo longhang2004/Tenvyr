@@ -103,6 +103,13 @@ export type SupervisorInput = {
   onSpawn?: (pid: number) => void;
   /** Escalation grace between SIGTERM and SIGKILL (test override). */
   escalationGraceMs?: number;
+  /**
+   * PP1 — Pivot Invariant 1: the validated Tenvyr-authoritative execution
+   * path (already resolved + containment-checked by resolveExecutionCwd).
+   * When present it wins over the static profile.cwd; absent → profile.cwd
+   * (backward compatible).
+   */
+  cwdOverride?: string;
 };
 
 export async function superviseProcess(
@@ -114,7 +121,7 @@ export async function superviseProcess(
       profile.command,
       composeArgv(profile, input.requestedModelId),
       {
-        cwd: profile.cwd,
+        cwd: input.cwdOverride ?? profile.cwd,
         env,
         shell: false,
         detached: true,

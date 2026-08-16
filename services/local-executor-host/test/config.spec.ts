@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseHostConfig, type HostConfig } from "../src/config";
+import { parseHostConfig, resolveExecutionCwd, type HostConfig } from "../src/config";
 import { validateInvocationBinding } from "../src/main";
 
 const node = process.execPath;
@@ -444,6 +444,138 @@ describe("validateInvocationBinding", () => {
           requestedModelId: bad,
         }),
       ).toMatch(/invalid model id/);
+    }
+  });
+});
+
+describe("resolveExecutionCwd (PP1 — workspace execution authority)", () => {
+  const root = "/tmp/tenvyr-host-root";
+  const profile = {
+    agent: "echo",
+    command: node,
+    args: [],
+    cwd: root,
+    env: {},
+    secrets: {},
+    wallTimeMs: 30_000,
+    maxStdoutBytes: 65_536,
+    maxStderrBytes: 65_536,
+    port: 4101,
+    bearerTokenEnv: "HOST_TOKEN_1",
+  } as any;
+
+  const member = (pathValue: string) => ({
+    metadata: {
+      tenvyr: {
+        executionWorkspace: {
+          schemaVersion: 1,
+          workspaceExecutionId: "lease-1",
+          path: pathValue,
+          mode: "git-worktree",
+          sourceWorkspaceId: "ws-1",
+          baseHeadSha: "a".repeat(40),
+        },
+      },
+    },
+    invocationId: "i-1",
+  });
+
+  let realRoot: string;
+  beforeAll(() => {
+    fs.mkdirSync(path.join(root, "exec"), { recursive: true });
+    realRoot = fs.realpathSync(root);
+  });
+
+  it("uses the validated reserved execution path as the spawn cwd", () => {
+    const resolved = resolveExecutionCwd(profile, member(path.join(root, "exec")), root);
+    expect(resolved).toBe(path.join(realRoot, "exec"));
+  });
+
+  it("falls back to the static profile cwd when the member is absent", () => {
+    expect(
+      resolveExecutionCwd(profile, { invocationId: "i-2" }, root),
+    ).toBe(root);
+  });
+
+  it("fails closed when requireExecutionWorkspace is set and the member is absent", () => {
+    expect(() =>
+      resolveExecutionCwd({ ...profile, requireExecutionWorkspace: true }, { invocationId: "i-3" }, root),
+    ).toThrow(/requires one/);
+  });
+
+  it("rejects relative and non-existent paths", () => {
+    expect(() =>
+      resolveExecutionCwd(profile, member("relative/path"), root),
+    ).toThrow(/not absolute/);
+    expect(() =>
+      resolveExecutionCwd(profile, member("/tmp/tenvyr-host-root/does-not-exist"), root),
+    ).toThrow(/does not resolve/);
+  });
+
+  it("rejects path traversal outside the allowlisted root", () => {
+    expect(() =>
+      resolveExecutionCwd(profile, member("/etc"), root),
+    ).toThrow(/outside the allowlisted root/);
+    expect(() =>
+      resolveExecutionCwd(profile, member("/tmp/tenvyr-host-root/../../etc"), root),
+    ).toThrow(/outside the allowlisted root/);
+  });
+
+  it("rejects a symlink escaping the allowlisted root (realpath containment)", () => {
+    const outside = "/tmp/tenvyr-host-root-outside";
+    fs.mkdirSync(outside, { recursive: true });
+    const link = path.join(root, "exec-escape-link");
+    try {
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(outside, link);
+      expect(() =>
+        resolveExecutionCwd(profile, member(link), root),
+      ).toThrow(/outside the allowlisted root/);
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed reserved members (unknown keys, bad versions, bad shape)", () => {
+    const bad = {
+      metadata: {
+        tenvyr: {
+          executionWorkspace: { schemaVersion: 1, smuggled: true },
+        },
+      },
+      invocationId: "i-4",
+    };
+    expect(() => resolveExecutionCwd(profile, bad as any, root)).toThrow();
+    const badVersion = {
+      metadata: {
+        tenvyr: {
+          executionWorkspace: {
+            schemaVersion: 2,
+            workspaceExecutionId: "l",
+            path: path.join(root, "exec"),
+            mode: "git-worktree",
+            sourceWorkspaceId: "ws",
+          },
+        },
+      },
+      invocationId: "i-5",
+    };
+    expect(() => resolveExecutionCwd(profile, badVersion as any, root)).toThrow(
+      /schemaVersion/,
+    );
+  });
+
+  it("accepts a symlink whose realpath stays inside the root (no false rejection)", () => {
+    const link = path.join(root, "exec-inside-link");
+    try {
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(path.join(root, "exec"), link);
+      expect(resolveExecutionCwd(profile, member(link), root)).toBe(
+        path.join(realRoot, "exec"),
+      );
+    } finally {
+      fs.rmSync(link, { force: true });
     }
   });
 });

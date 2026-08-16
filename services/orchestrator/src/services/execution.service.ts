@@ -35,6 +35,11 @@ import {
 } from "../domain/context-bundle";
 import { ContextProjectionCache } from "../executors/context-projection-cache";
 import { CoordinationRunEntity } from "../entities/coordination-run.entity";
+import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
+import {
+  executionWorkspaceIdentityFromRow,
+  type ExecutionWorkspaceIdentityV1,
+} from "../domain/workspace-execution";
 import { ArtifactExposureEntity } from "../entities/artifact-exposure.entity";
 import { ArtifactEntity } from "../entities/artifact.entity";
 import { ArtifactProjectionResolver } from "./artifact-projection.resolver";
@@ -358,6 +363,21 @@ export class ExecutionService {
         coordinationRun?.workspace
           ? workspaceIdentityOf(coordinationRun.workspace)
           : undefined;
+      // PP1 — Pivot Invariant 1: the run's Tenvyr-owned execution workspace
+      // (shared source tree or isolated git worktree) rides the invocation
+      // as a RESERVED metadata member. The local executor host validates
+      // the path against its allowlisted root and spawns every runtime
+      // child there. Planner/worker task input can never choose or
+      // override cwd — cwd comes from Tenvyr authority.
+      const executionWorkspaceIdentity: ExecutionWorkspaceIdentityV1 | null =
+        coordinationRun
+          ? await manager
+              .getRepository(WorkspaceExecutionEntity)
+              .findOne({ where: { ownerRunId: coordinationRun.id } })
+              .then((row) =>
+                row ? executionWorkspaceIdentityFromRow(row) : null,
+              )
+          : null;
 
       const allSteps = await logicalRepository.find({
         where: { executionId },
@@ -762,7 +782,14 @@ export class ExecutionService {
               traceId: executionId,
               correlationId: attempt.invocationId,
             },
-            metadata: { orchestration: { maxAttempts } },
+            metadata: {
+              orchestration: { maxAttempts },
+              // PP1: the run's Tenvyr-owned execution workspace (reserved
+              // shape — planner/worker input can never override it).
+              ...(executionWorkspaceIdentity
+                ? { tenvyr: { executionWorkspace: executionWorkspaceIdentity } }
+                : {}),
+            },
             // M8-S6: the frozen connection revision identity rides the
             // invocation; the executor host validates its fixed operator
             // configuration against it and fails closed on mismatch. Only
