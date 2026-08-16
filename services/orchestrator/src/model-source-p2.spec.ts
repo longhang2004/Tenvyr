@@ -5,9 +5,11 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
   MODEL_SOURCE_BOUNDS,
+  MODEL_SOURCE_KINDS,
   ModelSourceError,
   modelSourceModelsUrl,
   normalizeModelSourceBaseUrl,
+  OPENAI_COMPATIBLE_KIND,
   parseModelSource,
   type ModelCatalogEntryV1,
 } from "./executors/model-source";
@@ -24,7 +26,7 @@ import {
  * credential-free. The fake OpenAI-compatible server covers: no auth,
  * correct bearer env ref, bad credential, malformed JSON, oversized
  * response, duplicate model ids, redirects to unsafe schemes, and URL
- * validation. Normal CI never touches a real 9Router.
+ * validation. Normal CI never touches a real external endpoint.
  */
 
 describe("ModelSource domain", () => {
@@ -62,25 +64,37 @@ describe("ModelSource domain", () => {
 
   test("credentialEnvRef is a reference, never a value", () => {
     const source = parseModelSource({
-      sourceId: "src:nine",
-      kind: "ninerouter",
-      displayName: "9Router",
+      sourceId: "src:generic",
+      kind: "openai-compatible",
+      displayName: "Generic endpoint",
       baseUrl: "http://localhost:20128/v1",
       credentialEnvRef: "NINEROUTER_KEY",
     });
     expect(source.credentialEnvRef).toBe("NINEROUTER_KEY");
     expect(() =>
       parseModelSource({
-        sourceId: "src:nine",
-        kind: "ninerouter",
-        displayName: "9Router",
+        sourceId: "src:generic",
+        kind: "openai-compatible",
+        displayName: "Generic endpoint",
         baseUrl: "http://localhost:20128/v1",
-        credentialEnvRef: "sk-live-secret-123",
+        credentialEnvRef: "«redacted:sk-…»",
       }),
     ).toThrow(ModelSourceError);
   });
 
-  test("kind requirements: ninerouter/openai-compatible need baseUrl; opencode does not", () => {
+  test("P2 closure: only the generic OpenAI-compatible kind exists — 9Router and standalone OpenCode rows are rejected", () => {
+    expect(MODEL_SOURCE_KINDS).toEqual([OPENAI_COMPATIBLE_KIND]);
+    for (const rejectedKind of ["ninerouter", "opencode"]) {
+      expect(() =>
+        parseModelSource({
+          sourceId: `src:${rejectedKind}`,
+          kind: rejectedKind,
+          displayName: rejectedKind,
+          baseUrl: "http://localhost:20128/v1",
+        }),
+      ).toThrow(/kind must be/);
+    }
+    // baseUrl is required for the generic kind.
     expect(() =>
       parseModelSource({
         sourceId: "src:generic",
@@ -88,13 +102,13 @@ describe("ModelSource domain", () => {
         displayName: "Generic",
       }),
     ).toThrow(/requires a baseUrl/);
-    const opencode = parseModelSource({
-      sourceId: "src:oc",
-      kind: "opencode",
-      displayName: "OpenCode",
+    const generic = parseModelSource({
+      sourceId: "src:generic",
+      kind: "openai-compatible",
+      displayName: "Generic",
+      baseUrl: "https://example.com/v1",
     });
-    expect(opencode.kind).toBe("opencode");
-    expect(opencode.baseUrl).toBeUndefined();
+    expect(generic.kind).toBe(OPENAI_COMPATIBLE_KIND);
   });
 });
 
@@ -143,6 +157,29 @@ describe("OpenCode CLI discovery (bounded parsing, official commands only)", () 
     `);
     const providers = await service.discoverOpenCodeProviders(cli);
     expect(providers).toEqual(["anthropic", "opencode-go"]);
+  });
+
+  test("models <provider> requests AND returns only that provider's models", async () => {
+    const cli = fakeCli(`
+      const [,,sub,provider] = process.argv;
+      if (sub === "models") {
+        process.stdout.write([
+          "anthropic/claude-sonnet-5",
+          "anthropic/claude-opus-4",
+          "opencode-go/deepseek-v4-flash",
+        ].join("\\n") + "\\n");
+        process.exitCode = provider === "anthropic" ? 0 : 3;
+      }
+    `);
+    const models = await service.discoverOpenCodeModels(cli, "anthropic");
+    expect(models.map((entry) => entry.modelId)).toEqual([
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-opus-4",
+    ]);
+    // The runtime filtered: no other provider's models leak through.
+    expect(models.every((entry) => entry.providerId === "anthropic")).toBe(true);
+    // An unknown provider yields an empty catalog (bounded, never mixes).
+    expect(await service.discoverOpenCodeModels(cli, "deepseek")).toEqual([]);
   });
 
   test("models --refresh is invoked for the refresh path", async () => {

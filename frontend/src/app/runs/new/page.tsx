@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { tenvyrApi } from "../../../lib/tenvyr-api/client.ts";
+import { parseWorkbenchCommandResult } from "../../../lib/tenvyr-api/guards.ts";
 import type {
   TeamTemplateV1,
   WorkbenchWorkspaceV1,
@@ -263,13 +264,14 @@ function NewTeamRunContent() {
 
     try {
       const res = await tenvyrApi.startTeamRun(payload);
-      if (res.outcome === "executed" && res.result?.executionId) {
-        router.push(`/runs/${encodeURIComponent(res.result.executionId)}`);
-      } else if (res.outcome === "duplicate" && res.result?.executionId) {
-        router.push(`/runs/${encodeURIComponent(res.result.executionId)}`);
+      const command = parseWorkbenchCommandResult<{ executionId: string; workspace?: string }>(res.data);
+      if (command.outcome === "executed" && command.result?.executionId) {
+        router.push(`/runs/${encodeURIComponent(command.result.executionId)}`);
+      } else if (command.outcome === "duplicate" && command.result?.executionId) {
+        router.push(`/runs/${encodeURIComponent(command.result.executionId)}`);
       } else {
         setErrorMsg(
-          res.error?.message || `Launch rejected: ${JSON.stringify(res)}`,
+          command.error?.message || `Launch rejected: ${JSON.stringify(res)}`,
         );
       }
     } catch (err: unknown) {

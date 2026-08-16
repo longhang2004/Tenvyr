@@ -19,6 +19,7 @@ import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
 import {
   MalformedResponseError,
   parseConnectionTestResult,
+  parseWorkbenchCommandResult,
 } from "../../lib/tenvyr-api/guards.ts";
 import type {
   RuntimeKind,
@@ -26,7 +27,9 @@ import type {
   WorkbenchConnectionCardV1,
   ConnectionTemplateV1,
   ModelSourceV1,
-  ModelSourceKind,
+  ModelCatalogSnapshotV1,
+  ModelCatalogEntryV1,
+  RuntimeProviderV1,
 } from "../../lib/tenvyr-api/types.ts";
 import { StatusBadge } from "../../components/shared/StatusBadge.tsx";
 import { LoadingSpinner } from "../../components/shared/LoadingSpinner.tsx";
@@ -79,17 +82,23 @@ export default function RuntimesPage() {
     null,
   );
   const [showAddSource, setShowAddSource] = useState<boolean>(false);
-  const [srcKind, setSrcKind] = useState<ModelSourceKind>("ninerouter");
-  const [srcName, setSrcName] = useState<string>("9Router");
-  const [srcBaseUrl, setSrcBaseUrl] = useState<string>(
-    "http://localhost:20128/v1",
-  );
-  const [srcCredentialRef, setSrcCredentialRef] =
-    useState<string>("NINEROUTER_KEY");
+  const [srcName, setSrcName] = useState<string>("OpenAI-compatible endpoint");
+  const [srcBaseUrl, setSrcBaseUrl] = useState<string>("https://example.com/v1");
+  const [srcCredentialRef, setSrcCredentialRef] = useState<string>("");
   const [savingSource, setSavingSource] = useState<boolean>(false);
+  // P2 closure: runtime-owned provider projections per runtime kind.
+  const [providersByKind, setProvidersByKind] = useState<
+    Record<string, RuntimeProviderV1[]>
+  >({});
   // Guided sign-in state per runtime kind
   const [signInKind, setSignInKind] = useState<string | null>(null);
   const [copiedKind, setCopiedKind] = useState<string | null>(null);
+  // P2 closure: per-provider model catalog expansion (runtime-owned).
+  const [providerCatalog, setProviderCatalog] = useState<
+    Record<string, ModelCatalogEntryV1[]>
+  >({});
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
+  const [testingProvider, setTestingProvider] = useState<string | null>(null);
 
   // Advanced Connection Form state
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
@@ -136,6 +145,24 @@ export default function RuntimesPage() {
         }),
       );
       setOnboardingStatuses(statuses);
+
+      // P2 closure: runtime-owned provider projections (OpenCode
+      // first-class, Codex best-effort). Providers are the runtime's own
+      // state — never standalone configuration, never routing authority.
+      const providerMap: Record<string, RuntimeProviderV1[]> = {};
+      await Promise.all(
+        ["opencode", "codex"].map(async (runtimeKind) => {
+          try {
+            const res = await tenvyrApi.discoverRuntimeCatalog(runtimeKind);
+            if (res.success) {
+              providerMap[runtimeKind] = res.data?.providers ?? [];
+            }
+          } catch {
+            // best-effort — the runtime card still renders without providers
+          }
+        }),
+      );
+      setProvidersByKind(providerMap);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setNotice({
@@ -162,18 +189,20 @@ export default function RuntimesPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.onboardRuntime(kind);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      // P2 closure: the command envelope is nested under res.data.
+      const command = parseWorkbenchCommandResult<{ connectionId: string }>(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({
           type: "success",
-          message: `Runtime "${kind}" connected successfully (${res.result?.connectionId ?? `conn:${kind}`}).`,
+          message: `Runtime "${kind}" connected successfully (${command.result?.connectionId ?? `conn:${kind}`}).`,
         });
         await loadData();
       } else {
         setNotice({
           type: "error",
           message:
-            res.error?.message ||
-            `Failed to connect runtime: ${JSON.stringify(res)}`,
+            command.error?.message ||
+            `Failed to connect runtime: ${JSON.stringify(command)}`,
         });
       }
     } catch (err: unknown) {
@@ -357,6 +386,10 @@ export default function RuntimesPage() {
     setSavingSource(true);
     setNotice(null);
     try {
+      // P2 closure: the advanced catalog surface is the generic
+      // OpenAI-compatible endpoint only. Provider state is runtime-owned
+      // (OpenCode CLI discovery) — never a standalone source row, and
+      // 9Router is not a Tenvyr product kind.
       const source: Record<string, unknown> = {
         sourceId: `src:${
           srcName
@@ -364,29 +397,27 @@ export default function RuntimesPage() {
             .toLowerCase()
             .replace(/[^a-z0-9_.:-]+/g, "-") || "source"
         }`,
-        kind: srcKind,
+        kind: "openai-compatible",
         displayName: srcName.trim(),
+        baseUrl: srcBaseUrl.trim(),
       };
-      if (srcKind !== "opencode") {
-        source.baseUrl = srcBaseUrl.trim();
-        if (srcCredentialRef.trim()) {
-          source.credentialEnvRef = srcCredentialRef.trim();
-        }
-      } else {
-        source.displayName = srcName.trim() || "OpenCode Providers";
+      if (srcCredentialRef.trim()) {
+        source.credentialEnvRef = srcCredentialRef.trim();
       }
       const res = await tenvyrApi.createModelSource(source);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      // P2 closure: the command envelope is nested under res.data.
+      const command = parseWorkbenchCommandResult<{ source: ModelSourceV1 }>(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({
           type: "success",
-          message: `Model source "${String(source.sourceId)}" created.`,
+          message: `Catalog endpoint "${String(source.sourceId)}" created.`,
         });
         setShowAddSource(false);
         await loadData();
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || "Failed to create model source",
+          message: command.error?.message || "Failed to create catalog endpoint",
         });
       }
     } catch (err: unknown) {
@@ -405,20 +436,22 @@ export default function RuntimesPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.testModelSource(sourceId);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
-        const source = res.result?.source;
+      // P2 closure: the command envelope is nested under res.data.
+      const command = parseWorkbenchCommandResult<{ source: ModelSourceV1 }>(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
+        const source = command.result?.source;
         const count = source?.modelCount
           ? ` (${source.modelCount} models)`
           : "";
         setNotice({
           type: source?.status === "AVAILABLE" ? "success" : "warning",
-          message: `Model source "${sourceId}" test result: ${source?.status ?? "UNKNOWN"}${count}`,
+          message: `Catalog endpoint "${sourceId}" test result: ${source?.status ?? "UNKNOWN"}${count}`,
         });
         await loadData();
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || `Source test failed for "${sourceId}"`,
+          message: command.error?.message || `Endpoint test failed for "${sourceId}"`,
         });
       }
     } catch (err: unknown) {
@@ -437,8 +470,10 @@ export default function RuntimesPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.refreshModelSource(sourceId);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
-        const catalog = res.result?.catalog;
+      // P2 closure: the command envelope is nested under res.data.
+      const command = parseWorkbenchCommandResult<{ source: ModelSourceV1; catalog: ModelCatalogSnapshotV1 }>(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
+        const catalog = command.result?.catalog;
         setNotice({
           type: "success",
           message: `Catalog refreshed for "${sourceId}": ${catalog?.models?.length ?? 0} models${catalog?.truncated ? " (truncated at bound)" : ""}.`,
@@ -447,7 +482,7 @@ export default function RuntimesPage() {
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || `Refresh failed for "${sourceId}"`,
+          message: command.error?.message || `Refresh failed for "${sourceId}"`,
         });
       }
     } catch (err: unknown) {
@@ -471,7 +506,9 @@ export default function RuntimesPage() {
     }
     try {
       const res = await tenvyrApi.deleteModelSource(sourceId);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      // P2 closure: the command envelope is nested under res.data.
+      const command = parseWorkbenchCommandResult(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({
           type: "info",
           message: `Model source "${sourceId}" deleted.`,
@@ -480,7 +517,7 @@ export default function RuntimesPage() {
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || "Delete failed",
+          message: command.error?.message || "Delete failed",
         });
       }
     } catch (err: unknown) {
@@ -496,6 +533,49 @@ export default function RuntimesPage() {
       setTimeout(() => setCopiedKind(null), 2000);
     } catch {
       setNotice({ type: "info", message: `Run in your terminal: ${command}` });
+    }
+  };
+
+  /** Per-provider [Models]: runtime-owned enumeration via the official CLI
+   *  projection (bounded, cached). Never mixes providers. */
+  const handleProviderModels = async (runtimeKind: string, providerId: string) => {
+    if (expandedProvider === providerId) {
+      setExpandedProvider(null);
+      return;
+    }
+    if (!providerCatalog[providerId]) {
+      try {
+        const res = await tenvyrApi.discoverRuntimeCatalog(runtimeKind);
+        const models = (res.data?.catalog?.models ?? []).filter(
+          (entry) => entry.providerId === providerId,
+        );
+        setProviderCatalog((current) => ({ ...current, [providerId]: models }));
+      } catch {
+        setProviderCatalog((current) => ({ ...current, [providerId]: [] }));
+      }
+    }
+    setExpandedProvider(providerId);
+  };
+
+  /** Per-provider [Test]: bounded runtime-owned enumeration check — proves
+   *  the provider/runtime can enumerate models, never inference. */
+  const handleTestProvider = async (runtimeKind: string, providerId: string) => {
+    setTestingProvider(providerId);
+    setNotice(null);
+    try {
+      const res = await tenvyrApi.discoverRuntimeCatalog(runtimeKind);
+      const count = (res.data?.catalog?.models ?? []).filter(
+        (entry) => entry.providerId === providerId,
+      ).length;
+      setNotice({
+        type: "success",
+        message: `Provider "${providerId}" through ${runtimeKind}: ${count} models enumerated.`,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setNotice({ type: "error", message: message || "Provider test failed" });
+    } finally {
+      setTestingProvider(null);
     }
   };
 
@@ -558,7 +638,7 @@ export default function RuntimesPage() {
           className={`btn btn-sm ${tab === "sources" ? "btn-primary" : "btn-secondary"}`}
         >
           <Database size={14} />
-          <span>Model Sources</span>
+          <span>Advanced Catalogs</span>
         </button>
       </div>
 
@@ -588,13 +668,14 @@ export default function RuntimesPage() {
           >
             <div>
               <h2 id="sources-heading" style={{ fontSize: "1.1rem" }}>
-                Model Sources
+                Advanced Catalogs
               </h2>
               <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>
-                Where Tenvyr safely discovers model identifiers. Catalogs are
-                bounded on-demand projections — never stored, never execution
-                authority. Credential fields are environment-variable references
-                only.
+                Generic OpenAI-compatible catalog endpoints (advanced operator
+                surface). Provider state is runtime-owned — providers
+                authenticated through a runtime appear under the runtime card.
+                Catalogs are bounded on-demand projections — never stored,
+                never execution authority.
               </p>
             </div>
             <button
@@ -602,7 +683,7 @@ export default function RuntimesPage() {
               className="btn btn-secondary btn-sm"
               onClick={() => setShowAddSource(!showAddSource)}
             >
-              {showAddSource ? "Hide Form" : "+ Add Model Source"}
+              {showAddSource ? "Hide Form" : "+ Add Catalog Endpoint"}
             </button>
           </div>
 
@@ -621,8 +702,28 @@ export default function RuntimesPage() {
               }}
             >
               <h3 style={{ fontSize: "0.9rem", fontWeight: 700 }}>
-                Add Model Source
+                Add Catalog Endpoint
               </h3>
+              <p
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Generic OpenAI-compatible endpoint (kind is fixed). Provider
+                state is runtime-owned — an existing 9Router instance is
+                represented exactly like any other OpenAI-compatible endpoint.
+              </p>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Display Name</label>
+                <input
+                  type="text"
+                  value={srcName}
+                  onChange={(e) => setSrcName(e.target.value)}
+                  required
+                  className="form-input"
+                />
+              </div>
               <div
                 style={{
                   display: "grid",
@@ -631,119 +732,50 @@ export default function RuntimesPage() {
                 }}
               >
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Kind</label>
-                  <select
-                    value={srcKind}
-                    onChange={(e) => {
-                      const kind = e.target.value as ModelSourceKind;
-                      setSrcKind(kind);
-                      if (kind === "ninerouter") {
-                        setSrcName("9Router");
-                        setSrcBaseUrl("http://localhost:20128/v1");
-                        setSrcCredentialRef("NINEROUTER_KEY");
-                      } else if (kind === "opencode") {
-                        setSrcName("OpenCode Providers");
-                      } else {
-                        setSrcName("OpenAI-compatible endpoint");
-                        setSrcBaseUrl("https://example.com/v1");
-                        setSrcCredentialRef("");
-                      }
-                    }}
-                    className="form-select"
-                  >
-                    <option value="ninerouter">
-                      9Router (guided template)
-                    </option>
-                    <option value="openai-compatible">
-                      OpenAI-compatible endpoint
-                    </option>
-                    <option value="opencode">
-                      OpenCode Providers (CLI catalog)
-                    </option>
-                  </select>
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Display Name</label>
+                  <label className="form-label">
+                    Base URL (http/https, no credentials in URL)
+                  </label>
                   <input
                     type="text"
-                    value={srcName}
-                    onChange={(e) => setSrcName(e.target.value)}
+                    value={srcBaseUrl}
+                    onChange={(e) => setSrcBaseUrl(e.target.value)}
                     required
                     className="form-input"
+                    placeholder="https://example.com/v1"
                   />
                 </div>
-              </div>
-              {srcKind !== "opencode" && (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: "1rem",
-                  }}
-                >
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label">
-                      Base URL (http/https, no credentials in URL)
-                    </label>
-                    <input
-                      type="text"
-                      value={srcBaseUrl}
-                      onChange={(e) => setSrcBaseUrl(e.target.value)}
-                      required
-                      className="form-input"
-                      placeholder="http://localhost:20128/v1"
-                    />
-                  </div>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label">
-                      Credential Env Var Name (optional, name only)
-                    </label>
-                    <input
-                      type="text"
-                      value={srcCredentialRef}
-                      onChange={(e) => setSrcCredentialRef(e.target.value)}
-                      className="form-input"
-                      placeholder="NINEROUTER_KEY"
-                    />
-                    <p
-                      style={{
-                        fontSize: "0.7rem",
-                        color: "var(--text-muted)",
-                        marginTop: "0.25rem",
-                      }}
-                    >
-                      Only the NAME is stored; the value is resolved at request
-                      time on the server.
-                    </p>
-                  </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">
+                    Credential Env Var Name (optional, name only)
+                  </label>
+                  <input
+                    type="text"
+                    value={srcCredentialRef}
+                    onChange={(e) => setSrcCredentialRef(e.target.value)}
+                    className="form-input"
+                    placeholder="MY_API_KEY"
+                  />
+                  <p
+                    style={{
+                      fontSize: "0.7rem",
+                      color: "var(--text-muted)",
+                      marginTop: "0.25rem",
+                    }}
+                  >
+                    Only the NAME is stored; the value is resolved at request
+                    time on the server.
+                  </p>
                 </div>
-              )}
-              {srcKind === "ninerouter" && (
-                <p
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  9Router owns provider login, OAuth, keys, quota, and routing.
-                  Tenvyr only reads its OpenAI-compatible <code>/models</code>{" "}
-                  catalog. The default candidate is{" "}
-                  <code>http://localhost:20128/v1</code> — configure your real
-                  endpoint.
-                </p>
-              )}
-              {srcKind === "opencode" && (
-                <p
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Discovers the catalog via the official{" "}
-                  <code>opencode models</code> CLI. Tenvyr never reads
-                  OpenCode&apos;s auth file.
-                </p>
-              )}
+              </div>
+              <p
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Catalogs are discovery projections only — a catalog entry
+                never creates execution authority.
+              </p>
               <div
                 style={{
                   display: "flex",
@@ -779,8 +811,9 @@ export default function RuntimesPage() {
                 color: "var(--text-muted)",
               }}
             >
-              No model sources configured. Add a 9Router source, an
-              OpenAI-compatible endpoint, or an OpenCode provider catalog.
+              No catalog endpoints configured. Add a generic
+              OpenAI-compatible endpoint (advanced), or connect providers
+              through the Agent Runtime cards.
             </div>
           ) : (
             <div
@@ -942,18 +975,6 @@ export default function RuntimesPage() {
                           : "Test Source"}
                       </span>
                     </button>
-                    {source.kind === "ninerouter" && source.baseUrl && (
-                      <a
-                        href={source.baseUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn btn-secondary btn-sm"
-                        title="Open the 9Router dashboard for upstream provider login/accounts"
-                      >
-                        <ExternalLink size={12} />
-                        <span>Open 9Router</span>
-                      </a>
-                    )}
                     <button
                       type="button"
                       className="btn btn-danger btn-sm"
@@ -1175,6 +1196,139 @@ export default function RuntimesPage() {
                           </span>
                         </div>
                       </div>
+
+                      {/* P2 closure: runtime-owned providers. OpenCode is the
+                      first-class provider experience: every provider the
+                      runtime knows appears here with its own status, official
+                      Connect command, Models and Test. Codex/Claude expose a
+                      single implied provider (OpenAI/Anthropic) whose auth is
+                      the runtime onboarding status above. */}
+                      {(providersByKind[kind]?.length ?? 0) > 0 && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "0.4rem",
+                            backgroundColor: "rgba(0, 0, 0, 0.2)",
+                            padding: "0.6rem 0.75rem",
+                            borderRadius: "var(--radius-md)",
+                            border: "1px solid var(--border-color)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span
+                              style={{
+                                color: "var(--text-secondary)",
+                                fontSize: "0.8rem",
+                              }}
+                            >
+                              Providers
+                            </span>
+                            <span
+                              style={{
+                                fontFamily: "var(--font-mono)",
+                                fontSize: "0.75rem",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {providersByKind[kind].filter((p) => p.authenticated).length}{" "}
+                              connected
+                            </span>
+                          </div>
+                          {providersByKind[kind].map((provider) => (
+                            <div
+                              key={provider.providerId}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.5rem",
+                                fontSize: "0.78rem",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontFamily: "var(--font-mono)",
+                                  fontWeight: 600,
+                                  flex: 1,
+                                }}
+                              >
+                                {provider.providerId}
+                              </span>
+                              <span
+                                style={{
+                                  color: provider.authenticated
+                                    ? "var(--accent-green)"
+                                    : "var(--accent-amber)",
+                                  fontSize: "0.72rem",
+                                }}
+                              >
+                                {provider.authenticated ? "Connected" : "Not connected"}
+                              </span>
+                              {provider.authenticated ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() =>
+                                      handleProviderModels(kind, provider.providerId)
+                                    }
+                                  >
+                                    Models
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() =>
+                                      handleTestProvider(kind, provider.providerId)
+                                    }
+                                    disabled={testingProvider === provider.providerId}
+                                  >
+                                    {testingProvider === provider.providerId
+                                      ? "Testing…"
+                                      : "Test"}
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() =>
+                                    handleCopyLogin(provider.loginCommand, provider.providerId)
+                                  }
+                                >
+                                  {copiedKind === provider.providerId ? "Copied" : "Connect"}
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                          {expandedProvider &&
+                            (providerCatalog[expandedProvider] ?? []).length > 0 && (
+                              <div
+                                style={{
+                                  fontSize: "0.72rem",
+                                  fontFamily: "var(--font-mono)",
+                                  maxHeight: "120px",
+                                  overflowY: "auto",
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: "0.15rem",
+                                }}
+                              >
+                                {(providerCatalog[expandedProvider] ?? []).map(
+                                  (entry) => (
+                                    <span key={entry.modelId}>{entry.modelId}</span>
+                                  ),
+                                )}
+                              </div>
+                            )}
+                        </div>
+                      )}
 
                       {/* P2: guided official login — Tenvyr never collects provider
                       credentials; it only shows the runtime's OWN command. */}

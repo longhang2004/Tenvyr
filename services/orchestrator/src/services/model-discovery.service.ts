@@ -16,11 +16,11 @@ import { runBoundedCliCommand } from "./cli-probe";
  * identifiers. Discovery is a projection, never execution authority:
  *
  * - OpenCode: official CLI only (`opencode auth list`, `opencode models`,
- *   `opencode models --refresh`). The auth.json file is NEVER read.
+ *   `opencode models --refresh`). The auth file is NEVER read.
  * - Codex: `codex debug models` is EXPERIMENTAL — best-effort bounded JSON
  *   parse; execution never depends on it (Runtime default / manual entry).
- * - 9Router / generic OpenAI-compatible: `GET {baseUrl}/models` with
- *   optional bearer env REFERENCE resolved only at request time.
+ * - Generic OpenAI-compatible endpoints (advanced): `GET {baseUrl}/models`
+ *   with optional bearer env REFERENCE resolved only at request time.
  *
  * Every path is bounded: response bytes, model count, model id length and
  * pattern, strict timeout, http/https only, no userinfo, redirects
@@ -80,7 +80,9 @@ export class ModelDiscoveryService {
 
   /** OpenCode: model catalog via the official `models [provider]`
    *  command. Output lines are `provider/model` tokens (documented
-   *  format); bounded parse with dedupe. */
+   *  format); bounded parse with dedupe. When `provider` is given, only
+   *  that provider's models are requested AND returned (the runtime
+   *  filters — Tenvyr never mixes providers). */
   async discoverOpenCodeModels(
     executable: string,
     provider?: string,
@@ -93,7 +95,9 @@ export class ModelDiscoveryService {
       maxOutputBytes: DISCOVERY_BOUNDS.maxOutputBytes,
     });
     if (!outcome.ok) return [];
-    return parseOpenCodeModelLines(outcome.stdout);
+    const all = parseOpenCodeModelLines(outcome.stdout);
+    if (!provider) return all;
+    return all.filter((entry) => entry.providerId === provider);
   }
 
   /** OpenCode: refresh the runtime's models cache (`models --refresh`). */
@@ -158,7 +162,7 @@ export class ModelDiscoveryService {
   }
 
   /**
-   * 9Router / generic OpenAI-compatible catalog:
+   * Generic OpenAI-compatible catalog (advanced operator surface):
    * `GET {baseUrl}/models`. Bearer token resolved from the env REFERENCE
    * only at request time; missing env value = AUTH_REQUIRED. Bounded:
    * strict timeout, byte cap, model count/id caps, dedupe, redirects

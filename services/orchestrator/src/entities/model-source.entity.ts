@@ -28,7 +28,7 @@ export class ModelSourceEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  /** Stable operator identity ("src:ninerouter"). */
+  /** Stable operator identity ("src:generic-endpoint"). */
   @Column({ type: "varchar", length: 128 })
   sourceId: string;
 

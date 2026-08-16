@@ -198,15 +198,32 @@ export type CoordinationConfigV1 = {
 };
 
 /**
- * P2: bounded Model Source projection (operator configuration; credential
- * fields are environment REFERENCES only — values never cross the API).
+ * P2 closure: `model_sources` is the GENERIC catalog-discovery
+ * configuration (advanced operator surface) — OpenAI-compatible endpoints
+ * only. Provider state is RUNTIME-OWNED: providers authenticated through
+ * a runtime are discovered via the runtime's official CLI (OpenCode
+ * `auth list` / `models`) and are never standalone source rows. 9Router is
+ * NOT a Tenvyr product concept (it inspired the provider-management UX
+ * only); an existing 9Router instance connects as a generic
+ * OpenAI-compatible endpoint.
  */
-export const MODEL_SOURCE_KINDS = [
-  "opencode",
-  "ninerouter",
-  "openai-compatible",
-] as const;
+export const MODEL_SOURCE_KINDS = ["openai-compatible"] as const;
 export type ModelSourceKind = (typeof MODEL_SOURCE_KINDS)[number];
+
+/**
+ * P2 closure: runtime-owned Provider Connection projection. A provider is
+ * a projection of the RUNTIME's own state (official CLI discovery) — never
+ * standalone Tenvyr configuration, never routing authority. `loginCommand`
+ * is the OFFICIAL runtime-owned auth command; Tenvyr never collects
+ * credentials.
+ */
+export type RuntimeProviderV1 = {
+  providerId: string;
+  /** True when the runtime reports the provider authenticated. */
+  authenticated: boolean;
+  /** Official runtime-owned login command for the guided Sign-in flow. */
+  loginCommand: string;
+};
 
 export const MODEL_SOURCE_STATUS_STATES = [
   "UNKNOWN",
@@ -269,6 +286,9 @@ export type StartTeamRunRequest = {
 export type WorkbenchCommandResultV1<T = unknown> = {
   outcome: "executed" | "duplicate" | "rejected";
   action: string;
+  /** P2 closure: the command envelope carries the idempotency key verbatim
+   *  (parsed strictly by parseWorkbenchCommandResult — never optimistic). */
+  idempotencyKey?: string;
   targetId?: string;
   result?: T;
   error?: {

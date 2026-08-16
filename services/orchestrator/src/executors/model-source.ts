@@ -1,14 +1,15 @@
 import { MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from "../domain/coordination";
 
 /**
- * P2: Model Source domain — where Tenvyr may safely DISCOVER model
- * identifiers for a runtime.
- *
- * A Model Source is operator-owned configuration (an OpenCode CLI catalog,
- * a 9Router endpoint, or a generic OpenAI-compatible endpoint). It is NOT
- * inference authority: Tenvyr never sends inference requests through it,
- * never stores provider credentials (only environment REFERENCES), and
- * treats every catalog as a non-authoritative discovery projection.
+ * P2 closure: Provider Connections are RUNTIME-OWNED. `model_sources` is
+ * only the GENERIC catalog-discovery configuration (advanced operator
+ * surface): OpenAI-compatible endpoints. Provider state authenticated
+ * through a runtime is discovered via the runtime's official CLI (OpenCode
+ * `auth list` / `models`) and is never configured as a standalone source
+ * row. 9Router is NOT a Tenvyr product concept (it inspired the
+ * provider-management UX only); an existing 9Router instance connects as
+ * a generic OpenAI-compatible endpoint. This file names the protocol, it
+ * never imports a provider SDK.
  *
  * Catalogs are NEVER persisted: they are bounded on-demand projections
  * (count/id-length/bytes/timeouts all bounded here). Model selection
@@ -26,14 +27,9 @@ const OPENAI_TOKEN = ["open", "ai"].join("") as `${"op"}${"en"}${"ai"}`;
 export const OPENAI_COMPATIBLE_KIND = `${OPENAI_TOKEN}-compatible`;
 
 export const MODEL_SOURCE_KINDS: readonly ModelSourceKind[] = [
-  "opencode",
-  "ninerouter",
   OPENAI_COMPATIBLE_KIND,
 ];
-export type ModelSourceKind =
-  | "opencode"
-  | "ninerouter"
-  | typeof OPENAI_COMPATIBLE_KIND;
+export type ModelSourceKind = typeof OPENAI_COMPATIBLE_KIND;
 
 export const MODEL_SOURCE_STATUS_STATES = [
   "UNKNOWN",
@@ -80,9 +76,9 @@ export type ModelSourceV1 = {
   sourceId: string;
   kind: ModelSourceKind;
   displayName: string;
-  /** http/https endpoint WITHOUT userinfo; required for ninerouter and
-   *  OpenAI-compatible kinds. The models catalog is fetched from
-   *  `{baseUrl}/models`. */
+  /** http/https endpoint WITHOUT userinfo; required (the generic
+   *  OpenAI-compatible catalog endpoint). The models catalog is fetched
+   *  from `{baseUrl}/models`. */
   baseUrl?: string;
   /** Secret-free credential REFERENCE (environment variable name). The
    *  value is resolved ONLY at the trusted network boundary, never
@@ -106,9 +102,8 @@ export type ModelCatalogEntryV1 = {
   /** Provider/group label when the source exposes one (e.g. OpenCode's
    *  `provider/model` shape). */
   providerId?: string;
-  /** Source label: the model-source kind ("opencode", "ninerouter",
-   *  "OpenAI-compatible") or the runtime for best-effort runtime-owned
-   *  discovery ("codex"). */
+  /** Source label: the model-source kind ("OpenAI-compatible") or the
+   *  runtime for runtime-owned provider discovery ("opencode", "codex"). */
   source: string;
 };
 
@@ -121,6 +116,21 @@ export type ModelCatalogSnapshotV1 = {
    *  bound (oversized/too many models) — the snapshot is still usable but
    *  incomplete. */
   truncated?: boolean;
+};
+
+/**
+ * P2 closure: runtime-owned Provider Connection projection. A provider is
+ * a projection of the RUNTIME's own state (official CLI discovery) — it is
+ * never standalone Tenvyr configuration and never routing authority.
+ * `loginCommand` is the OFFICIAL runtime-owned auth command shown to the
+ * operator; Tenvyr never collects credentials.
+ */
+export type RuntimeProviderV1 = {
+  providerId: string;
+  /** True when the runtime reports the provider authenticated. */
+  authenticated: boolean;
+  /** Official runtime-owned login command for the guided Sign-in flow. */
+  loginCommand: string;
 };
 
 /** Normalizes a configured base such as `https://example.com/v1` to the
@@ -220,8 +230,14 @@ export function parseModelSource(value: unknown): ModelSourceV1 {
     }
     source.credentialEnvRef = ref;
   }
-  if (kind !== "opencode" && source.baseUrl === undefined) {
-    throw modelSourceInvalid("invalid-url", `kind ${kind} requires a baseUrl`);
+  if (kind !== OPENAI_COMPATIBLE_KIND) {
+    throw modelSourceInvalid(
+      "invalid-url",
+      `kind must be ${OPENAI_COMPATIBLE_KIND}`,
+    );
+  }
+  if (source.baseUrl === undefined) {
+    throw modelSourceInvalid("invalid-url", `${kind} requires a baseUrl`);
   }
   return source;
 }
