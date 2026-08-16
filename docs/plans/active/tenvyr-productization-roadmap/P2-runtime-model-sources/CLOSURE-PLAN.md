@@ -22,7 +22,7 @@ sources:
    declares `private readonly modelSources: ModelSourceService;` but its constructor
    never receives or assigns it. Every `model-source-*` command calls
    `this.modelSources.*` and throws `TypeError: Cannot read properties of
-   undefined`. Root cause: the P2 field was added without the constructor
+undefined`. Root cause: the P2 field was added without the constructor
    parameter/assignment.
 
 2. **M10 atomicity invariant broken.** The `runCommand(manager)` callback calls
@@ -71,13 +71,13 @@ sources:
      removed (option A of the audit: keep the table, reframe the concept).
    - Runtime-owned provider discovery (first-class): OpenCode via official CLI
      only — `opencode auth list` (authenticated providers), `opencode models
-     [provider]` (per-provider catalog), `opencode models --refresh`; auth file
+[provider]` (per-provider catalog), `opencode models --refresh`; auth file
      never read. `discoverRuntimeCatalog` returns `providers[]` with
      `{ providerId, authenticated, loginCommand }` and per-provider model
      grouping.
    - Codex: single provider OpenAI, auth = `codex login status`, sign-in =
      `codex login`. Claude: single provider Anthropic, auth = `claude auth
-     status`, sign-in = `claude auth login`.
+status`, sign-in = `claude auth login`.
    - API-key providers (e.g. DeepSeek): represented as a provider OF a runtime
      that can actually invoke it (OpenCode), env REFERENCE only. Catalog
      visibility never creates execution authority: the model picker only offers

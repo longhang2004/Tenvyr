@@ -3,7 +3,7 @@ title: "P2 Spec: Runtime Model Sources + Model Selection + Auth UX"
 status: planned
 audience:
   - developer
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 sources:
   - services/orchestrator/src/domain/coordination.ts
   - services/orchestrator/src/executors/executor-descriptor.ts
@@ -12,186 +12,113 @@ sources:
   - frontend/src/lib/tenvyr-api/types.ts
 ---
 
-# P2 Runtime Model Sources spec
+# P2 Provider Connections + Model Selection + Auth UX spec (final)
 
-## 0. Contract fix (mandatory first)
+## 0. Product model and acceptance flow
 
-Backend (orchestrator → gateway, verbatim): `POST /api/connections/:id/test`
-→ `{ success, data: { action, idempotencyKey, outcome, result:
-{ connectionId, receipt: { revisionNumber, testedAt, state, reasonCode,
-durationMs, testedVersion?, superseded? } } } }`.
+**Runtime Connection → Provider Connection (runtime-owned) → Model → Runtime
+Target.**
 
-Frontend MUST parse `data.result.receipt` with a typed guard. Missing or
-malformed server state → error "Unknown / malformed response", never
-"READY". Status enums exhaustive:
+Acceptance flow: the operator opens the Runtime, sees the provider state of
+the connection's CURRENT revision (structured), connects a provider (OAuth
+completed in the provider's own UI, or a guided official command for API-key
+providers), picks a model, freezes the target into an attempt, and the Capsule
+shows the requested model per role.
 
-```ts
-export const CONNECTION_STATUS_STATES = ["DRAFT","AVAILABLE","AUTH_REQUIRED","UNAVAILABLE","DEGRADED","REVOKED"] as const;
-export const CONNECTION_TEST_STATES = CONNECTION_STATUS_STATES; // receipt state
-```
+## 1. Connection-scoped discovery contract
 
-Regression: backend receipt `state: "AUTH_REQUIRED"` → UI shows AUTH_REQUIRED.
+All discovery is CONNECTION-SCOPED:
 
-## 1. Coordination domain (`domain/coordination.ts`)
+- `discoverRuntimeProviders(connectionId)` → provider state
+  (all/default/connected) for the connection's CURRENT revision, via ITS fixed
+  secret-free profile. Two same-kind connections are fully independent.
+- `refreshRuntimeModels(connectionId, providerId?)` → model catalog, using the
+  documented `opencode models [provider]` CLI executed through the exact
+  connection profile.
+- `getRuntimeProviderAuthMethods(connectionId, providerId)` → structured auth
+  methods.
 
-```ts
-export type RuntimeTargetRefV1 = {
-  connectionId: string;      // must match CONNECTION_ID_PATTERN
-  modelId?: string;          // MODEL_ID_PATTERN, <= 256 chars
-};
-export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/\-:@+]*$/;
-export const MODEL_ID_MAX_LENGTH = 256;
-```
+Provider state is RUNTIME-OWNED. TUI output (`opencode auth list`) is NEVER
+parsed; the auth file is NEVER read.
 
-`CoordinationConfigV1` gains optional (schemaVersion stays 1; strict parse
-ignores unknown keys, so stored configs stay valid):
+## 2. OpenCode Server API contract + session security
 
-```ts
-plannerTarget?: RuntimeTargetRefV1;    // valid only when planner.kind === "connection" AND name === plannerTarget.connectionId
-verifierTarget?: RuntimeTargetRefV1;   // same constraint vs verifier
-allowedTargets?: RuntimeTargetRefV1[]; // <= maxAllowedWorkers entries; every entry's connectionId must appear in allowedWorkers
-```
+`opencode serve` is spawned on demand with STRICT session bounds:
 
-`TaskProposalV1` gains optional `modelId` (bounded, pattern-validated).
+- Bind 127.0.0.1 only; EPHEMERAL port; random `OPENCODE_SERVER_PASSWORD`
+  (basic auth) generated per session, never reused, never logged.
+- Endpoints used: GET /provider (all/default/connected), GET /provider/auth,
+  POST /provider/{id}/oauth/authorize, POST /provider/{id}/oauth/callback.
+- Strict timeouts and bounded response sizes on every call.
+- DETERMINISTIC teardown after each operation: server killed, port released,
+  session secrets wiped. No orphaned processes; no password in any log or
+  persisted shape.
 
-`validateTaskBatchProposal` (new `MODEL_NOT_ALLOWED` error code):
-- task.connectionId + task.modelId → must exactly match an `allowedTargets`
-  entry (same connectionId AND same modelId). No allowedTargets entry →
-  DENIED.
-- task.connectionId only → allowed iff that connection has 0 matching
-  allowedTargets entries (legacy unrestricted) OR exactly 1 (deterministic
-  resolution — the frozen target is that model). 2+ → DENIED with a message
-  telling the Planner to specify a model.
-- task.modelId without task.connectionId → DENIED.
-- Existing agent/connection allowlist checks unchanged.
+## 3. Provider Connect (OAuth + API key)
 
-`compileIterationPlanPatch`:
-- worker step: `metadata.tenvyrModelId = task.modelId ?? resolvedSingle(targets)`
-  (deterministic single-model resolution applied at compile time so the step
-  freezes the resolved model too).
-- verifier step: `metadata.tenvyrModelId = config.verifierTarget.modelId`
-  when kind connection and modelId present.
+- OAuth providers: authorize → operator completes in the provider's OWN UI →
+  callback → refresh. Tenvyr never persists tokens and never sees keys.
+- API-key providers: guided official command only (runtime-owned) — documented
+  limitation.
+- Provider Connect / auth repair applies to EXISTING connections (Sign in /
+  Check again / Advanced); it never creates connections. Connection state
+  (Tenvyr) and runtime auth state are SEPARATE.
 
-`runtime-coordination.service.ts` `createPlannerStep`: planner step
-`metadata.tenvyrModelId = config.plannerTarget.modelId` when kind connection.
+## 4. Provider-selectable-IFF-authenticated rule
 
-## 2. Claim + descriptor
+- A provider is selectable as a Team Run target ONLY when it is authenticated
+  in the connection's CURRENT revision's runtime state.
+- Unauthenticated providers: picker shows them DISABLED; their models never
+  appear; launch BLOCKS with an explanation if a selected target became
+  unavailable (e.g. auth revoked mid-session).
 
-`executor-descriptor.ts`: `ExecutorDescriptorV1.requestedModelId?: string`
-(parse: MODEL_ID_PATTERN + ≤256, `DESCRIPTOR_KEYS` extended).
-`execution.service.ts`: `stepModelIdOf(stepConfig)` reads
-`metadata.tenvyrModelId` (bounded); `resolveAttemptSnapshot` accepts it and
-freezes `descriptor.requestedModelId`. Retry/redelivery reuse the frozen
-descriptor; a later catalog refresh cannot rewrite it.
+## 5. Test Runtime Target semantics
 
-## 3. Wire contract
+A SMALL BOUNDED REAL INVOCATION through the actual runtime adapter, only on
+explicit operator request:
 
-`AgentInvocationV1` gains optional `requestedModelId` (same pattern/bounds),
-first-class like M8 `connection`: `packages/contracts/src/types.ts`,
-`validation.ts`, `contracts/schemas/agent-invocation.v1.schema.json`
-(`additionalProperties: false` objects), conformance fixtures, and
-`python scripts/sync-python-worker-schemas.py` (schema JSON copy).
+- Bounds: 30s timeout, 64KB output cap, NO shell, exact connection-profile
+  argv + `--model <id>`.
+- Audited operator action with a credit-consumption warning.
+- Failure is surfaced as failure — NEVER READY.
+- Distinct from Check Authentication (structured state only) and Refresh
+  Models (enumeration).
 
-## 4. Local executor host
+## 6. Runtime Target freeze (provenance unchanged)
 
-`HostAgentConfig.modelArgvPrefix?: string[]` (fixed argv elements, bounded
-like args). `validateInvocationBinding` extension (all fail closed before
-spawn):
-- invocation carries `requestedModelId` but host declares no
-  `modelArgvPrefix` → refuse (EXECUTOR_HOST_MODEL_ARG_UNSUPPORTED).
-- modelId fails pattern/length → refuse (EXECUTOR_HOST_MODEL_ID_INVALID).
-- `superviseProcess` argv = `[...profile.args, ...(modelArgvPrefix ?? []),
-  modelId]` when both present; otherwise `profile.args` unchanged. Evidence:
-  fake children record exact argv; tests assert composition per runtime.
+`RuntimeTargetRefV1 { connectionId, modelId? }` → `TaskProposalV1.modelId`
+(allowlist-validated, MODEL_NOT_ALLOWED) → step `metadata.tenvyrModelId`
+(incl. deterministic single-model resolution) →
+`ExecutorDescriptorV1.requestedModelId` at claim →
+`AgentInvocationV1.requestedModelId` → host fixed argv
+`[...profile.args, ...(modelArgvPrefix ?? []), modelId]` with fail-closed
+binding. Retries/replays reuse the frozen descriptor; a catalog refresh never
+rewrites history. Model IDs are bounded data
+(`/^[A-Za-z0-9][A-Za-z0-9._/\-:@+]*$/`, ≤256), never shell input.
 
-## 5. Model sources
+## 7. model_sources (advanced surface only)
 
-Entity `model_sources` (authoritative; joins backup inventory → 33 tables):
+`model_sources` = generic OpenAI-compatible catalog endpoints ONLY
+(kind: `"openai-compatible"`). No runtime/provider catalog kinds; the
+33-table backup inventory is unchanged.
 
-```ts
-sourceId: string (PK, ^[A-Za-z0-9_.:-]{1,128}$)
-kind: "opencode" | "ninerouter" | "openai-compatible"
-displayName: string (<= 255)
-baseUrl?: string (http/https only, no userinfo, <= 2048; required for ninerouter/openai-compatible)
-credentialEnvRef?: string (ENV_NAME_PATTERN; REFERENCE ONLY, never a value)
-status: "UNKNOWN" | "AVAILABLE" | "AUTH_REQUIRED" | "UNAVAILABLE" | "DEGRADED"
-lastTestedAt?: string; lastCatalogRefreshAt?: string
-createdAt, updatedAt: string
-```
+- 9Router-as-generic-endpoint rule: an existing 9Router instance connects ONLY
+  as a generic OpenAI-compatible endpoint (baseUrl + optional bearer env REF,
+  advanced surface). No 9Router template, no first-class 9Router behavior.
+- No-routing statement: Tenvyr contains NO routing/fallback/quota/rotation/
+  alias logic; runtime-internal fallback is documented as outside Tenvyr's
+  model-selection authority.
+- Catalogs are non-authoritative bounded projections (never persisted as
+  authority); selection authority stays Tenvyr.
 
-No `model_source_revisions` (no attempt ever references a source revision)
-and NO catalog table (catalogs are on-demand bounded projections). Mutations
-go through the audited `runCommand` layer (`model-source-create/update/
-delete/test/refresh`), mirroring connections.
+## 8. Security requirements
 
-Catalog snapshot (non-authoritative, never persisted):
-
-```ts
-ModelCatalogSnapshotV1 = { sourceId, discoveredAt, models: [{ modelId, displayName?, providerId?, source }] }
-```
-
-`modelId` here is data from the source; Tenvyr validates pattern/length,
-dedupes, bounds count (≤5000), and treats it as a discovery projection only —
-selection authority stays Tenvyr.
-
-Discovery:
-- `opencode`: bounded `opencode auth list` (authenticated providers only:
-  parse provider names; never persist/echo auth output) + `opencode models
-  [provider]` (parse `provider/model` lines) + `opencode models --refresh`.
-  NEVER reads `~/.local/share/opencode/auth.json`.
-- `codex` (best-effort): `codex debug models` bounded JSON parse; failure →
-  empty catalog (manual entry / Runtime default); execution never depends on it.
-- `claude`: no discovery (no documented model-list CLI) → manual entry.
-- `ninerouter` / `openai-compatible`: `GET {base}/models`, optional
-  `Authorization: Bearer <env-ref value>` resolved at request time only;
-  strict timeout (10s), response ≤ 1MB, models ≤ 5000, id ≤ 256, redirects
-  re-validated (http/https only), no userinfo in URL, no credential values
-  in logs/errors. Normalization: base `https://example.com/v1` →
-  `GET https://example.com/v1/models` (path join, no interpolation).
-
-## 6. Runtime onboarding / auth UX
-
-`RuntimeOnboardingStatusV1` gains `loginCommand: string | null` (official
-fixed command: `codex login`, `claude auth login`, `opencode auth login`)
-from the templates. Frontend: [Sign in] → shows "Run: <command>" +
-[Copy Command] + [Check Again] (re-probe). No terminal proxy, no credential
-capture, no invented OAuth. OpenCode: [Connect Provider] → same pattern with
-`opencode auth login`; providers from `opencode auth list` shown as
-authenticated. 9Router: [Open 9Router Dashboard] (baseUrl origin) + [Refresh
-Models].
-
-## 7. Frontend
-
-- Typed DTOs + guards in `frontend/src/lib/tenvyr-api/` (types.ts, guards.ts).
-- `/runtimes`: tabs "Agent Runtimes | Model Sources". Runtime cards show
-  Installed/Authentication/Connection/Default Model + [Test Runtime] [Models]
-  [Manage]. Source cards show Detected/Authentication/Endpoint/Models count/
-  Last refreshed + [Refresh Models] [Test Source] [Open 9Router].
-- `RuntimeTargetPicker`: Runtime select + searchable Model select
-  (provider/group labels), "Runtime default" option, loading state, stale
-  catalog indicator, Refresh, unavailable state, manual model ID entry.
-  Never silently changes a selection after refresh.
-- `/runs/new`: Planner/Verifier = one target each; Workers = multi-select
-  targets; review step displays the EXACT target per role; payload carries
-  `plannerTarget`/`verifierTarget`/`allowedTargets`.
-- Run detail + Capsule: per-step "requested model"; when the attempt result
-  output carries a validated `observedModelId`, show it separately
-  ("observed model"); otherwise no observed claim (router upstreams show
-  "actual upstream: Not observed").
-
-## 8. Storage / inventory
-
-Migration `1722270019000-ModelSources` (model_sources + immutability of
-credential refs enforced by domain parse; no trigger needed beyond
-connections pattern). Register entity in `database.provider.ts`. Add
-`model_sources` to `anchors.mjs` TABLES, contract test `32` → `33`, update
-"N-table" doc mentions, restore/recovery E2E re-run in CI.
-
-## 9. Security checklist
-
-Raw API keys never persisted/returned/logged; env refs only; bounded remote
-responses; strict timeouts; no shell; URL validation; SSRF documented
-(single-owner operator feature, External Production Exposure Gate stays
-open); no reading runtime credential files; no OAuth proxy; model IDs are
-data with fixed argv separation; no fallback engine (runtime-internal
-fallback documented as outside Tenvyr's selection authority).
+- Session secrets (`OPENCODE_SERVER_PASSWORD`) random per session, never
+  persisted, never logged, wiped at deterministic teardown.
+- Raw API keys never persisted/returned/logged; env refs only.
+- Bounded remote responses, strict timeouts, no shell, URL validation
+  (http/https, no userinfo), per-hop redirect re-validation.
+- No reading runtime credential files; no OAuth proxy; no terminal proxy.
+- Model IDs are data with fixed argv separation.
+- SSRF documented (single-owner operator feature; External Production
+  Exposure Gate stays open).

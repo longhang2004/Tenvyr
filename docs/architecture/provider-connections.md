@@ -17,6 +17,11 @@ sources:
 
 # Provider Connections and Runtime Targets (P2)
 
+> Round 2 closure (2026-08-16): ALL provider/model discovery is
+> CONNECTION-SCOPED and uses the STRUCTURED OpenCode Server API — TUI
+> output is never parsed. See the round-2 sections below; the round-1
+> report is `docs/plans/active/tenvyr-productization-roadmap/P2-runtime-model-sources/IMPLEMENTATION_REPORT-2026-08-15.md` (superseded).
+
 ## Product model
 
 Four distinct concepts, never conflated:
@@ -116,3 +121,90 @@ bounded remote responses; strict timeouts; no shell; URL validation
 (single-owner operator feature, External Production Exposure Gate stays
 open); no runtime credential files read; no OAuth proxy; model IDs are data
 with fixed argv separation.
+
+
+## Round 2: connection-scoped discovery via the structured OpenCode Server API
+
+### Why `opencode auth list` parsing was removed
+
+The `auth list` output is HUMAN-oriented (box-drawing decoration such as
+`┌ Credentials ... │ ● OpenAI oauth └ 2 credentials`) — first-token
+parsing returns an empty list and cannot be made safe with more regexes.
+Provider state now comes from the OFFICIAL structured Server API
+(`opencode serve`), contract verified 2026-08-16:
+
+```text
+GET  /provider                      -> { all: Provider[], default: {...}, connected: string[] }
+GET  /provider/auth                 -> { [providerID: string]: ProviderAuthMethod[] }
+POST /provider/{id}/oauth/authorize -> ProviderAuthAuthorization (validated url)
+POST /provider/{id}/oauth/callback  -> boolean
+```
+
+### OpenCode management session
+
+A bounded connection-scoped management adapter starts the EXACT selected
+connection's executable (`profile.cli.command`) with the official
+`serve` subcommand on `127.0.0.1`, an ephemeral port, and a
+cryptographically random `OPENCODE_SERVER_PASSWORD` (env only — never
+argv, never logged, never returned). Strict startup/API timeouts, bounded
+response sizes, deterministic teardown (SIGTERM -> SIGKILL, all waits
+raced), no mDNS, no public bind, no shell. The adapter is for
+runtime/provider management ONLY — never an inference proxy, never a
+credential vault; `auth.json` is never read.
+
+### Connection-scoped contract
+
+```text
+discoverRuntimeProviders(connectionId)
+refreshRuntimeModels(connectionId, providerId?)
+getRuntimeProviderAuthMethods(connectionId, providerId)
+```
+
+The backend: connectionId -> load RuntimeConnection -> REJECT
+missing/revoked -> load its CURRENT revision -> use THAT revision's fixed
+secret-free profile (cli.command, cli.cwd, approved env/secret
+REFERENCES) -> discover. The frontend never supplies executables, cwd,
+env, or runtimeKind; two same-kind connections are fully independent.
+Model enumeration uses the documented `opencode models [provider]` CLI
+invoked through the exact connection profile (never a global PATH
+lookup).
+
+### Provider Connect (runtime-owned OAuth)
+
+OAuth-capable providers: `POST oauth/authorize` -> validated authorization
+URL surfaced to the operator -> the operator completes authorization in
+the PROVIDER's own UI -> `POST oauth/callback` -> refresh `GET /provider`
+-> connected. Tenvyr never persists tokens and never receives provider
+passwords. API-key methods stay runtime-owned: guided official
+`opencode auth login --provider <id>` command only (documented
+limitation: Tenvyr stores no provider keys).
+
+### Auth repair for EXISTING connections
+
+A Runtime Connection and runtime authentication are SEPARATE states: an
+existing AUTH_REQUIRED connection shows [Sign in] / [Check Again] /
+[Advanced] exactly like a not-yet-connected runtime — no revoke/recreate
+needed. The Sign-in flow remains runtime-owned.
+
+### Connected-only Team Run targets
+
+A provider is selectable IFF the runtime reports it AUTHENTICATED and the
+selected connection can execute it. Unauthenticated providers are visible
+in setup (with Connect) but never selectable; models from unauthenticated
+providers never appear as options. If a previously selected target became
+unavailable before launch, launch is BLOCKED with an exact explanation.
+Historical frozen executions are unchanged.
+
+### Test semantics
+
+- **Check Authentication**: structured provider state only — "is this
+  provider connected per the runtime?". Never claims inference usability.
+- **Refresh Models**: enumeration for that connection/provider.
+- **Test Runtime Target**: an explicit audited operator action running a
+  SMALL BOUNDED REAL INVOCATION through the actual runtime adapter —
+  `[command, ...revision cli.args, ...template modelArgvPrefix, modelId,
+  prompt]` (stdin where the run args require it), 30s wall bound, 64KB
+  output caps, no shell, no-workspace-impact prompt, UI credit warning
+  ("may consume provider credits/tokens"), audited operator action.
+  Catalog enumeration is never a successful test; runtime failure is
+  surfaced as failure, never READY.
