@@ -4,7 +4,11 @@ import {
   MalformedResponseError,
   parseConnectionTestReceipt,
   parseConnectionTestResult,
+  parseProviderDiscovery,
+  parseTestTargetEvidence,
   parseWorkbenchCommandResult,
+  providerStateKey,
+  selectableProviders,
 } from "./guards.ts";
 
 /**
@@ -209,5 +213,83 @@ describe("parseWorkbenchCommandResult (P2 closure envelope)", () => {
     assert.equal(gatewayBody.outcome, undefined);
     const command = parseWorkbenchCommandResult(gatewayBody.data);
     assert.equal(command.outcome, "executed");
+  });
+});
+
+describe("parseProviderDiscovery (P2 closure round 2)", () => {
+  const discovery = {
+    connectionId: "conn:opencode-A",
+    revisionNumber: 3,
+    runtimeKind: "opencode",
+    providers: [
+      { providerId: "openai", authenticated: true, loginCommand: "opencode auth login --provider openai" },
+      { providerId: "deepseek", authenticated: false, loginCommand: "opencode auth login --provider deepseek" },
+    ],
+  };
+
+  test("parses strictly; malformed responses are errors, never defaults", () => {
+    const parsed = parseProviderDiscovery(discovery);
+    assert.equal(parsed.connectionId, "conn:opencode-A");
+    assert.equal(parsed.revisionNumber, 3);
+    assert.equal(parsed.providers.length, 2);
+    for (const bad of [
+      null,
+      {},
+      { ...discovery, providers: "nope" },
+      { ...discovery, revisionNumber: "3" },
+      { ...discovery, providers: [{ providerId: "x" }] },
+      { ...discovery, providers: [{ providerId: "x", authenticated: "yes" }] },
+    ]) {
+      assert.throws(() => parseProviderDiscovery(bad), MalformedResponseError);
+    }
+  });
+
+  test("selectableProviders = authenticated ONLY (catalog visibility != execution compatibility)", () => {
+    const parsed = parseProviderDiscovery(discovery);
+    const selectable = selectableProviders(parsed);
+    assert.deepEqual(
+      selectable.map((p) => p.providerId),
+      ["openai"],
+    );
+    assert.equal(selectableProviders(null).length, 0);
+  });
+
+  test("provider state identity includes the connection (no cross-connection bleed)", () => {
+    const a = providerStateKey("conn:A", "openai");
+    const b = providerStateKey("conn:B", "openai");
+    assert.notEqual(a, b);
+    assert.equal(a, "conn:A::openai");
+    // Same provider on two connections NEVER shares a key.
+    assert.equal(providerStateKey("conn:A", "openai") === providerStateKey("conn:B", "openai"), false);
+  });
+
+  test("test target evidence: ok/failed only — unknown status is malformed, never READY", () => {
+    const ok = parseTestTargetEvidence({
+      connectionId: "conn:run",
+      revisionNumber: 1,
+      runtimeKind: "opencode",
+      requestedModelId: "openai/gpt-5.5",
+      status: "ok",
+      exitCode: 0,
+      durationMs: 1200,
+      outputTruncated: false,
+    });
+    assert.equal(ok.status, "ok");
+    const failed = parseTestTargetEvidence({
+      connectionId: "conn:run",
+      revisionNumber: 1,
+      runtimeKind: "opencode",
+      requestedModelId: "openai/gpt-5.5",
+      status: "failed",
+      exitCode: 3,
+      durationMs: 900,
+      outputTruncated: false,
+    });
+    assert.equal(failed.status, "failed");
+    assert.throws(
+      () => parseTestTargetEvidence({ ...ok, status: "READY" }),
+      MalformedResponseError,
+    );
+    assert.throws(() => parseTestTargetEvidence({ ...ok, status: undefined }), MalformedResponseError);
   });
 });

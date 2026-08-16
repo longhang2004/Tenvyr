@@ -15,7 +15,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import { tenvyrApi } from "../../../lib/tenvyr-api/client.ts";
-import { parseWorkbenchCommandResult } from "../../../lib/tenvyr-api/guards.ts";
+import {
+  parseProviderDiscovery,
+  parseWorkbenchCommandResult,
+} from "../../../lib/tenvyr-api/guards.ts";
 import type {
   TeamTemplateV1,
   WorkbenchWorkspaceV1,
@@ -23,6 +26,7 @@ import type {
   CoordinatorSelectionV1,
   RuntimeTargetV1,
   StartTeamRunRequest,
+  ProviderDiscoveryV1,
 } from "../../../lib/tenvyr-api/types.ts";
 import { LoadingSpinner } from "../../../components/shared/LoadingSpinner.tsx";
 import { DirectoryInput } from "../../../components/shared/DirectoryInput.tsx";
@@ -263,6 +267,65 @@ function NewTeamRunContent() {
     }
 
     try {
+      // P2 closure round 2: BLOCK launch when a previously selected target
+      // became unavailable — providers must still be AUTHENTICATED through
+      // their exact connection at launch time. Never silently auto-selects
+      // another provider/model; explains exactly what changed.
+      const frozenTargets = [
+        ...(plannerTarget ? [plannerTarget] : []),
+        ...(verifierTarget ? [verifierTarget] : []),
+        ...workerTargets,
+      ];
+      const targetConnections = new Set(
+        frozenTargets.map((target) => target.connectionId),
+      );
+      const discoveryByConnection = new Map<string, ProviderDiscoveryV1 | null>();
+      await Promise.all(
+        Array.from(targetConnections).map(async (connectionId) => {
+          try {
+            const res = await tenvyrApi.discoverRuntimeProviders(connectionId);
+            discoveryByConnection.set(
+              connectionId,
+              res.success ? parseProviderDiscovery(res.data) : null,
+            );
+          } catch {
+            discoveryByConnection.set(connectionId, null);
+          }
+        }),
+      );
+      const unavailable: string[] = [];
+      for (const target of frozenTargets) {
+        if (!target.modelId) continue; // Runtime default needs no provider
+        const discovery = discoveryByConnection.get(target.connectionId);
+        if (!discovery) {
+          unavailable.push(
+            `${target.connectionId} · ${target.modelId} (provider state unavailable)`,
+          );
+          continue;
+        }
+        if (discovery.providers.length === 0) continue; // implied single provider
+        const providerId = target.modelId.includes("/")
+          ? target.modelId.split("/")[0]
+          : null;
+        const connected = discovery.providers.filter((p) => p.authenticated);
+        if (
+          providerId &&
+          connected.length > 0 &&
+          !connected.some((p) => p.providerId === providerId)
+        ) {
+          unavailable.push(
+            `${target.connectionId} · ${providerId} is no longer connected`,
+          );
+        }
+      }
+      if (unavailable.length > 0) {
+        setErrorMsg(
+          `Launch blocked — these targets changed since selection:\n${unavailable.join("\n")}\n\nReturn to the picker and choose a connected provider/model.`,
+        );
+        setSubmitting(false);
+        return;
+      }
+
       const res = await tenvyrApi.startTeamRun(payload);
       const command = parseWorkbenchCommandResult<{ executionId: string; workspace?: string }>(res.data);
       if (command.outcome === "executed" && command.result?.executionId) {

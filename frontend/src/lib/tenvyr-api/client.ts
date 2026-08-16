@@ -18,7 +18,10 @@ import type {
   ConnectionTestResultV1,
   ModelSourceV1,
   ModelCatalogSnapshotV1,
-  RuntimeProviderV1,
+  ProviderDiscoveryV1,
+  RuntimeModelsRefreshV1,
+  ProviderAuthMethodsV1,
+  TestTargetEvidenceV1,
 } from "./types.ts";
 
 export const GATEWAY_API_URL =
@@ -280,19 +283,75 @@ export class TenvyrApiClient {
     );
   }
 
-  /** Runtime-owned provider discovery without a source row (OpenCode
-   *  first-class; Codex best-effort). Providers are projections of the
-   *  runtime's own state. */
-  async discoverRuntimeCatalog(runtimeKind: string): Promise<
-    ApiResponse<{
-      runtimeKind: string;
-      providers: RuntimeProviderV1[];
-      catalog: ModelCatalogSnapshotV1;
-    }>
-  > {
-    return this.request("/api/model-sources/discover-runtime-catalog", {
+  // P2 closure round 2: CONNECTION-SCOPED provider/model discovery. The
+  // backend resolves the connection's CURRENT revision and uses its fixed
+  // profile — the frontend never supplies executables/cwd/env/runtimeKind.
+
+  async discoverRuntimeProviders(
+    connectionId: string,
+  ): Promise<ApiResponse<ProviderDiscoveryV1>> {
+    return this.request("/api/provider-discovery/discover", {
       method: "POST",
-      body: { runtimeKind },
+      body: { connectionId },
+    });
+  }
+
+  async refreshRuntimeModels(
+    connectionId: string,
+    providerId?: string,
+  ): Promise<ApiResponse<RuntimeModelsRefreshV1>> {
+    return this.request("/api/provider-discovery/refresh-models", {
+      method: "POST",
+      body: { connectionId, ...(providerId ? { providerId } : {}) },
+    });
+  }
+
+  async getRuntimeProviderAuthMethods(
+    connectionId: string,
+    providerId: string,
+  ): Promise<ApiResponse<ProviderAuthMethodsV1>> {
+    return this.request("/api/provider-discovery/auth-methods", {
+      method: "POST",
+      body: { connectionId, providerId },
+    });
+  }
+
+  /** Audited: a SMALL BOUNDED REAL invocation through the connection.
+   *  May consume provider credits/tokens. */
+  async testRuntimeTarget(
+    connectionId: string,
+    modelId: string,
+    idempotencyKey: string = crypto.randomUUID(),
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ evidence: TestTargetEvidenceV1 }>>> {
+    return this.request("/api/provider-discovery/commands/test-target", {
+      method: "POST",
+      body: { idempotencyKey, connectionId, modelId },
+    });
+  }
+
+  /** Audited: start the runtime-owned OpenCode OAuth flow. Returns a
+   *  validated authorization URL; Tenvyr never sees tokens. */
+  async openCodeOauthAuthorize(
+    connectionId: string,
+    providerId: string,
+    idempotencyKey: string = crypto.randomUUID(),
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ authorizationUrl: string }>>> {
+    return this.request("/api/provider-discovery/commands/oauth-authorize", {
+      method: "POST",
+      body: { idempotencyKey, connectionId, providerId },
+    });
+  }
+
+  /** Audited: complete the OpenCode OAuth flow after the operator
+   *  authorized in the provider's own UI. */
+  async openCodeOauthCallback(
+    connectionId: string,
+    providerId: string,
+    idempotencyKey: string = crypto.randomUUID(),
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ connected: boolean }>>> {
+    return this.request("/api/provider-discovery/commands/oauth-callback", {
+      method: "POST",
+      body: { idempotencyKey, connectionId, providerId },
     });
   }
 

@@ -19,6 +19,7 @@ import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
 import {
   MalformedResponseError,
   parseConnectionTestResult,
+  parseProviderDiscovery,
   parseWorkbenchCommandResult,
 } from "../../lib/tenvyr-api/guards.ts";
 import type {
@@ -86,19 +87,32 @@ export default function RuntimesPage() {
   const [srcBaseUrl, setSrcBaseUrl] = useState<string>("https://example.com/v1");
   const [srcCredentialRef, setSrcCredentialRef] = useState<string>("");
   const [savingSource, setSavingSource] = useState<boolean>(false);
-  // P2 closure: runtime-owned provider projections per runtime kind.
-  const [providersByKind, setProvidersByKind] = useState<
+  // P2 closure round 2: runtime-owned provider projections PER CONNECTION
+  // (never keyed by runtimeKind or providerId alone — two same-kind
+  // connections must never share provider state).
+  const [providersByConnection, setProvidersByConnection] = useState<
     Record<string, RuntimeProviderV1[]>
   >({});
   // Guided sign-in state per runtime kind
   const [signInKind, setSignInKind] = useState<string | null>(null);
   const [copiedKind, setCopiedKind] = useState<string | null>(null);
-  // P2 closure: per-provider model catalog expansion (runtime-owned).
+  // P2 closure round 2: per-provider state keyed by `connectionId::providerId`
+  // — the same providerId on two connections keeps INDEPENDENT state.
   const [providerCatalog, setProviderCatalog] = useState<
     Record<string, ModelCatalogEntryV1[]>
   >({});
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  // OAuth connect flow per connection::provider
+  const [connectFlow, setConnectFlow] = useState<{
+    connectionId: string;
+    providerId: string;
+    authorizationUrl: string | null;
+    step: "choose" | "authorizing" | "completed";
+    error: string | null;
+    authMethods: Array<{ id: string; type?: string }>;
+    loading: boolean;
+  } | null>(null);
 
   // Advanced Connection Form state
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
@@ -146,23 +160,27 @@ export default function RuntimesPage() {
       );
       setOnboardingStatuses(statuses);
 
-      // P2 closure: runtime-owned provider projections (OpenCode
-      // first-class, Codex best-effort). Providers are the runtime's own
-      // state — never standalone configuration, never routing authority.
+      // P2 closure round 2: CONNECTION-scoped provider projections. The
+      // backend resolves each connection's CURRENT revision — two
+      // same-kind connections never share provider state.
       const providerMap: Record<string, RuntimeProviderV1[]> = {};
+      const providerCards = connRes.status === "fulfilled" ? (connRes.value?.cards ?? []) : [];
       await Promise.all(
-        ["opencode", "codex"].map(async (runtimeKind) => {
-          try {
-            const res = await tenvyrApi.discoverRuntimeCatalog(runtimeKind);
-            if (res.success) {
-              providerMap[runtimeKind] = res.data?.providers ?? [];
+        providerCards
+          .filter((card) => card.runtimeKind === "opencode")
+          .map(async (card) => {
+            try {
+              const res = await tenvyrApi.discoverRuntimeProviders(card.connectionId);
+              if (res.success) {
+                providerMap[card.connectionId] =
+                  parseProviderDiscovery(res.data).providers;
+              }
+            } catch {
+              // best-effort — the card still renders without providers
             }
-          } catch {
-            // best-effort — the runtime card still renders without providers
-          }
-        }),
+          }),
       );
-      setProvidersByKind(providerMap);
+      setProvidersByConnection(providerMap);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setNotice({
@@ -536,46 +554,213 @@ export default function RuntimesPage() {
     }
   };
 
-  /** Per-provider [Models]: runtime-owned enumeration via the official CLI
-   *  projection (bounded, cached). Never mixes providers. */
-  const handleProviderModels = async (runtimeKind: string, providerId: string) => {
-    if (expandedProvider === providerId) {
+  /** Key per-connection::provider state identity. */
+  const providerKey = (connectionId: string, providerId: string): string =>
+    `${connectionId}::${providerId}`;
+
+  /** Per-provider [Models]: model enumeration for THIS connection/provider
+   *  (documented CLI through the exact connection profile). */
+  const handleProviderModels = async (
+    connectionId: string,
+    providerId: string,
+  ) => {
+    const key = providerKey(connectionId, providerId);
+    if (expandedProvider === key) {
       setExpandedProvider(null);
       return;
     }
-    if (!providerCatalog[providerId]) {
+    if (!providerCatalog[key]) {
       try {
-        const res = await tenvyrApi.discoverRuntimeCatalog(runtimeKind);
-        const models = (res.data?.catalog?.models ?? []).filter(
-          (entry) => entry.providerId === providerId,
-        );
-        setProviderCatalog((current) => ({ ...current, [providerId]: models }));
+        const res = await tenvyrApi.refreshRuntimeModels(connectionId, providerId);
+        const models = res.success ? (res.data?.catalog?.models ?? []) : [];
+        setProviderCatalog((current) => ({ ...current, [key]: models }));
       } catch {
-        setProviderCatalog((current) => ({ ...current, [providerId]: [] }));
+        setProviderCatalog((current) => ({ ...current, [key]: [] }));
       }
     }
-    setExpandedProvider(providerId);
+    setExpandedProvider(key);
   };
 
-  /** Per-provider [Test]: bounded runtime-owned enumeration check — proves
-   *  the provider/runtime can enumerate models, never inference. */
-  const handleTestProvider = async (runtimeKind: string, providerId: string) => {
-    setTestingProvider(providerId);
+  /** Check Authentication: structured runtime/provider state — answers
+   *  ONLY "is this provider connected per the runtime?". Never claims
+   *  inference usability. */
+  const handleCheckAuth = async (connectionId: string) => {
+    setTestingProvider(providerKey(connectionId, "*"));
     setNotice(null);
     try {
-      const res = await tenvyrApi.discoverRuntimeCatalog(runtimeKind);
-      const count = (res.data?.catalog?.models ?? []).filter(
-        (entry) => entry.providerId === providerId,
-      ).length;
+      const res = await tenvyrApi.discoverRuntimeProviders(connectionId);
+      if (res.success) {
+        const discovery = parseProviderDiscovery(res.data);
+        const connected = discovery.providers.filter((p) => p.authenticated);
+        setProvidersByConnection((current) => ({
+          ...current,
+          [connectionId]: discovery.providers,
+        }));
+        setNotice({
+          type: connected.length > 0 ? "success" : "warning",
+          message:
+            connected.length > 0
+              ? `Authentication: ${connected.map((p) => p.providerId).join(", ")} connected through ${connectionId}.`
+              : `Authentication: no providers connected through ${connectionId}.`,
+        });
+      } else {
+        setNotice({ type: "error", message: res.error || "Auth check failed" });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setNotice({ type: "error", message: message || "Auth check failed" });
+    } finally {
+      setTestingProvider(null);
+    }
+  };
+
+  /** Refresh Models: enumerate models for THIS connection/provider. */
+  const handleRefreshProviderModels = async (
+    connectionId: string,
+    providerId: string,
+  ) => {
+    setTestingProvider(providerKey(connectionId, providerId));
+    setNotice(null);
+    try {
+      const res = await tenvyrApi.refreshRuntimeModels(connectionId, providerId);
+      const count = res.success ? (res.data?.catalog?.models?.length ?? 0) : 0;
       setNotice({
-        type: "success",
-        message: `Provider "${providerId}" through ${runtimeKind}: ${count} models enumerated.`,
+        type: res.success ? "success" : "error",
+        message: res.success
+          ? `Provider "${providerId}" through ${connectionId}: ${count} models enumerated.`
+          : res.error || "Model refresh failed",
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      setNotice({ type: "error", message: message || "Provider test failed" });
+      setNotice({ type: "error", message: message || "Model refresh failed" });
     } finally {
       setTestingProvider(null);
+    }
+  };
+
+  /** Connect Provider: runtime-owned flow. OAuth providers use the official
+   *  Server API (authorize -> operator completes in the provider's own UI
+   *  -> callback). API-key methods stay runtime-owned: guided official
+   *  command only (Tenvyr never receives raw keys). */
+  const handleConnectProvider = async (connectionId: string, providerId: string) => {
+    setConnectFlow({
+      connectionId,
+      providerId,
+      authorizationUrl: null,
+      step: "choose",
+      error: null,
+      authMethods: [],
+      loading: true,
+    });
+    try {
+      const res = await tenvyrApi.getRuntimeProviderAuthMethods(connectionId, providerId);
+      const methods = res.success ? (res.data?.methods ?? []) : [];
+      setConnectFlow((current) =>
+        current ? { ...current, authMethods: methods, loading: false } : current,
+      );
+    } catch (err: unknown) {
+      setConnectFlow((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          : current,
+      );
+    }
+  };
+
+  const handleOauthAuthorize = async (connectionId: string, providerId: string) => {
+    setConnectFlow((current) =>
+      current ? { ...current, step: "authorizing", error: null, loading: true } : current,
+    );
+    try {
+      const res = await tenvyrApi.openCodeOauthAuthorize(connectionId, providerId);
+      const command = parseWorkbenchCommandResult<{ authorizationUrl: string }>(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
+        setConnectFlow((current) =>
+          current
+            ? {
+                ...current,
+                step: "authorizing",
+                authorizationUrl: command.result?.authorizationUrl ?? null,
+                loading: false,
+              }
+            : current,
+        );
+      } else {
+        setConnectFlow((current) =>
+          current
+            ? {
+                ...current,
+                loading: false,
+                error: command.error?.message || "Authorization failed",
+              }
+            : current,
+        );
+      }
+    } catch (err: unknown) {
+      setConnectFlow((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          : current,
+      );
+    }
+  };
+
+  const handleOauthCallback = async (connectionId: string, providerId: string) => {
+    setConnectFlow((current) =>
+      current ? { ...current, step: "completed", loading: true, error: null } : current,
+    );
+    try {
+      const res = await tenvyrApi.openCodeOauthCallback(connectionId, providerId);
+      const command = parseWorkbenchCommandResult<{ connected: boolean }>(res.data);
+      const connected = command.result?.connected === true;
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
+        setConnectFlow((current) =>
+          current ? { ...current, loading: false, step: "completed" } : current,
+        );
+        setNotice({
+          type: connected ? "success" : "warning",
+          message: connected
+            ? `Provider "${providerId}" connected through ${connectionId}.`
+            : `Provider "${providerId}" is still not connected according to ${connectionId}.`,
+        });
+        // Refresh the connection's provider projection.
+        const res2 = await tenvyrApi.discoverRuntimeProviders(connectionId);
+        if (res2.success) {
+          const discovery = parseProviderDiscovery(res2.data);
+          setProvidersByConnection((current) => ({
+            ...current,
+            [connectionId]: discovery.providers,
+          }));
+        }
+      } else {
+        setConnectFlow((current) =>
+          current
+            ? {
+                ...current,
+                loading: false,
+                error: command.error?.message || "OAuth callback failed",
+              }
+            : current,
+        );
+      }
+    } catch (err: unknown) {
+      setConnectFlow((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          : current,
+      );
     }
   };
 
@@ -1203,7 +1388,16 @@ export default function RuntimesPage() {
                       Connect command, Models and Test. Codex/Claude expose a
                       single implied provider (OpenAI/Anthropic) whose auth is
                       the runtime onboarding status above. */}
-                      {(providersByKind[kind]?.length ?? 0) > 0 && (
+                      {/* P2 closure round 2: runtime-owned providers of THIS
+                      connection. OpenCode is the first-class provider
+                      experience: every provider the runtime knows appears
+                      here with its own connection status, Check Auth,
+                      Refresh Models, Models, and a runtime-owned Connect
+                      flow. Codex/Claude expose a single implied provider
+                      (OpenAI/Anthropic) whose auth is the runtime
+                      onboarding status below. */}
+                      {conn &&
+                        (providersByConnection[conn.connectionId]?.length ?? 0) > 0 && (
                         <div
                           style={{
                             display: "flex",
@@ -1237,13 +1431,15 @@ export default function RuntimesPage() {
                                 fontWeight: 600,
                               }}
                             >
-                              {providersByKind[kind].filter((p) => p.authenticated).length}{" "}
+                              {providersByConnection[conn.connectionId].filter((p) => p.authenticated).length}{" "}
                               connected
                             </span>
                           </div>
-                          {providersByKind[kind].map((provider) => (
+                          {providersByConnection[conn.connectionId].map((provider) => {
+                            const key = providerKey(conn.connectionId, provider.providerId);
+                            return (
                             <div
-                              key={provider.providerId}
+                              key={key}
                               style={{
                                 display: "flex",
                                 alignItems: "center",
@@ -1276,7 +1472,7 @@ export default function RuntimesPage() {
                                     type="button"
                                     className="btn btn-secondary btn-sm"
                                     onClick={() =>
-                                      handleProviderModels(kind, provider.providerId)
+                                      handleProviderModels(conn.connectionId, provider.providerId)
                                     }
                                   >
                                     Models
@@ -1285,13 +1481,23 @@ export default function RuntimesPage() {
                                     type="button"
                                     className="btn btn-secondary btn-sm"
                                     onClick={() =>
-                                      handleTestProvider(kind, provider.providerId)
+                                      handleCheckAuth(conn.connectionId)
                                     }
-                                    disabled={testingProvider === provider.providerId}
+                                    disabled={testingProvider === providerKey(conn.connectionId, "*")}
                                   >
-                                    {testingProvider === provider.providerId
-                                      ? "Testing…"
-                                      : "Test"}
+                                    {testingProvider === providerKey(conn.connectionId, "*")
+                                      ? "Checking…"
+                                      : "Check Auth"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() =>
+                                      handleRefreshProviderModels(conn.connectionId, provider.providerId)
+                                    }
+                                    disabled={testingProvider === key}
+                                  >
+                                    {testingProvider === key ? "Refreshing…" : "Refresh Models"}
                                   </button>
                                 </>
                               ) : (
@@ -1299,14 +1505,15 @@ export default function RuntimesPage() {
                                   type="button"
                                   className="btn btn-secondary btn-sm"
                                   onClick={() =>
-                                    handleCopyLogin(provider.loginCommand, provider.providerId)
+                                    handleConnectProvider(conn.connectionId, provider.providerId)
                                   }
                                 >
-                                  {copiedKind === provider.providerId ? "Copied" : "Connect"}
+                                  Connect
                                 </button>
                               )}
                             </div>
-                          ))}
+                            );
+                          })}
                           {expandedProvider &&
                             (providerCatalog[expandedProvider] ?? []).length > 0 && (
                               <div
@@ -1327,13 +1534,168 @@ export default function RuntimesPage() {
                                 )}
                               </div>
                             )}
+                          {/* Connect flow: runtime-owned OAuth via the official
+                          Server API; api-key methods stay guided official
+                          commands (Tenvyr never receives raw keys). */}
+                          {connectFlow &&
+                            connectFlow.connectionId === conn.connectionId && (
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: "0.45rem",
+                                borderTop: "1px solid var(--border-color)",
+                                paddingTop: "0.5rem",
+                              }}
+                            >
+                              <div style={{ fontSize: "0.78rem", fontWeight: 600 }}>
+                                Connect provider: {connectFlow.providerId}
+                              </div>
+                              {connectFlow.loading && (
+                                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                                  Loading…
+                                </div>
+                              )}
+                              {connectFlow.error && (
+                                <div style={{ fontSize: "0.72rem", color: "var(--accent-red)" }}>
+                                  {connectFlow.error}
+                                </div>
+                              )}
+                              {!connectFlow.loading &&
+                                connectFlow.authMethods.some((m) => m.id === "oauth") && (
+                                  <>
+                                    {!connectFlow.authorizationUrl ? (
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() =>
+                                          handleOauthAuthorize(connectFlow.connectionId, connectFlow.providerId)
+                                        }
+                                      >
+                                        Authorize with OpenCode
+                                      </button>
+                                    ) : (
+                                      <>
+                                        <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                                          Complete authorization in the provider&apos;s own
+                                          window, then come back:
+                                        </div>
+                                        <a
+                                          href={connectFlow.authorizationUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="btn btn-secondary btn-sm"
+                                          style={{ overflowWrap: "anywhere" }}
+                                        >
+                                          <ExternalLink size={12} />
+                                          <span>Open authorization page</span>
+                                        </a>
+                                        <button
+                                          type="button"
+                                          className="btn btn-primary btn-sm"
+                                          onClick={() =>
+                                            handleOauthCallback(connectFlow.connectionId, connectFlow.providerId)
+                                          }
+                                        >
+                                          I&apos;ve completed authorization
+                                        </button>
+                                      </>
+                                    )}
+                                  </>
+                                )}
+                              {!connectFlow.loading &&
+                                !connectFlow.authMethods.some((m) => m.id === "oauth") && (
+                                  <>
+                                    <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                                      This provider uses API-key auth. The key stays
+                                      runtime-owned — run the official command in your
+                                      terminal (Tenvyr never receives raw keys):
+                                    </div>
+                                    <code
+                                      style={{
+                                        fontFamily: "var(--font-mono)",
+                                        fontSize: "0.75rem",
+                                        padding: "0.3rem 0.5rem",
+                                        backgroundColor: "var(--bg-surface)",
+                                        borderRadius: "var(--radius-sm)",
+                                        overflowWrap: "anywhere",
+                                      }}
+                                    >
+                                      {connectFlow
+                                        ? providersByConnection[connectFlow.connectionId]?.find(
+                                            (p) => p.providerId === connectFlow.providerId,
+                                          )?.loginCommand ?? ""
+                                        : ""}
+                                    </code>
+                                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() =>
+                                          connectFlow &&
+                                          handleCopyLogin(
+                                            providersByConnection[connectFlow.connectionId]?.find(
+                                              (p) => p.providerId === connectFlow.providerId,
+                                            )?.loginCommand ?? "",
+                                            providerKey(
+                                              connectFlow.connectionId,
+                                              connectFlow.providerId,
+                                            ),
+                                          )
+                                        }
+                                      >
+                                        <Copy size={12} />
+                                        <span>
+                                          {connectFlow &&
+                                          copiedKind ===
+                                            providerKey(
+                                              connectFlow.connectionId,
+                                              connectFlow.providerId,
+                                            )
+                                            ? "Copied"
+                                            : "Copy Command"}
+                                        </span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                          setConnectFlow(null);
+                                          handleCheckAuth(conn.connectionId);
+                                        }}
+                                      >
+                                        <RefreshCw size={12} />
+                                        <span>Check Again</span>
+                                      </button>
+                                    </div>
+                                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                                      Limitation: API-key provider connections are
+                                      runtime-owned; Tenvyr stores no provider keys.
+                                    </div>
+                                  </>
+                                )}
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setConnectFlow(null)}
+                              >
+                                Close
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
 
                       {/* P2: guided official login — Tenvyr never collects provider
                       credentials; it only shows the runtime's OWN command. */}
-                      {!conn &&
-                        status?.authReady === false &&
+                      {/* P2 closure round 2: auth repair is available for
+                      EXISTING connections too — a Runtime Connection and
+                      runtime authentication are SEPARATE states; an
+                      AUTH_REQUIRED connection must not require
+                      revoke/recreate to repair. The Sign-in flow stays
+                      runtime-owned. */}
+                      {(status?.authReady === false ||
+                        conn?.status === "AUTH_REQUIRED") &&
                         status.loginCommand && (
                           <div
                             style={{

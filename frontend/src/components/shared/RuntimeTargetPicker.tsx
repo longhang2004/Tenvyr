@@ -1,25 +1,34 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Search, AlertTriangle } from "lucide-react";
+import { RefreshCw, Search, AlertTriangle, Zap } from "lucide-react";
 import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
+import {
+  parseProviderDiscovery,
+  parseRuntimeModelsRefresh,
+  parseTestTargetEvidence,
+  parseWorkbenchCommandResult,
+  selectableProviders,
+  providerStateKey,
+} from "../../lib/tenvyr-api/guards.ts";
 import type {
   ModelCatalogEntryV1,
-  RuntimeProviderV1,
+  ProviderDiscoveryV1,
   RuntimeTargetV1,
+  TestTargetEvidenceV1,
   WorkbenchConnectionCardV1,
 } from "../../lib/tenvyr-api/types.ts";
 
 /**
- * P2 closure: reusable Runtime Target picker — Runtime -> Provider -> Model.
+ * P2 closure round 2: Runtime Target picker — Runtime -> Provider -> Model.
  *
- * The options come ONLY from providers authenticated/available THROUGH the
- * selected runtime (runtime-owned provider discovery): OpenCode `auth list`
- * + `models`, Codex best-effort catalog, Claude manual entry. A provider's
- * models are never offered for an incompatible runtime — incompatibility is
- * impossible by construction because the catalog is scoped to the runtime.
- * "Runtime default" means no model argument is composed. A refresh NEVER
- * silently changes the current selection.
+ * Everything is CONNECTION-SCOPED: providers/models come from the SELECTED
+ * connection's current revision (never a global PATH lookup, never another
+ * connection's state). A provider is selectable IFF the runtime reports it
+ * AUTHENTICATED (catalog visibility never equals execution compatibility).
+ * [Test Target] runs a SMALL BOUNDED REAL INVOCATION through the actual
+ * runtime adapter with a credit warning. A refresh never silently changes
+ * a frozen target; an unavailable target is flagged, never auto-replaced.
  */
 
 export type RuntimeTargetPickerProps = {
@@ -39,16 +48,18 @@ export function RuntimeTargetPicker({
   disabled = false,
   placeholder = "Select runtime…",
 }: RuntimeTargetPickerProps) {
-  const [providers, setProviders] = useState<RuntimeProviderV1[]>([]);
+  const [discovery, setDiscovery] = useState<ProviderDiscoveryV1 | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalogEntryV1[] | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [catalogAt, setCatalogAt] = useState<string | null>(null);
-  const [catalogTruncated, setCatalogTruncated] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [manualMode, setManualMode] = useState(false);
   const [manualModel, setManualModel] = useState("");
-  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testEvidence, setTestEvidence] = useState<TestTargetEvidenceV1 | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
 
   const selectedConnection = useMemo(
     () => connections.find((c) => c.connectionId === value?.connectionId) ?? null,
@@ -56,31 +67,47 @@ export function RuntimeTargetPicker({
   );
 
   const runtimeKind = selectedConnection?.runtimeKind ?? "";
-  // Runtime-owned provider discovery exists for OpenCode (first-class) and
-  // Codex (experimental best-effort). Claude/generic: manual entry only.
-  const discoverable = runtimeKind === "opencode" || runtimeKind === "codex";
+  // Structured provider discovery exists for OpenCode (server API);
+  // Codex best-effort models; Claude/generic: manual entry only.
+  const providerDiscoverySupported = runtimeKind === "opencode";
+  const modelDiscoverySupported = runtimeKind === "opencode" || runtimeKind === "codex";
 
-  const loadCatalog = useCallback(
-    async (connection: WorkbenchConnectionCardV1) => {
+  const loadProviders = useCallback(async (connectionId: string) => {
+    setLoading(true);
+    setCatalogError(null);
+    try {
+      const res = await tenvyrApi.discoverRuntimeProviders(connectionId);
+      if (!res.success) {
+        setCatalogError(res.error || "Provider discovery failed");
+        setDiscovery(null);
+        return;
+      }
+      setDiscovery(parseProviderDiscovery(res.data));
+    } catch (err: unknown) {
+      setCatalogError(err instanceof Error ? err.message : String(err));
+      setDiscovery(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadModels = useCallback(
+    async (connectionId: string, providerId?: string) => {
       setLoading(true);
       setCatalogError(null);
       try {
-        const res = await tenvyrApi.discoverRuntimeCatalog(connection.runtimeKind);
+        const res = await tenvyrApi.refreshRuntimeModels(connectionId, providerId);
         if (!res.success) {
-          setCatalogError(res.error || "Provider discovery failed");
+          setCatalogError(res.error || "Model refresh failed");
           setCatalog(null);
-          setProviders([]);
           return;
         }
-        setProviders(res.data?.providers ?? []);
-        setCatalog(res.data?.catalog?.models ?? []);
-        setCatalogAt(res.data?.catalog?.discoveredAt ?? null);
-        setCatalogTruncated(res.data?.catalog?.truncated === true);
+        const parsed = parseRuntimeModelsRefresh(res.data);
+        setCatalog(parsed.catalog.models ?? []);
+        setCatalogAt(parsed.catalog.discoveredAt ?? null);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        setCatalogError(message || "Provider discovery failed");
+        setCatalogError(err instanceof Error ? err.message : String(err));
         setCatalog(null);
-        setProviders([]);
       } finally {
         setLoading(false);
       }
@@ -92,26 +119,59 @@ export function RuntimeTargetPicker({
     setSearch("");
     setManualMode(false);
     setSelectedProvider(null);
-    if (selectedConnection && discoverable) {
-      loadCatalog(selectedConnection);
+    setTestEvidence(null);
+    setTestError(null);
+    if (selectedConnection) {
+      if (providerDiscoverySupported) {
+        loadProviders(selectedConnection.connectionId);
+      } else {
+        setDiscovery(null);
+      }
+      if (modelDiscoverySupported) {
+        loadModels(selectedConnection.connectionId);
+      } else {
+        setCatalog(null);
+        setCatalogAt(null);
+      }
     } else {
+      setDiscovery(null);
       setCatalog(null);
-      setProviders([]);
       setCatalogAt(null);
-      setCatalogTruncated(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value?.connectionId, selectedConnection?.connectionId]);
 
-  /** Models scoped to the selected provider (or all when the runtime does
-   *  not expose multiple providers). Never mixes providers. */
+  // Connected-only: unauthenticated providers are visible in setup but are
+  // NEVER selectable as executable targets.
+  const selectable = useMemo(
+    () => selectableProviders(discovery),
+    [discovery],
+  );
+  const unauthenticated = useMemo(
+    () => (discovery ? discovery.providers.filter((p) => !p.authenticated) : []),
+    [discovery],
+  );
+
+  /** Models scoped to the selected provider — and ONLY to providers the
+   *  runtime reports AUTHENTICATED. Models from unauthenticated providers
+   *  never appear as selectable options. */
   const scopedModels = useMemo(() => {
     if (!catalog) return [];
-    if (selectedProvider) {
-      return catalog.filter((entry) => entry.providerId === selectedProvider);
+    if (selectable.length > 0) {
+      const connectedIds = new Set(selectable.map((p) => p.providerId));
+      const filtered = catalog.filter(
+        (entry) => entry.providerId === undefined || connectedIds.has(entry.providerId),
+      );
+      if (selectedProvider) {
+        return filtered.filter((entry) => entry.providerId === selectedProvider);
+      }
+      return filtered;
     }
-    return catalog;
-  }, [catalog, selectedProvider]);
+    // No structured providers (codex best-effort): show the whole catalog.
+    return selectedProvider
+      ? catalog.filter((entry) => entry.providerId === selectedProvider)
+      : catalog;
+  }, [catalog, selectable, selectedProvider]);
 
   const models = useMemo(() => {
     if (!scopedModels) return [];
@@ -143,7 +203,7 @@ export function RuntimeTargetPicker({
       onChange(null);
       return;
     }
-    // Keep the previous model ONLY when it still belongs to the same
+    // Keep the previous model ONLY when it still belongs to the SAME
     // connection (never silently pick a different model).
     const keepModel =
       value?.connectionId === connectionId ? value.modelId : undefined;
@@ -152,6 +212,8 @@ export function RuntimeTargetPicker({
 
   const selectModel = (modelId: string | undefined) => {
     if (!selectedConnection) return;
+    setTestEvidence(null);
+    setTestError(null);
     onChange({
       connectionId: selectedConnection.connectionId,
       ...(modelId ? { modelId } : {}),
@@ -159,10 +221,17 @@ export function RuntimeTargetPicker({
   };
 
   const currentModelId = value?.modelId;
-  const catalogHasCurrent =
-    currentModelId === undefined ||
-    catalog?.some((entry) => entry.modelId === currentModelId) ||
-    manualMode;
+  const currentModelUnavailable =
+    currentModelId !== undefined &&
+    discovery !== null &&
+    selectable.length > 0 &&
+    !catalogHasCurrent();
+
+  function catalogHasCurrent(): boolean {
+    if (manualMode) return true;
+    if (!catalog) return true;
+    return catalog.some((entry) => entry.modelId === currentModelId);
+  }
 
   const stale =
     catalogAt !== null &&
@@ -170,14 +239,46 @@ export function RuntimeTargetPicker({
     catalog !== null &&
     catalog.length > 0;
 
-  // Provider label for runtimes with ONE implied provider (Codex -> OpenAI,
-  // Claude -> Anthropic) — shown when it adds information.
   const impliedProvider =
     runtimeKind === "codex"
       ? "OpenAI"
       : runtimeKind === "claude"
         ? "Anthropic"
         : null;
+
+  /** Audited Test Runtime Target: a SMALL BOUNDED REAL INVOCATION through
+   *  the selected connection + model. May consume provider credits. */
+  const handleTestTarget = async () => {
+    if (!selectedConnection || !currentModelId) return;
+    if (
+      !window.confirm(
+        "Test Runtime Target will run a REAL invocation through this runtime and model. This test may consume provider credits/tokens. Continue?",
+      )
+    ) {
+      return;
+    }
+    setTesting(true);
+    setTestError(null);
+    setTestEvidence(null);
+    try {
+      const res = await tenvyrApi.testRuntimeTarget(
+        selectedConnection.connectionId,
+        currentModelId,
+      );
+      const command = parseWorkbenchCommandResult<{ evidence: TestTargetEvidenceV1 }>(
+        res.data,
+      );
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
+        setTestEvidence(parseTestTargetEvidence(command.result?.evidence));
+      } else {
+        setTestError(command.error?.message || "Test target failed");
+      }
+    } catch (err: unknown) {
+      setTestError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
@@ -199,8 +300,10 @@ export function RuntimeTargetPicker({
 
       {selectedConnection ? (
         <>
-          {/* Provider select — only when the runtime exposes providers */}
-          {providers.length > 0 ? (
+          {/* Provider select — connected providers are selectable;
+          unauthenticated ones are visible but DISABLED (never executable
+          targets). */}
+          {providerDiscoverySupported ? (
             <select
               value={selectedProvider ?? ""}
               onChange={(e) => setSelectedProvider(e.target.value || null)}
@@ -208,11 +311,23 @@ export function RuntimeTargetPicker({
               className="form-select"
               aria-label="Provider"
             >
-              <option value="">Provider: all / any</option>
-              {providers.map((provider) => (
-                <option key={provider.providerId} value={provider.providerId}>
-                  {provider.providerId}
-                  {provider.authenticated ? "" : " (not connected)"}
+              <option value="">
+                {selectable.length > 0
+                  ? `Provider: all connected (${selectable.length})`
+                  : "Provider: none connected"}
+              </option>
+              {selectable.map((provider) => (
+                <option key={providerStateKey(selectedConnection.connectionId, provider.providerId)} value={provider.providerId}>
+                  {provider.providerId} · Connected
+                </option>
+              ))}
+              {unauthenticated.map((provider) => (
+                <option
+                  key={providerStateKey(selectedConnection.connectionId, provider.providerId)}
+                  value={provider.providerId}
+                  disabled
+                >
+                  {provider.providerId} · Not connected (connect on Runtimes)
                 </option>
               ))}
             </select>
@@ -223,7 +338,7 @@ export function RuntimeTargetPicker({
           ) : null}
 
           {/* Model select */}
-          {discoverable ? (
+          {modelDiscoverySupported ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
               <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
                 <Search size={12} style={{ color: "var(--text-muted)" }} />
@@ -238,7 +353,10 @@ export function RuntimeTargetPicker({
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => selectedConnection && loadCatalog(selectedConnection)}
+                  onClick={() =>
+                    selectedConnection &&
+                    loadModels(selectedConnection.connectionId, selectedProvider ?? undefined)
+                  }
                   disabled={loading || disabled}
                   title="Refresh model catalog"
                 >
@@ -259,6 +377,21 @@ export function RuntimeTargetPicker({
 
               {loading ? (
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Loading providers & models…</div>
+              ) : selectable.length === 0 && providerDiscoverySupported ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    No providers connected through this runtime. Connect a provider on the
+                    Runtimes page before choosing a model target.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setManualMode(true)}
+                    disabled={disabled}
+                  >
+                    Enter model ID manually
+                  </button>
+                </div>
               ) : catalog && catalog.length > 0 ? (
                 <>
                   <select
@@ -285,18 +418,11 @@ export function RuntimeTargetPicker({
                     ))}
                     <option value="__manual__">+ Enter model ID manually…</option>
                   </select>
-                  {catalogTruncated && (
-                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-                      Catalog truncated at the model-count bound.
-                    </div>
-                  )}
                 </>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    {providers.length > 0
-                      ? `Authenticated providers: ${providers.filter((p) => p.authenticated).map((p) => p.providerId).join(", ") || "none"}`
-                      : "No model catalog available (runtime-owned discovery returned nothing)."}
+                    No model catalog available for this connection.
                   </div>
                   <button
                     type="button"
@@ -356,10 +482,47 @@ export function RuntimeTargetPicker({
             </div>
           )}
 
-          {currentModelId !== undefined && !catalogHasCurrent && (
-            <div style={{ fontSize: "0.72rem", color: "var(--accent-amber)" }}>
-              Current model &quot;{currentModelId}&quot; is not in the catalog — the frozen
-              selection is preserved until you change it (refresh never rewrites it).
+          {currentModelId !== undefined && currentModelUnavailable && (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", color: "var(--accent-amber)" }}>
+              <AlertTriangle size={11} />
+              <span>
+                The selected model &quot;{currentModelId}&quot; is no longer offered by a
+                connected provider — the frozen selection is preserved (refresh never
+                rewrites it); launch will be blocked until you change it.
+              </span>
+            </div>
+          )}
+
+          {/* Test Runtime Target: bounded REAL invocation, credit warning */}
+          {currentModelId !== undefined && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleTestTarget}
+                disabled={testing || disabled}
+                style={{ justifyContent: "flex-start" }}
+              >
+                <Zap size={12} />
+                <span>{testing ? "Testing…" : "Test Target"}</span>
+              </button>
+              {testEvidence && (
+                <div
+                  style={{
+                    fontSize: "0.72rem",
+                    fontFamily: "var(--font-mono)",
+                    color:
+                      testEvidence.status === "ok" ? "var(--accent-green)" : "var(--accent-red)",
+                  }}
+                >
+                  Test Target: {testEvidence.status === "ok" ? "OK" : "FAILED"} · exit{" "}
+                  {testEvidence.exitCode ?? "?"} · {testEvidence.durationMs}ms
+                  {testEvidence.outputTruncated ? " · output truncated" : ""}
+                </div>
+              )}
+              {testError && (
+                <div style={{ fontSize: "0.72rem", color: "var(--accent-red)" }}>{testError}</div>
+              )}
             </div>
           )}
         </>

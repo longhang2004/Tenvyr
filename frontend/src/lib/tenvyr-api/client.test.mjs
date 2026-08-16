@@ -2,7 +2,12 @@ import { test, describe, mock } from "node:test";
 import assert from "node:assert/strict";
 import { TenvyrApiClient } from "./client.ts";
 import { TenvyrApiError } from "./errors.ts";
-import { parseConnectionTestResult, parseWorkbenchCommandResult } from "./guards.ts";
+import {
+  parseConnectionTestResult,
+  parseProviderDiscovery,
+  parseTestTargetEvidence,
+  parseWorkbenchCommandResult,
+} from "./guards.ts";
 
 describe("TenvyrApiClient", () => {
   const fakeBaseUrl = "http://fake-gateway.local";
@@ -214,6 +219,80 @@ describe("TenvyrApiClient", () => {
         command.outcome === "executed" || command.outcome === "duplicate",
         true,
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("connection-scoped provider discovery + audited test-target envelope (P2 closure round 2)", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = mock.fn(async (url, options) => {
+      const body = options?.body ? JSON.parse(options.body) : undefined;
+      calls.push({ url, method: options?.method, body });
+      if (String(url).endsWith("/provider-discovery/discover")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              connectionId: body.connectionId,
+              revisionNumber: 2,
+              runtimeKind: "opencode",
+              providers: [
+                { providerId: "openai", authenticated: true, loginCommand: "opencode auth login --provider openai" },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (String(url).endsWith("/provider-discovery/commands/test-target")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              action: "test-runtime-target",
+              idempotencyKey: "tt-key",
+              outcome: "executed",
+              result: {
+                evidence: {
+                  connectionId: "conn:opencode-A",
+                  revisionNumber: 2,
+                  runtimeKind: "opencode",
+                  requestedModelId: "openai/gpt-5.5",
+                  status: "ok",
+                  exitCode: 0,
+                  durationMs: 812,
+                  outputTruncated: false,
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+
+    try {
+      const client = new TenvyrApiClient(fakeBaseUrl);
+      const discovered = await client.discoverRuntimeProviders("conn:opencode-A");
+      const discovery = parseProviderDiscovery(discovered.data);
+      assert.equal(discovery.connectionId, "conn:opencode-A");
+      assert.equal(discovery.providers[0].providerId, "openai");
+
+      const res = await client.testRuntimeTarget("conn:opencode-A", "openai/gpt-5.5", "tt-key");
+      const command = parseWorkbenchCommandResult(res.data);
+      assert.equal(command.outcome, "executed");
+      const evidence = parseTestTargetEvidence(command.result?.evidence);
+      assert.equal(evidence.status, "ok");
+      assert.equal(evidence.requestedModelId, "openai/gpt-5.5");
+      // The audited command posts the exact connection + model.
+      const targetCall = calls.find((c) =>
+        String(c.url).endsWith("/provider-discovery/commands/test-target"),
+      );
+      assert.equal(targetCall.body.connectionId, "conn:opencode-A");
+      assert.equal(targetCall.body.modelId, "openai/gpt-5.5");
     } finally {
       globalThis.fetch = originalFetch;
     }

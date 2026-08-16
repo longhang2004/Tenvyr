@@ -225,6 +225,49 @@ export type RuntimeProviderV1 = {
   loginCommand: string;
 };
 
+/**
+ * P2 closure round 2: CONNECTION-SCOPED provider discovery results. The
+ * response is bound to the connection's CURRENT revision — two same-kind
+ * connections never share provider state.
+ */
+export type ProviderDiscoveryV1 = {
+  connectionId: string;
+  revisionNumber: number;
+  runtimeKind: string;
+  providers: RuntimeProviderV1[];
+};
+
+/** Connection-scoped model enumeration (documented CLI through the exact
+ *  connection profile). Catalogs are projections, never authority. */
+export type RuntimeModelsRefreshV1 = {
+  connectionId: string;
+  revisionNumber: number;
+  runtimeKind: string;
+  catalog: ModelCatalogSnapshotV1;
+};
+
+/** Auth methods for ONE provider of ONE connection (OpenCode Server API). */
+export type ProviderAuthMethodsV1 = {
+  connectionId: string;
+  revisionNumber: number;
+  runtimeKind: string;
+  providerId: string;
+  methods: Array<{ id: string; type?: string }>;
+};
+
+/** Bounded evidence of a REAL runtime invocation for a target. "ok" only
+ *  on a bounded successful invocation — never a fabricated READY. */
+export type TestTargetEvidenceV1 = {
+  connectionId: string;
+  revisionNumber: number;
+  runtimeKind: string;
+  requestedModelId: string | null;
+  status: "ok" | "failed";
+  exitCode: number | null;
+  durationMs: number;
+  outputTruncated: boolean;
+};
+
 export const MODEL_SOURCE_STATUS_STATES = [
   "UNKNOWN",
   "AVAILABLE",

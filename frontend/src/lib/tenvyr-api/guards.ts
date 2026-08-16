@@ -14,6 +14,11 @@ import {
   type ConnectionStatusState,
   type ConnectionTestReceiptV1,
   type ConnectionTestResultV1,
+  type ProviderAuthMethodsV1,
+  type ProviderDiscoveryV1,
+  type RuntimeModelsRefreshV1,
+  type RuntimeProviderV1,
+  type TestTargetEvidenceV1,
   type WorkbenchCommandResultV1,
 } from "./types.ts";
 
@@ -198,4 +203,117 @@ export function parseWorkbenchCommandResult<T = unknown>(
     };
   }
   return result;
+}
+
+/**
+ * P2 closure round 2: strict guards for CONNECTION-SCOPED provider
+ * discovery. Same policy as every authority/health DTO: missing or
+ * malformed server fields are errors, never optimistic defaults.
+ */
+export function parseProviderDiscovery(value: unknown): ProviderDiscoveryV1 {
+  if (!isRecord(value)) throw new MalformedResponseError("provider discovery");
+  const { connectionId, revisionNumber, runtimeKind, providers } = value;
+  if (!isNonEmptyString(connectionId)) throw new MalformedResponseError("provider discovery connectionId");
+  if (typeof revisionNumber !== "number" || !Number.isInteger(revisionNumber) || revisionNumber < 1) {
+    throw new MalformedResponseError("provider discovery revisionNumber");
+  }
+  if (!isNonEmptyString(runtimeKind)) throw new MalformedResponseError("provider discovery runtimeKind");
+  if (!Array.isArray(providers)) throw new MalformedResponseError("provider discovery providers");
+  const parsed: RuntimeProviderV1[] = [];
+  for (const entry of providers) {
+    if (!isRecord(entry) || !isNonEmptyString(entry.providerId)) {
+      throw new MalformedResponseError("provider entry");
+    }
+    if (typeof entry.authenticated !== "boolean") {
+      throw new MalformedResponseError("provider authenticated");
+    }
+    parsed.push({
+      providerId: entry.providerId,
+      authenticated: entry.authenticated,
+      loginCommand: typeof entry.loginCommand === "string" ? entry.loginCommand : "",
+    });
+  }
+  return { connectionId, revisionNumber, runtimeKind, providers: parsed };
+}
+
+export function parseRuntimeModelsRefresh(value: unknown): RuntimeModelsRefreshV1 {
+  if (!isRecord(value) || !isRecord(value.catalog)) {
+    throw new MalformedResponseError("runtime models refresh");
+  }
+  if (!isNonEmptyString(value.connectionId)) throw new MalformedResponseError("models connectionId");
+  const models = Array.isArray(value.catalog.models) ? value.catalog.models : [];
+  if (!models.every((m) => isRecord(m) && typeof m.modelId === "string")) {
+    throw new MalformedResponseError("models entries");
+  }
+  return {
+    connectionId: value.connectionId,
+    revisionNumber:
+      typeof value.revisionNumber === "number" ? value.revisionNumber : 0,
+    runtimeKind: typeof value.runtimeKind === "string" ? value.runtimeKind : "",
+    catalog: {
+      sourceId: typeof value.catalog.sourceId === "string" ? value.catalog.sourceId : "",
+      discoveredAt:
+        typeof value.catalog.discoveredAt === "string"
+          ? value.catalog.discoveredAt
+          : "",
+      models: models.map((m) => ({
+        modelId: String(m.modelId),
+        ...(typeof m.providerId === "string" ? { providerId: m.providerId } : {}),
+        ...(typeof m.source === "string" ? { source: m.source } : { source: "opencode" }),
+      })),
+      ...(value.catalog.truncated === true ? { truncated: true } : {}),
+    },
+  };
+}
+
+export function parseProviderAuthMethods(value: unknown): ProviderAuthMethodsV1 {
+  if (!isRecord(value) || !Array.isArray(value.methods)) {
+    throw new MalformedResponseError("provider auth methods");
+  }
+  return {
+    connectionId: String(value.connectionId ?? ""),
+    revisionNumber: typeof value.revisionNumber === "number" ? value.revisionNumber : 0,
+    runtimeKind: typeof value.runtimeKind === "string" ? value.runtimeKind : "",
+    providerId: String(value.providerId ?? ""),
+    methods: value.methods
+      .filter((m) => isRecord(m) && typeof m.id === "string")
+      .map((m) => ({ id: m.id, ...(typeof m.type === "string" ? { type: m.type } : {}) })),
+  };
+}
+
+export function parseTestTargetEvidence(value: unknown): TestTargetEvidenceV1 {
+  if (!isRecord(value)) throw new MalformedResponseError("test target evidence");
+  if (value.status !== "ok" && value.status !== "failed") {
+    // NEVER fabricate readiness from an unknown status.
+    throw new MalformedResponseError(`test target status (got ${String(value.status)})`);
+  }
+  return {
+    connectionId: String(value.connectionId ?? ""),
+    revisionNumber: typeof value.revisionNumber === "number" ? value.revisionNumber : 0,
+    runtimeKind: typeof value.runtimeKind === "string" ? value.runtimeKind : "",
+    requestedModelId:
+      typeof value.requestedModelId === "string" ? value.requestedModelId : null,
+    status: value.status,
+    exitCode: typeof value.exitCode === "number" ? value.exitCode : null,
+    durationMs: typeof value.durationMs === "number" ? value.durationMs : 0,
+    outputTruncated: value.outputTruncated === true,
+  };
+}
+
+/**
+ * A provider is a selectable Team Run target IFF the runtime reports it
+ * AUTHENTICATED. Catalog visibility never equals execution compatibility.
+ */
+export function selectableProviders(
+  discovery: ProviderDiscoveryV1 | null,
+): RuntimeProviderV1[] {
+  if (!discovery) return [];
+  return discovery.providers.filter((provider) => provider.authenticated);
+}
+
+/** State identity for per-connection provider UI state: two connections
+ *  with the same providerId must never share expanded/catalog/testing
+ *  state. */
+export function providerStateKey(connectionId: string, providerId: string): string {
+  return `${connectionId}::${providerId}`;
 }
