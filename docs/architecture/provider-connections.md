@@ -271,3 +271,39 @@ providers means NO explicit provider/model target can launch (only
 semantics). Frontend bypass, direct REST callers, and stale browser state
 are all blocked; validated targets are frozen unchanged and historical
 frozen executions are never rewritten.
+
+
+## Round 4 (final): real `prompts[]` contract, oauth/api separation, deterministic TTL
+
+### Prompt contract
+
+OpenCode 1.18.16 defines `prompts?: Prompt[]` on ProviderAuth methods —
+the parser reads the REAL plural field; the singular `prompt` is NOT
+supported as authoritative. Prompt-requiring methods fail closed
+(`AUTH_METHOD_UNSUPPORTED`) before any authorize; Tenvyr never collects
+prompt inputs.
+
+### OAuth vs API methods
+
+Only `type: "oauth"` methods belong in the `/oauth/authorize` flow.
+`type: "api"` methods MUST NOT call authorize — `beginAuthFlow` rejects
+them before any authorize (`AUTH_METHOD_NOT_OAUTH`, including direct REST
+submission of an API method index). API-key authentication stays
+runtime-owned: the UI shows "API Key — authentication is managed by
+OpenCode. Run: `opencode auth login --provider <id>` [Copy Command]
+[Check Again]"; Tenvyr never receives raw provider keys.
+
+### Deterministic TTL and shutdown
+
+Every auth flow gets a REAL expiry timer at registration (unref'd — idle
+flows never keep the process alive). On fire, the flow is removed
+atomically and its management session is closed — no subsequent auth
+call is needed to trigger cleanup. complete/cancel/closeAll/expiry are
+race-safe: remove-then-close plus the session's idempotent close() means
+a session closes at most once and a flow is never resurrected.
+`OpenCodeAuthFlowService` implements OnModuleDestroy: a graceful
+Orchestrator shutdown calls closeAll(), terminating every live
+management session and clearing every timer. Process restart continues
+to fail closed (no durable OAuth resumption). The UI never silently
+abandons a live flow: Close on an active flow invokes the backend cancel
+first.
