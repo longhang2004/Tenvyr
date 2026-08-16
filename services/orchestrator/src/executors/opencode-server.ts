@@ -196,7 +196,11 @@ export function parseOpenCodeAuthMethods(
         methodIndex: index,
         type: raw.type,
         label,
-        requiresPrompt: Array.isArray(raw.prompt) && raw.prompt.length > 0,
+        // REAL OpenCode 1.18.16 contract: `prompts?: Prompt[]` on
+        // ProviderAuth methods. The singular `prompt` is NOT supported as
+        // authoritative. Prompt-requiring methods fail closed — Tenvyr
+        // never collects prompt inputs.
+        requiresPrompt: Array.isArray(raw.prompts) && raw.prompts.length > 0,
       });
       index += 1;
       if (methods.length >= OPENCODE_SERVER_BOUNDS.authMethodsMax) break;

@@ -22,6 +22,7 @@
  * returned, logged, or persisted.
  */
 import { randomBytes } from "node:crypto";
+import { OnModuleDestroy } from "@nestjs/common";
 import {
   OpenCodeManagementSession,
   type OpenCodeManagementProfile,
@@ -57,9 +58,12 @@ export class OpenCodeAuthFlowError extends Error {
 
 type LiveFlow = OpenCodeAuthFlowV1 & {
   session: OpenCodeManagementSession;
+  /** Deterministic expiry timer (unref'd — never keeps the process alive).
+   *  On fire the flow is REMOVED atomically and the session closed. */
+  expiryTimer: NodeJS.Timeout;
 };
 
-export class OpenCodeAuthFlowService {
+export class OpenCodeAuthFlowService implements OnModuleDestroy {
   static readonly FLOW_TTL_MS = 5 * 60_000;
   static readonly MAX_ACTIVE_FLOWS = 8;
 
@@ -70,16 +74,29 @@ export class OpenCodeAuthFlowService {
     private readonly maxFlows: number = OpenCodeAuthFlowService.MAX_ACTIVE_FLOWS,
   ) {}
 
-  /** Close + drop expired flows (bounded sweep; also called opportunistically
-   *  on every operation). */
-  private sweepExpired(): void {
-    const now = Date.now();
-    for (const [authFlowId, flow] of this.flows) {
-      if (flow.expiresAt <= now) {
-        this.flows.delete(authFlowId);
-        void flow.session.close();
-      }
-    }
+  /**
+   * Deterministic expiry: every flow gets a REAL timer at registration.
+   * On fire, the flow is removed atomically and its management session is
+   * closed — no sweep needs another auth operation to trigger it. The
+   * timer is unref'd so idle flows never keep the process alive.
+   * Race-safe: remove-then-close plus the session's idempotent close()
+   * means complete/cancel/closeAll/expiry close a session at most once
+   * and never resurrect a flow.
+   */
+  private expire(authFlowId: string): void {
+    const flow = this.flows.get(authFlowId);
+    if (!flow) return;
+    this.flows.delete(authFlowId);
+    clearTimeout(flow.expiryTimer);
+    void flow.session.close();
+  }
+
+  private removeFlow(authFlowId: string): LiveFlow | undefined {
+    const flow = this.flows.get(authFlowId);
+    if (!flow) return undefined;
+    this.flows.delete(authFlowId);
+    clearTimeout(flow.expiryTimer);
+    return flow;
   }
 
   /**
@@ -106,7 +123,6 @@ export class OpenCodeAuthFlowService {
       instructions: string | null;
     };
   }): OpenCodeAuthFlowV1 {
-    this.sweepExpired();
     const method = input.methods.find(
       (candidate) => candidate.methodIndex === input.methodIndex,
     );
@@ -146,6 +162,9 @@ export class OpenCodeAuthFlowService {
       }
     }
     const authFlowId = randomBytes(16).toString("hex");
+    const expiresAt = Date.now() + this.ttlMs;
+    const expiryTimer = setTimeout(() => this.expire(authFlowId), this.ttlMs);
+    expiryTimer.unref?.();
     const flow: LiveFlow = {
       authFlowId,
       connectionId: input.connectionId,
@@ -154,8 +173,9 @@ export class OpenCodeAuthFlowService {
       methodIndex: input.methodIndex,
       authorizationMethod: input.authorization.method,
       instructions: input.authorization.instructions,
-      expiresAt: Date.now() + this.ttlMs,
+      expiresAt,
       session: input.session,
+      expiryTimer,
     };
     this.flows.set(authFlowId, flow);
     return {
@@ -176,15 +196,13 @@ export class OpenCodeAuthFlowService {
     authFlowId: string,
     code?: string,
   ): Promise<{ connected: boolean; providerId: string; connectionId: string }> {
-    this.sweepExpired();
-    const flow = this.flows.get(authFlowId);
+    const flow = this.removeFlow(authFlowId);
     if (!flow) {
       throw new OpenCodeAuthFlowError(
         "AUTH_FLOW_NOT_FOUND",
         "auth flow is missing or expired — start authentication again",
       );
     }
-    this.flows.delete(authFlowId);
     try {
       const completed = await flow.session.completeOauth(
         flow.providerId,
@@ -220,23 +238,31 @@ export class OpenCodeAuthFlowService {
 
   /** Cancel: close the management session and drop the flow. */
   async cancel(authFlowId: string): Promise<boolean> {
-    this.sweepExpired();
-    const flow = this.flows.get(authFlowId);
+    const flow = this.removeFlow(authFlowId);
     if (!flow) return false;
-    this.flows.delete(authFlowId);
     await flow.session.close();
     return true;
   }
 
-  /** Deterministic process cleanup (also called on shutdown). */
+  /** Deterministic process cleanup — wired into the Nest lifecycle
+   *  (OnModuleDestroy), so a graceful Orchestrator shutdown terminates
+   *  every live management session and clears every timer. */
   async closeAll(): Promise<void> {
     const flows = Array.from(this.flows.values());
+    for (const flow of flows) {
+      clearTimeout(flow.expiryTimer);
+    }
     this.flows.clear();
     await Promise.all(flows.map((flow) => flow.session.close()));
   }
 
+  /** Graceful application shutdown: every live management session is
+   *  terminated and every timer cleared. */
+  async onModuleDestroy(): Promise<void> {
+    await this.closeAll();
+  }
+
   activeCount(): number {
-    this.sweepExpired();
     return this.flows.size;
   }
 }

@@ -64,6 +64,7 @@ export class ProviderDiscoveryError extends Error {
       | "INVALID_OAUTH_URL"
       | "INVALID_METHOD_INDEX"
       | "AUTH_METHOD_UNSUPPORTED"
+      | "AUTH_METHOD_NOT_OAUTH"
       | "PROVIDER_NOT_AUTHENTICATED"
       | "INVALID_MODEL_ID",
     message: string,
@@ -313,6 +314,16 @@ export class ProviderDiscoveryService {
         throw new ProviderDiscoveryError(
           "AUTH_METHOD_UNSUPPORTED",
           `auth method "${method.label}" requires prompt inputs Tenvyr does not drive — use the official login command instead`,
+        );
+      }
+      if (method.type !== "oauth") {
+        // ONLY oauth methods belong in the /oauth/authorize flow. API
+        // methods must NEVER reach authorize: authentication stays
+        // runtime-owned via the guided official login command.
+        await session.close();
+        throw new ProviderDiscoveryError(
+          "AUTH_METHOD_NOT_OAUTH",
+          `auth method "${method.label}" (type ${method.type}) is not an OAuth method — authentication is managed by OpenCode: run \`opencode auth login --provider ${input.providerId}\``,
         );
       }
       const authorization = await session.authorize(

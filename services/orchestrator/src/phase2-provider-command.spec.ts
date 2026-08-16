@@ -458,7 +458,7 @@ describeWithPostgres(
         idempotencyKey: "p2c-oauth-begin-1",
         connectionId: "conn:p2c-serve",
         providerId: "deepseek",
-        methodIndex: 1,
+        methodIndex: 0, // OAuth method
       });
       const beginEnvelope = (begun as { data: Record<string, unknown> }).data;
       expect(beginEnvelope.outcome).toBe("executed");
@@ -493,6 +493,26 @@ describeWithPostgres(
           `SELECT outcome FROM operator_actions WHERE "idempotencyKey" = 'p2c-oauth-complete-1'`,
         ),
       ).toHaveLength(1);
+    });
+
+    it("direct REST oauth-begin with an API method index is rejected BEFORE authorize", async () => {
+      const serveExecutable = writeFixture("serve-api.cjs", serveScript);
+      await createConnection("conn:p2c-api", serveExecutable);
+      const code = await errorCodeOf(() =>
+        controller.oauthBegin({
+          idempotencyKey: "p2c-api-begin-1",
+          connectionId: "conn:p2c-api",
+          providerId: "deepseek",
+          methodIndex: 1, // API Key method
+        }),
+      );
+      expect(code).toBe("AUTH_METHOD_NOT_OAUTH");
+      // Rejected before any authorize: no audit row was committed.
+      expect(
+        await dataSource.query(
+          `SELECT count(*)::text AS n FROM operator_actions WHERE "idempotencyKey" = 'p2c-api-begin-1'`,
+        ),
+      ).toEqual([{ n: "0" }]);
     });
 
     it("oauth complete with an unknown/expired authFlowId fails closed", async () => {

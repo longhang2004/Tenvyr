@@ -1640,16 +1640,152 @@ export default function RuntimesPage() {
                                       </option>
                                     ))}
                                   </select>
-                                  {connectFlow.authMethods.some((m) => m.requiresPrompt) && (
-                                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-                                      Methods requiring prompt inputs are not driven by Tenvyr
-                                      (fail closed) — use the official login command instead.
-                                    </div>
-                                  )}
-                                  {connectFlow.selectedMethodIndex !== null &&
-                                    !connectFlow.authMethods.find(
+                                  {(() => {
+                                    const selectedMethod = connectFlow.authMethods.find(
                                       (m) => m.methodIndex === connectFlow.selectedMethodIndex,
-                                    )?.requiresPrompt && (
+                                    );
+                                    const loginCommand = providersByConnection[
+                                      connectFlow.connectionId
+                                    ]?.find(
+                                      (p) => p.providerId === connectFlow.providerId,
+                                    )?.loginCommand ?? "";
+                                    if (!selectedMethod) return null;
+                                    if (selectedMethod.requiresPrompt) {
+                                      return (
+                                        <>
+                                          <div
+                                            style={{
+                                              fontSize: "0.7rem",
+                                              color: "var(--text-muted)",
+                                            }}
+                                          >
+                                            This method requires prompt inputs Tenvyr does not
+                                            drive (fail closed). Authentication stays
+                                            runtime-owned — run the official command:
+                                          </div>
+                                          <code
+                                            style={{
+                                              fontFamily: "var(--font-mono)",
+                                              fontSize: "0.75rem",
+                                              padding: "0.3rem 0.5rem",
+                                              backgroundColor: "var(--bg-surface)",
+                                              borderRadius: "var(--radius-sm)",
+                                              overflowWrap: "anywhere",
+                                            }}
+                                          >
+                                            {loginCommand}
+                                          </code>
+                                          <div style={{ display: "flex", gap: "0.5rem" }}>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-sm"
+                                              onClick={() =>
+                                                handleCopyLogin(
+                                                  loginCommand,
+                                                  providerKey(
+                                                    connectFlow.connectionId,
+                                                    connectFlow.providerId,
+                                                  ),
+                                                )
+                                              }
+                                            >
+                                              <Copy size={12} />
+                                              <span>
+                                                {copiedKind ===
+                                                providerKey(
+                                                  connectFlow.connectionId,
+                                                  connectFlow.providerId,
+                                                )
+                                                  ? "Copied"
+                                                  : "Copy Command"}
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-sm"
+                                              onClick={() => {
+                                                setConnectFlow(null);
+                                                handleCheckAuth(connectFlow.connectionId);
+                                              }}
+                                            >
+                                              <RefreshCw size={12} />
+                                              <span>Check Again</span>
+                                            </button>
+                                          </div>
+                                        </>
+                                      );
+                                    }
+                                    if (selectedMethod.type === "api") {
+                                      // API-key methods MUST NOT call
+                                      // /oauth/authorize: authentication is
+                                      // managed by OpenCode; Tenvyr never
+                                      // collects raw provider keys.
+                                      return (
+                                        <>
+                                          <div
+                                            style={{
+                                              fontSize: "0.72rem",
+                                              color: "var(--text-secondary)",
+                                            }}
+                                          >
+                                            API Key — authentication is managed by OpenCode.
+                                            Run the official command in your terminal (Tenvyr
+                                            never receives raw keys):
+                                          </div>
+                                          <code
+                                            style={{
+                                              fontFamily: "var(--font-mono)",
+                                              fontSize: "0.75rem",
+                                              padding: "0.3rem 0.5rem",
+                                              backgroundColor: "var(--bg-surface)",
+                                              borderRadius: "var(--radius-sm)",
+                                              overflowWrap: "anywhere",
+                                            }}
+                                          >
+                                            {loginCommand}
+                                          </code>
+                                          <div style={{ display: "flex", gap: "0.5rem" }}>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-sm"
+                                              onClick={() =>
+                                                handleCopyLogin(
+                                                  loginCommand,
+                                                  providerKey(
+                                                    connectFlow.connectionId,
+                                                    connectFlow.providerId,
+                                                  ),
+                                                )
+                                              }
+                                            >
+                                              <Copy size={12} />
+                                              <span>
+                                                {copiedKind ===
+                                                providerKey(
+                                                  connectFlow.connectionId,
+                                                  connectFlow.providerId,
+                                                )
+                                                  ? "Copied"
+                                                  : "Copy Command"}
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-sm"
+                                              onClick={() => {
+                                                setConnectFlow(null);
+                                                handleCheckAuth(connectFlow.connectionId);
+                                              }}
+                                            >
+                                              <RefreshCw size={12} />
+                                              <span>Check Again</span>
+                                            </button>
+                                          </div>
+                                        </>
+                                      );
+                                    }
+                                    // type === "oauth" without prompts
+                                    return (
                                       <button
                                         type="button"
                                         className="btn btn-primary btn-sm"
@@ -1662,9 +1798,11 @@ export default function RuntimesPage() {
                                       >
                                         Start Authorization
                                       </button>
-                                    )}
+                                    );
+                                  })()}
                                 </>
                               )}
+
                               {!connectFlow.loading &&
                                 connectFlow.step === "begin" &&
                                 connectFlow.url && (
@@ -1745,9 +1883,18 @@ export default function RuntimesPage() {
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-sm"
-                                onClick={() => setConnectFlow(null)}
+                                onClick={() => {
+                                  if (connectFlow?.authFlowId) {
+                                    // Never silently abandon a live flow:
+                                    // backend cancel first (closes the
+                                    // management session), then dismiss.
+                                    handleOauthCancel();
+                                  } else {
+                                    setConnectFlow(null);
+                                  }
+                                }}
                               >
-                                Close
+                                {connectFlow?.authFlowId ? "Cancel Flow" : "Close"}
                               </button>
                             </div>
                           )}

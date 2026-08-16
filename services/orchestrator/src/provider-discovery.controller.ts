@@ -37,6 +37,7 @@ export class ProviderDiscoveryController {
         code === "INVALID_OAUTH_URL" ||
         code === "INVALID_METHOD_INDEX" ||
         code === "AUTH_METHOD_UNSUPPORTED" ||
+        code === "AUTH_METHOD_NOT_OAUTH" ||
         code === "PROVIDER_NOT_AUTHENTICATED" ||
         code === "AUTH_FLOW_NOT_FOUND" ||
         code === "AUTH_FLOW_EXPIRED" ||
