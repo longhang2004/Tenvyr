@@ -1,3 +1,4 @@
+import { Injectable } from "@nestjs/common";
 import {
   MODEL_SOURCE_BOUNDS,
   MODEL_ID_MAX_LENGTH,
@@ -42,6 +43,7 @@ export type ModelSourceTestResult = {
   modelCount?: number;
 };
 
+@Injectable()
 export class ModelDiscoveryService {
   /** OpenCode: model catalog via the official `models [provider]`
    *  command. Output lines are `provider/model` tokens (documented
