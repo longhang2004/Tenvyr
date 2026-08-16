@@ -36,6 +36,10 @@ function NewTeamRunContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialWorkspaceId = searchParams.get("workspaceId") || "";
+  /** PP1 Slice C: when set, this launch is a CONTINUATION of a terminal
+   *  source run (bounded HandoffBundle as initial context; source runtime
+   *  identity never rewritten). */
+  const continueFrom = searchParams.get("continueFrom") || "";
 
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -351,7 +355,12 @@ function NewTeamRunContent() {
         return;
       }
 
-      const res = await tenvyrApi.startTeamRun(payload);
+      const res = continueFrom
+        ? await tenvyrApi.continueWorkbenchExecution(continueFrom, {
+            idempotencyKey: payload.idempotencyKey,
+            config: payload.config,
+          })
+        : await tenvyrApi.startTeamRun(payload);
       const command = parseWorkbenchCommandResult<{ executionId: string; workspace?: string }>(res.data);
       if (command.outcome === "executed" && command.result?.executionId) {
         router.push(`/runs/${encodeURIComponent(command.result.executionId)}`);
@@ -374,6 +383,19 @@ function NewTeamRunContent() {
 
   return (
     <div className="page-container" style={{ maxWidth: "840px" }}>
+      {continueFrom && (
+        <div className="notice notice-info" style={{ marginBottom: "1rem" }}>
+          <div>
+            <strong>Continuation run</strong> — this launch continues
+            terminal run <code>{continueFrom.slice(0, 8)}…</code> with a NEW
+            runtime team. A bounded HandoffBundle (goal, verifier decision,
+            worker summaries, artifact refs, acceptance criteria) is supplied
+            as the initial context; the source run&apos;s runtime/model
+            identity is never rewritten, and a preserved execution workspace
+            transfers under exclusive ownership.
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div
         style={{

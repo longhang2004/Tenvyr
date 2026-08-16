@@ -10,6 +10,7 @@ import {
   UserCheck,
   AlertTriangle,
   RotateCcw,
+  ArrowRightCircle,
   StopCircle,
   RefreshCw,
   Shield,
@@ -332,6 +333,20 @@ export default function RunDetailPage() {
                 {acting === "replay" ? "Replaying…" : "Replay as New Run"}
               </span>
             </button>
+          )}
+
+          {/* PP1 Slice C: continue this terminal run with another runtime —
+              a NEW execution whose bounded HandoffBundle is the initial
+              context (source runtime/model identity never rewritten). */}
+          {isTerminal && (
+            <Link
+              href={`/runs/new?continueFrom=${encodeURIComponent(executionId)}`}
+              className="btn btn-secondary btn-sm"
+              title="Continue work from this run with a different runtime team"
+            >
+              <ArrowRightCircle size={14} />
+              <span>Continue with another runtime</span>
+            </Link>
           )}
         </div>
       </div>

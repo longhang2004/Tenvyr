@@ -36,6 +36,7 @@ export const WORKSPACE_EXECUTION_STATES = [
   "READY",
   "IN_USE",
   "PRESERVED",
+  "TRANSFERRED",
   "REMOVED",
   "FAILED",
 ] as const;

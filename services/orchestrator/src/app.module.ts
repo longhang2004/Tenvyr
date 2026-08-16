@@ -43,6 +43,7 @@ import { WorkbenchCommandService } from "./services/workbench-command.service";
 import { WorkspaceService } from "./services/workspace.service";
 import { WorkspaceExecutionService } from "./services/workspace-execution.service";
 import { AttentionService } from "./services/attention.service";
+import { HandoffService } from "./services/handoff.service";
 import { ModelSourceService } from "./services/model-source.service";
 import { ProviderDiscoveryService } from "./services/provider-discovery.service";
 import { ModelDiscoveryService } from "./services/model-discovery.service";
@@ -102,6 +103,7 @@ import { RuntimeOnboardingService } from "./services/runtime-onboarding.service"
     WorkspaceService,
     WorkspaceExecutionService,
     AttentionService,
+    HandoffService,
     RuntimeOnboardingService,
     ModelSourceService,
     ProviderDiscoveryService,

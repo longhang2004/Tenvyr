@@ -15,6 +15,8 @@ import { WorkspaceService } from "./workspace.service";
 import { ModelSourceService } from "./model-source.service";
 import { ProviderDiscoveryService } from "./provider-discovery.service";
 import { WorkspaceExecutionService } from "./workspace-execution.service";
+import { HandoffService } from "./handoff.service";
+import { handoffBundleHash } from "../domain/handoff";
 import type { ConnectionProfileV1 } from "../executors/runtime-connection";
 import { sha256Json } from "../domain/canonical-json";
 import {
@@ -82,6 +84,7 @@ export class WorkbenchCommandService {
     modelSources?: ModelSourceService,
     providerDiscovery?: ProviderDiscoveryService,
     @Optional() workspaceExecutions?: WorkspaceExecutionService,
+    @Optional() handoffs?: HandoffService,
   ) {
     this.executionService =
       executionService ??
@@ -116,6 +119,15 @@ export class WorkbenchCommandService {
     // PP1: workspace execution / isolation leases (shared | git-worktree).
     this.workspaceExecutions =
       workspaceExecutions ?? new WorkspaceExecutionService(this.dataSource);
+    // PP1 Slice C: portable handoff / continuation.
+    this.handoffs =
+      handoffs ??
+      new HandoffService(
+        this.dataSource,
+        this.executionService,
+        this.coordination,
+        this.workspaceExecutions,
+      );
   }
 
   private readonly executionService: ExecutionService;
@@ -126,6 +138,7 @@ export class WorkbenchCommandService {
   private readonly modelSources: ModelSourceService;
   private readonly providerDiscovery: ProviderDiscoveryService;
   private readonly workspaceExecutions: WorkspaceExecutionService;
+  private readonly handoffs: HandoffService;
 
   private boundedKey(idempotencyKey: string): string {
     if (
@@ -436,6 +449,53 @@ export class WorkbenchCommandService {
         return {
           sourceExecutionId: input.executionId,
           targetExecutionId: replay.targetExecutionId,
+        };
+      },
+    );
+  }
+
+  /**
+   * PP1 Slice C: continue a TERMINAL source run as a NEW Team Run on the
+   * destination Runtime Target (existing P2 authority validates the frozen
+   * targets BEFORE this command). The bounded HandoffBundle is built before
+   * the authority transaction; the continuation execution/run + handoff
+   * lineage row + exclusive execution-workspace transfer commit atomically.
+   */
+  async continueRun(input: {
+    idempotencyKey: string;
+    sourceExecutionId: string;
+    config: CoordinationConfigV1;
+  }): Promise<CommandResult> {
+    // P2 final closure: destination Runtime Target authority is validated
+    // against CURRENT provider state BEFORE the authority transaction —
+    // exactly like startTeamRun.
+    await this.assertExplicitTargetsReady(input.config);
+    const bundle = await this.handoffs.buildHandoffBundle(
+      input.sourceExecutionId,
+    );
+    const bundleHash = handoffBundleHash(bundle);
+    return this.runCommand(
+      "continue-run",
+      input.idempotencyKey,
+      input.sourceExecutionId,
+      {
+        sourceExecutionId: input.sourceExecutionId,
+        config: summarizeConfig(input.config),
+        bundleHash,
+      },
+      async (manager) => {
+        const continued = await this.handoffs.continueRunWithManager(
+          manager,
+          input.sourceExecutionId,
+          input.config,
+          bundle,
+        );
+        return {
+          executionId: continued.executionId,
+          runId: continued.runId,
+          handoffId: continued.handoffId,
+          bundleHash: continued.bundleHash,
+          sourceExecutionId: input.sourceExecutionId,
         };
       },
     );

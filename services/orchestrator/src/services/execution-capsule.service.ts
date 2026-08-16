@@ -6,6 +6,7 @@ import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision
 import { CoordinationRunEntity } from "../entities/coordination-run.entity";
 import { CoordinationIterationEntity } from "../entities/coordination-iteration.entity";
 import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
+import { HandoffEntity } from "../entities/handoff.entity";
 import { LogicalStepEntity } from "../entities/step-execution.entity";
 import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import { DispatchOutboxEntity } from "../entities/dispatch-outbox.entity";
@@ -233,6 +234,15 @@ export type ExecutionCapsuleV1 = {
         baseHeadSha: string | null;
         state: string;
         hasUncommittedWork: boolean | null;
+      } | null;
+      /** PP1 Slice C: continuation lineage when this run was created from a
+       *  HandoffBundle (null otherwise); the source execution's historical
+       *  runtime/model identity is never rewritten. */
+      handoff: {
+        sourceExecutionId: string;
+        sourceRunId: string | null;
+        bundleHash: string;
+        createdAt: string;
       } | null;
     };
     iterations: Array<{
@@ -935,6 +945,7 @@ export class ExecutionCapsuleService {
               manager,
               coordinationRun.id,
             ),
+            handoff: await this.handoffLineageProjection(manager, executionId),
           },
           iterations: coordinationIterations.map((iteration) => ({
             iterationNumber: iteration.iterationNumber,
@@ -1237,6 +1248,24 @@ export class ExecutionCapsuleService {
       capsule.contentHash = sha256Json(stableForHash);
       return capsule;
     });
+  }
+
+  /** PP1 Slice C: handoff lineage for an execution (null when the run was
+   *  not created from a HandoffBundle). */
+  private async handoffLineageProjection(
+    manager: EntityManager,
+    executionId: string,
+  ): Promise<ExecutionCapsuleV1["coordination"]["run"]["handoff"]> {
+    const handoff = await manager
+      .getRepository(HandoffEntity)
+      .findOne({ where: { destinationExecutionId: executionId } });
+    if (!handoff) return null;
+    return {
+      sourceExecutionId: handoff.sourceExecutionId,
+      sourceRunId: handoff.sourceRunId,
+      bundleHash: handoff.bundleHash,
+      createdAt: handoff.createdAt.toISOString(),
+    };
   }
 
   /** PP1: bounded execution-workspace lease projection for a run (null for

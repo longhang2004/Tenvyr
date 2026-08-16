@@ -147,6 +147,27 @@ export class WorkbenchCommandsController {
     }
   }
 
+  /** PP1 Slice C: continue a TERMINAL run on a NEW Runtime Target. */
+  @Post("executions/:executionId/continue")
+  async continueRun(
+    @Param("executionId") executionId: string,
+    @Body()
+    body: {
+      idempotencyKey: string;
+      config: CoordinationConfigV1;
+    },
+  ) {
+    try {
+      return await this.commands.continueRun({
+        idempotencyKey: body.idempotencyKey,
+        sourceExecutionId: executionId,
+        config: body.config,
+      });
+    } catch (error) {
+      this.mapError(error);
+    }
+  }
+
   @Post("compare")
   async compareExecutions(
     @Body()

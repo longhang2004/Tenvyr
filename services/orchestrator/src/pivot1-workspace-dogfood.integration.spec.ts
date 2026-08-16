@@ -14,6 +14,9 @@ import { StepAttemptEntity } from "./entities/step-attempt.entity";
 import { ExecutionPlanRevisionEntity } from "./entities/execution-plan-revision.entity";
 import { DispatchOutboxEntity } from "./entities/dispatch-outbox.entity";
 import { WorkspaceExecutionEntity } from "./entities/workspace-execution.entity";
+import { HandoffEntity } from "./entities/handoff.entity";
+import { CoordinationRunEntity } from "./entities/coordination-run.entity";
+import { parseHandoffBundle } from "./domain/handoff";
 import { ExecutionService } from "./services/execution.service";
 import { EngineService } from "./services/engine.service";
 import { DispatchOutboxService } from "./services/dispatch-outbox.service";
@@ -120,6 +123,7 @@ describeWithPostgres("PP1 Slice A: workspace execution + git-worktree isolation 
   let projection: WorkbenchProjectionService;
   let workspaceExecutions: WorkspaceExecutionService;
   let attention: AttentionService;
+  let sourceExecutionId = "";
   let hostWorkers: Awaited<ReturnType<typeof startHostWorkers>> = [];
 
   /** Fake children record cwd + write a marker into their cwd (Worker only)
@@ -127,14 +131,15 @@ describeWithPostgres("PP1 Slice A: workspace execution + git-worktree isolation 
   const fakeChild = (
     role: "planner" | "worker" | "verifier",
     evidenceFile: string,
+    markerName = "pp1-worker-marker-",
   ): string => {
     const markerWrite =
       role === "worker"
-        ? `fs.writeFileSync(path.join(process.cwd(), "pp1-worker-marker-" + invocation.invocationId.slice(0, 8) + ".txt"), "worker executed here\\n");`
+        ? `fs.writeFileSync(path.join(process.cwd(), "${markerName}" + invocation.invocationId.slice(0, 8) + ".txt"), "worker executed here\\n");`
         : "";
     const payload =
       role === "planner"
-        ? `JSON.stringify({ schemaVersion: 1, iterationNumber: n, baseRevision: invocation.input?.planRevision ?? 1, tasks: [ { taskId: "impl-" + n, agent: "cli-worker", input: { module: "core", cwd: "/etc", evilCwd: "/tmp" }, dependsOn: [], required: true, reason: "core" } ], reason: "iteration " + n })`
+        ? `JSON.stringify({ schemaVersion: 1, iterationNumber: n, baseRevision: invocation.input?.planRevision ?? 1, tasks: [ { taskId: "impl-" + n, agent: (process.env.FAKE_WORKER_AGENT || "cli-worker"), input: { module: "core", cwd: "/etc", evilCwd: "/tmp" }, dependsOn: [], required: true, reason: "core" } ], reason: "iteration " + n })`
         : role === "worker"
           ? `JSON.stringify({ built: true, cwd: process.cwd() })`
           : `JSON.stringify({ schemaVersion: 1, iterationId: ctx.iterationId ?? "placeholder", iterationNumber: n, action: n === 1 ? "CONTINUE" : "ACCEPT", reason: "deterministic", evidenceRefs: [] })`;
@@ -162,6 +167,26 @@ process.stdin.on("end", () => {
 });
 `;
   };
+
+  /** Continuation config: same Planner/Verifier, but workers run on the
+   *  DIFFERENT fake runtime connection (cli-worker-b). */
+  const continuationConfig = (): CoordinationConfigV1 => ({
+    schemaVersion: 1,
+    planner: { kind: "agent", name: "cli-planner" },
+    verifier: { kind: "agent", name: "cli-verifier" },
+    allowedWorkers: [{ kind: "agent", name: "cli-worker-b" }],
+    maxIterations: 3,
+    maxWorkersPerIteration: 2,
+    maxTotalWorkers: 8,
+    loopDeadlineMs: 3_600_000,
+    delegationDepthMax: 2,
+    allowedExecutors: [
+      "local-host",
+      "agent:cli-planner",
+      "agent:cli-verifier",
+      "agent:cli-worker-b",
+    ],
+  });
 
   const teamConfig = (): CoordinationConfigV1 => ({
     schemaVersion: 1,
@@ -227,7 +252,10 @@ process.stdin.on("end", () => {
       command: process.execPath,
       args: [script],
       cwd: fixtureDir,
-      env: {},
+      env:
+        agent === "cli-planner"
+          ? { FAKE_WORKER_AGENT: "FAKE_WORKER_AGENT" }
+          : {},
       secrets: {},
       wallTimeMs: 60_000,
       maxStdoutBytes: 65_536,
@@ -252,11 +280,27 @@ process.stdin.on("end", () => {
       "verifier.js",
       fakeChild("verifier", path.join(evidenceDir, "verifier.jsonl")),
     );
+    // A SECOND fake runtime connection (cli-worker-b) for the handoff
+    // continuation vertical — a different child + marker prefix.
+    const workerBPort = await availablePort();
+    scripts.workerB = writeScript(
+      evidenceDir,
+      "worker-b.js",
+      fakeChild(
+        "worker",
+        path.join(evidenceDir, "worker-b.jsonl"),
+        "pp1-continue-marker-",
+      ),
+    );
     agents.push(
       hostAgentConfig("cli-planner", scripts.planner, rolePorts.planner),
       hostAgentConfig("cli-worker", scripts.worker, rolePorts.worker),
       hostAgentConfig("cli-verifier", scripts.verifier, rolePorts.verifier),
+      hostAgentConfig("cli-worker-b", scripts.workerB, workerBPort),
     );
+    // The planner child chooses its worker from the HOST environment
+    // (operator-controlled allowlist, never task input).
+    process.env.FAKE_WORKER_AGENT = "cli-worker";
     const hostConfig: HostConfig = {
       agents,
       allowedRoot: fixtureDir,
@@ -273,6 +317,7 @@ process.stdin.on("end", () => {
       "cli-planner": httpAgent(addresses[0].host, addresses[0].port),
       "cli-worker": httpAgent(addresses[1].host, addresses[1].port),
       "cli-verifier": httpAgent(addresses[2].host, addresses[2].port),
+      "cli-worker-b": httpAgent(addresses[3].host, addresses[3].port),
     };
     const config = new AgentTransportConfigService(
       parseAgentTransportConfiguration({
@@ -349,6 +394,7 @@ process.stdin.on("end", () => {
     delete process.env.TENVYR_WORKSPACE_ROOT;
     delete process.env.HOST_TOKEN_1;
     delete process.env.TEAM_CALLBACK_SECRET;
+    delete process.env.FAKE_WORKER_AGENT;
     await adapter?.stop();
     await app?.close();
     for (const worker of hostWorkers) {
@@ -390,6 +436,7 @@ process.stdin.on("end", () => {
       executionIsolation: "git-worktree",
     });
     const executionId = String(launched.result.executionId);
+    sourceExecutionId = executionId;
     const runId = String(launched.result.runId);
     const executionWorkspace = launched.result.executionWorkspace as {
       workspaceExecutionId: string;
@@ -633,6 +680,140 @@ process.stdin.on("end", () => {
         .readdirSync(forgedPath)
         .some((name) => name.startsWith("pp1-worker-marker-")),
     ).toBe(false);
+  }, 300_000);
+
+  it("handoff vertical: terminal run -> HandoffBundle -> continuation on a DIFFERENT runtime -> exclusive worktree transfer -> truthful lineage", async () => {
+    const source = sourceExecutionId;
+    expect(source).not.toBe("");
+    const sourceRun = await dataSource
+      .getRepository(CoordinationRunEntity)
+      .findOneOrFail({ where: { executionId: source } });
+    const sourceLease = await dataSource
+      .getRepository(WorkspaceExecutionEntity)
+      .findOneOrFail({ where: { ownerRunId: sourceRun.id } });
+    const B = sourceLease.executionPath!;
+    const run1MarkersBefore = fs
+      .readdirSync(B)
+      .filter((name) => name.startsWith("pp1-worker-marker-"));
+    expect(run1MarkersBefore.length).toBe(2);
+
+    // (a) Non-terminal sources fail closed BEFORE any authority mutation.
+    const liveRun = await commands.startTeamRun({
+      idempotencyKey: "pp1-slice-a-live",
+      name: "pp1-live",
+      goal: "Live run for the non-terminal refusal.",
+      config: teamConfig(),
+      workspace: { path: sourceRepo },
+      executionIsolation: "git-worktree",
+    });
+    const liveExecutionId = String(liveRun.result.executionId);
+    await expect(
+      commands.continueRun({
+        idempotencyKey: "pp1-continue-live",
+        sourceExecutionId: liveExecutionId,
+        config: continuationConfig(),
+      }),
+    ).rejects.toMatchObject({ code: "SOURCE_NOT_TERMINAL" });
+    void liveExecutionId;
+
+    // (b) Continue the TERMINAL run on the OTHER fake runtime connection.
+    // The planner child picks its worker from the host environment — keep
+    // it pointed at the DIFFERENT runtime for the WHOLE continuation loop.
+    process.env.FAKE_WORKER_AGENT = "cli-worker-b";
+    const continued = await commands.continueRun({
+      idempotencyKey: "pp1-continue-1",
+      sourceExecutionId: source,
+      config: continuationConfig(),
+    });
+    const destinationExecutionId = String(continued.result.executionId);
+    const destinationRunId = String(continued.result.runId);
+    const bundleHash = String(continued.result.bundleHash);
+    expect(bundleHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(destinationExecutionId).not.toBe(source);
+
+    // The handoff lineage row is durable + strictly parsed.
+    const handoff = await dataSource
+      .getRepository(HandoffEntity)
+      .findOneOrFail({ where: { sourceExecutionId: source } });
+    expect(handoff.destinationExecutionId).toBe(destinationExecutionId);
+    expect(handoff.bundleHash).toBe(bundleHash);
+    const bundle = parseHandoffBundle(handoff.bundle);
+    expect(bundle.goal).toContain("Isolated team run");
+    expect(bundle.verifierDecision?.action).toBe("ACCEPT");
+    expect(bundle.executionWorkspace?.path).toBe(B);
+    expect(bundle.sourceRuntimeProvenance.some((p) => p.agent === "cli-worker")).toBe(
+      true,
+    );
+
+    // Exclusive ownership: the source lease keeps its identity as
+    // TRANSFERRED; the destination owns a NEW lease on the SAME worktree.
+    const transferredSource = await dataSource
+      .getRepository(WorkspaceExecutionEntity)
+      .findOneOrFail({ where: { id: sourceLease.id } });
+    expect(transferredSource.state).toBe("TRANSFERRED");
+    const destinationLease = await dataSource
+      .getRepository(WorkspaceExecutionEntity)
+      .findOneOrFail({ where: { ownerRunId: destinationRunId } });
+    expect(destinationLease.executionPath).toBe(B);
+    expect(destinationLease.mode).toBe("git-worktree");
+
+    // (c) Drive the continuation to ACCEPTED through cli-worker-b.
+    const accepted = async () =>
+      (await coordinator.recoverRun(destinationExecutionId)).run.phase ===
+      "ACCEPTED";
+    for (let pass = 0; pass < 100 && !(await accepted()); pass += 1) {
+      await engine.reconcileExecution(destinationExecutionId);
+      await outboxService.dispatchNext();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    expect(
+      (await coordinator.recoverRun(destinationExecutionId)).run.phase,
+    ).toBe("ACCEPTED");
+    process.env.FAKE_WORKER_AGENT = "cli-worker";
+
+    // The continuation worker executed in the SAME preserved worktree.
+    const workerBEvidence = fs
+      .readFileSync(path.join(evidenceDir, "worker-b.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    expect(workerBEvidence.length).toBe(2);
+    for (const entry of workerBEvidence) {
+      expect(entry.cwd).toBe(B);
+    }
+    const continueMarkers = fs
+      .readdirSync(B)
+      .filter((name) => name.startsWith("pp1-continue-marker-"));
+    expect(continueMarkers.length).toBe(2);
+    // Run 1's uncommitted work was PRESERVED through the transfer.
+    for (const marker of run1MarkersBefore) {
+      expect(fs.existsSync(path.join(B, marker))).toBe(true);
+    }
+    // Source repo A is still untouched.
+    const sourceStatus = spawnSync("git", ["status", "--porcelain"], {
+      cwd: sourceRepo,
+      encoding: "utf8",
+    });
+    expect(sourceStatus.stdout.trim()).toBe("");
+
+    // (d) Truthful lineage: source Capsule unchanged (still shows its
+    //     TRANSFERRED lease), destination Capsule records the handoff.
+    await workspaceExecutions.reconcileWorkspaceExecutions();
+    const sourceCapsule = await capsules.build(source);
+    expect(
+      (sourceCapsule.coordination as any).run.executionWorkspace.state,
+    ).toBe("TRANSFERRED");
+    const destinationCapsule = await capsules.build(destinationExecutionId);
+    expect(
+      (destinationCapsule.coordination as any).run.handoff.sourceExecutionId,
+    ).toBe(source);
+    expect(
+      (destinationCapsule.coordination as any).run.handoff.bundleHash,
+    ).toBe(bundleHash);
+    expect(
+      (destinationCapsule.coordination as any).run.executionWorkspace.path,
+    ).toBe(B);
   }, 300_000);
 });
 

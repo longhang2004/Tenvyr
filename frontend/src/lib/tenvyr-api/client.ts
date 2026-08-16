@@ -12,6 +12,7 @@ import type {
   WorkbenchExecutionSummaryV1,
   WorkbenchExecutionProjectionV1,
   AttentionViewV1,
+  CoordinationConfigV1,
   CapsuleSummaryV1,
   AuditItemV1,
   Pipeline,
@@ -428,6 +429,33 @@ export class TenvyrApiClient {
       {
         method: "POST",
         body: { idempotencyKey },
+      },
+    );
+  }
+
+  /** PP1 Slice C: continue a TERMINAL run on a NEW runtime team (bounded
+   *  HandoffBundle as initial context, exclusive workspace transfer). */
+  async continueWorkbenchExecution(
+    executionId: string,
+    request: {
+      idempotencyKey: string;
+      config: CoordinationConfigV1;
+    },
+  ): Promise<
+    ApiResponse<
+      WorkbenchCommandResultV1<{
+        executionId: string;
+        runId: string;
+        bundleHash: string;
+        sourceExecutionId: string;
+      }>
+    >
+  > {
+    return this.request(
+      `/api/workbench/commands/executions/${encodeURIComponent(executionId)}/continue`,
+      {
+        method: "POST",
+        body: request,
       },
     );
   }

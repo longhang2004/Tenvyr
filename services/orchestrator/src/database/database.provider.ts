@@ -53,8 +53,10 @@ import { CoordinationApprovalResume1722270017000 } from "./migrations/1722270017
 import { ModelSources1722270019000 } from "./migrations/1722270019000-ModelSources";
 import { P3ContextBundle1722270020000 } from "./migrations/1722270020000-P3ContextBundle";
 import { WorkspaceExecutionIsolation1722270021000 } from "./migrations/1722270021000-WorkspaceExecutionIsolation";
+import { Handoff1722270022000 } from "./migrations/1722270022000-Handoff";
 import { ModelSourceEntity } from "../entities/model-source.entity";
 import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
+import { HandoffEntity } from "../entities/handoff.entity";
 
 export function databaseOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -106,6 +108,7 @@ export function databaseOptions(
       OperatorActionEntity,
       ModelSourceEntity,
       WorkspaceExecutionEntity,
+      HandoffEntity,
     ],
     migrations: [
       MilestoneZeroFoundation1722270000000,
@@ -130,6 +133,7 @@ export function databaseOptions(
       ModelSources1722270019000,
       P3ContextBundle1722270020000,
       WorkspaceExecutionIsolation1722270021000,
+      Handoff1722270022000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

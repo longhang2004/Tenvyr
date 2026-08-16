@@ -301,6 +301,93 @@ export class WorkspaceExecutionService {
   }
 
   /**
+   * PP1 Slice C: allocate + bind a SHARED lease inside the caller's
+   * transaction (no external git mutation — safe transactionally). Shared
+   * mode executes against the source workspace itself.
+   */
+  async allocateSharedExecutionWorkspaceWithManager(
+    manager: EntityManager,
+    workspace: WorkspaceSnapshotV1,
+    runId: string,
+  ): Promise<WorkspaceExecutionEntity> {
+    const repository = manager.getRepository(WorkspaceExecutionEntity);
+    const entity = await repository.save(
+      repository.create({
+        sourceWorkspaceId: workspace.workspaceId,
+        sourcePath: workspace.path,
+        mode: "shared",
+        baseBranch: workspace.branch ?? null,
+        baseHeadSha: workspace.headSha ?? null,
+        ownerRunId: null,
+        state: "ALLOCATING",
+      }),
+    );
+    await repository.update(entity.id, {
+      state: "READY",
+      executionPath: workspace.path,
+    });
+    return this.bindExecutionWorkspace(manager, entity.id, runId);
+  }
+
+  /**
+   * PP1 Slice C: transfer a PRESERVED git-worktree lease to a continuation
+   * run under EXCLUSIVE ownership. The SOURCE lease keeps its identity
+   * (state TRANSFERRED — the source run's Capsule/provenance never loses
+   * where it executed); the DESTINATION receives a NEW lease row for the
+   * SAME physical worktree (base identity copied), so two runs never share
+   * an IN_USE lease. Guarded rebind: a concurrent continuation fails
+   * closed (never a false READY, never double ownership).
+   */
+  async transferExecutionWorkspaceWithManager(
+    manager: EntityManager,
+    sourceLeaseId: string,
+    fromRunId: string,
+    toRunId: string,
+  ): Promise<WorkspaceExecutionEntity> {
+    const repository = manager.getRepository(WorkspaceExecutionEntity);
+    const transferred = await repository
+      .createQueryBuilder()
+      .update(WorkspaceExecutionEntity)
+      .set({ state: "TRANSFERRED" })
+      .where(
+        "id = :id AND ownerRunId = :fromRunId AND state = 'PRESERVED'",
+        { id: sourceLeaseId, fromRunId },
+      )
+      .execute();
+    if (transferred.affected !== 1) {
+      const row = await repository.findOne({ where: { id: sourceLeaseId } });
+      throw new WorkspaceExecutionError(
+        "LEASE_NOT_AVAILABLE",
+        `Execution workspace "${sourceLeaseId}" is not transferable (state ${row?.state ?? "missing"}); the continuation cannot safely own it`,
+      );
+    }
+    const source = await repository.findOneOrFail({
+      where: { id: sourceLeaseId },
+    });
+    if (!source.executionPath) {
+      throw new WorkspaceExecutionError(
+        "LEASE_PATH_MISSING",
+        `Execution workspace "${sourceLeaseId}" has no execution path`,
+      );
+    }
+    // The physical worktree already exists + is registered; the destination
+    // lease documents the same base identity.
+    const destination = await repository.save(
+      repository.create({
+        sourceWorkspaceId: source.sourceWorkspaceId,
+        sourcePath: source.sourcePath,
+        mode: "git-worktree",
+        executionPath: source.executionPath,
+        baseBranch: source.baseBranch ?? null,
+        baseHeadSha: source.baseHeadSha ?? null,
+        ownerRunId: toRunId,
+        state: "IN_USE",
+      }),
+    );
+    return destination;
+  }
+
+  /**
    * Crash-recovery reconciliation (fail-closed): interrupted allocations
    * become FAILED (never READY); terminal-run leases become PRESERVED with
    * `hasUncommittedWork` captured once for git-worktree mode.
