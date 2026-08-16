@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 sources:
   - package.json
   - README.md
@@ -251,7 +251,8 @@ The `http://localhost:4000/runtimes` page has two tabs.
 - **Agent Runtimes** — guided runtime cards for Codex, Claude Code, and
   OpenCode: Installed / Version / Authentication / Connection status /
   Default Model, with **Test Runtime**, **Models**, and **Manage** actions.
-  Sign-in is a guided official flow — the page renders `Run: <command>`
+  Each card expands into the runtime's **Provider Connections** (section
+  10). Sign-in is a guided official flow — the page renders `Run: <command>`
   with **Copy Command** and **Check Again**; the operator runs the command
   in their own terminal. Tenvyr never collects provider credentials and
   never executes the login itself:
@@ -262,7 +263,7 @@ The `http://localhost:4000/runtimes` page has two tabs.
   opencode auth login  # OpenCode
   ```
 
-- **Model Sources** — see the next section.
+- **Advanced Catalogs** — see the next section.
 
 ### Runtime Connections (CLI runtimes)
 
@@ -287,31 +288,39 @@ Onboarding recipe, revocation, and gotchas:
 [runtime connections](architecture/executors/runtime-connections.md) and the
 [self-hosted runbook](operations/self-hosted-runbooks.md#runtime-connections).
 
-## 10. Model Sources
+## 10. Provider Connections
 
-A Model Source tells Tenvyr where it may safely DISCOVER model identifiers
-for a runtime — discovery only, never inference. Tenvyr never sends
-inference requests through a source, never stores provider credentials (only
-environment-variable NAME references), and treats every catalog as a bounded,
-non-authoritative projection.
+Providers are **runtime-owned**: a provider exists only as a projection of
+what is authenticated and available THROUGH an Agent Runtime. Provider rows
+appear under each runtime card, and Tenvyr never stores provider
+credentials. A Provider Connection does NOT mean Tenvyr routes inference
+traffic — the chain stays `Tenvyr -> Executor -> Agent Runtime -> Provider`.
 
-- **9Router** — an OPTIONAL external router/model source that owns upstream
-  provider login, OAuth, API keys, quota/fallback, and provider routing.
-  Tenvyr connects only to the operator-configured endpoint (default candidate
-  `http://localhost:20128/v1` — never assumed to exist) and reads its
-  OpenAI-compatible `/models` catalog. The card offers **Open 9Router
-  Dashboard** and **Refresh Models**.
-- **OpenAI-compatible endpoints** — a base URL plus a credential reference
-  (an environment-variable NAME, resolved only at request time; values never
-  persist, never return to the UI, never log).
-- **OpenCode Providers** — the official `opencode` CLI catalog (`opencode
-auth list`, `opencode models [provider]`, `opencode models --refresh`).
-  The auth file is NEVER read; raw auth output is never persisted.
+- **OpenCode** — first-class provider management. One row per provider
+  (provider id, Connected / Not connected, **Models** / **Test** per
+  connected provider). A not-connected provider offers **[Connect]**, which
+  copies the official `opencode auth login --provider <id>` command with
+  **Copy Command** / **Check Again** — credentials never pass through
+  Tenvyr; the auth file is never read and raw auth output is never
+  persisted.
+- **Codex** — a single implied provider (OpenAI); auth status from the
+  runtime onboarding probe, sign-in via `codex login`.
+- **Claude Code** — a single implied provider (Anthropic); auth status
+  from `claude auth status`, sign-in via `claude auth login`.
+- **API-key providers** (for example DeepSeek via OpenCode) — represented
+  through the runtime that can invoke them; Tenvyr stores only an
+  environment-variable NAME reference, never a value. Catalog visibility
+  NEVER equals execution compatibility: a model is selectable only when the
+  selected runtime can actually invoke its provider.
 
-Source cards show Endpoint, Credential ref, Models count, and Last refreshed,
-with **Refresh Models**, **Test Source**, and delete actions. Catalogs are
-bounded on-demand projections (≤ 5000 models, strict timeouts) and are never
-persisted.
+### Advanced Catalogs
+
+The **Advanced Catalogs** tab holds generic OpenAI-compatible endpoints
+(base URL + optional credential env-var NAME reference) for catalog
+discovery only — bounded on-demand projections, never persisted, never
+authoritative. An existing 9Router instance is just such an endpoint:
+9Router inspired the provider-management UX but is NOT a Tenvyr product
+concept. Tenvyr performs no routing, fallback, or account rotation.
 
 ## 11. Team Run: choosing models
 
@@ -330,8 +339,7 @@ Model selection is execution provenance:
   never silently switches models.
 - A later catalog refresh never rewrites historical attempts.
 - The observed model is shown only when the runtime itself reports it —
-  never fabricated (router-backed sources show "actual upstream: Not
-  observed").
+  never fabricated.
 
 ## 12. Writing your first Worker
 

@@ -1,10 +1,10 @@
 ---
-title: Model Sources and Runtime Targets
+title: Provider Connections and Runtime Targets
 status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 sources:
   - services/orchestrator/src/executors/model-source.ts
   - services/orchestrator/src/services/model-source.service.ts
@@ -15,29 +15,78 @@ sources:
   - packages/contracts/src/types.ts
 ---
 
-# Model Sources and Runtime Targets (P2)
+# Provider Connections and Runtime Targets (P2)
 
 ## Product model
 
-Three distinct concepts, never conflated:
+Four distinct concepts, never conflated:
 
 1. **Runtime Connection** — which agent runtime/executor executes the work
    (`conn:codex`, `conn:claude`, `conn:opencode`, generic CLI). Owned since
    M8; immutable revisions, secret-free.
-2. **Model Source** — where Tenvyr may safely DISCOVER model identifiers for
-   a runtime: an OpenCode CLI catalog, a 9Router endpoint, or a generic
-   OpenAI-compatible endpoint. A source is NOT inference authority: Tenvyr
-   never sends inference requests through it, never stores provider
-   credentials (only environment REFERENCES), and treats every catalog as a
-   bounded non-authoritative projection.
-3. **Runtime Target** — the usable unit selected for Planner / Worker /
+2. **Provider Connection** — which provider/account/key is available
+   THROUGH a runtime; is it authenticated; which models does it expose; can
+   it be tested. Provider state is RUNTIME-OWNED: Tenvyr discovers it via
+   the runtime's official CLI surfaces and NEVER stores provider
+   credentials (environment REFERENCES only, and only for the generic
+   advanced endpoint case). A Provider Connection does NOT mean Tenvyr
+   routes inference traffic — the chain stays
+   `Tenvyr -> Executor -> Agent Runtime -> Provider`.
+3. **Model** — a bounded data identifier discovered through a provider of a
+   runtime. Catalog visibility NEVER equals execution compatibility: a
+   model is selectable only when the SELECTED runtime can actually invoke
+   that provider/model (the picker only offers the runtime's own providers).
+4. **Runtime Target** — the usable unit selected for Planner / Worker /
    Verifier roles: `{ connectionId, modelId? }` (absent model = Runtime
    default). Model selection authority stays Tenvyr.
+
+## Provider-auth ownership rules
+
+- **OpenCode (first-class provider management)**: official CLI only —
+  `opencode auth login`, `opencode auth login --provider <id>`, `opencode
+  auth list`, `opencode models [provider]`, `opencode models --refresh`.
+  The auth file is NEVER read; raw auth output is never persisted; Tenvyr
+  never proxies credentials. The UI renders the official command with
+  [Copy Command] / [Check Again].
+- **Codex**: ONE provider (OpenAI). Auth state = `codex login status`;
+  sign-in guidance = `codex login`. ChatGPT session credentials are never
+  persisted.
+- **Claude Code**: ONE provider (Anthropic). Auth state = `claude auth
+  status`; sign-in guidance = `claude auth login`. No credential capture.
+- **API-key providers (e.g. DeepSeek via OpenCode)**: the KEY is owned by
+  the runtime (env reference such as `DEEPSEEK_API_KEY` resolved by the
+  runtime at invocation). Tenvyr stores only environment-variable NAMES
+  when a generic endpoint needs one. A provider is never selectable for a
+  Runtime Target unless the selected runtime can actually invoke it.
+
+## No routing / fallback / rotation
+
+Tenvyr contains NO provider load balancing, priority order, failover,
+quota-based switching, account rotation, subscription arbitrage, model
+aliases, combos, protocol translation, or inference proxy. Agents/runtimes
+own inference. Tenvyr chooses an authorized FROZEN Runtime Target.
+
+9Router inspired the provider-management UX but is NOT a Tenvyr product
+concept. An existing 9Router instance is connectable only as the generic
+OpenAI-compatible endpoint (advanced surface); Tenvyr never copies 9Router's
+routing, fallback, quota, combo/alias, or account machinery.
+
+## model_sources table
+
+`model_sources` keeps a GENERIC role: operator configuration for
+OpenAI-compatible catalog endpoints (kind `openai-compatible` only) —
+baseUrl (http/https, no userinfo, bounded) + optional credentialEnvRef
+(environment variable NAME only). Catalogs are bounded on-demand
+projections (≤ 5000 models, ≤ 1 MiB response, ≤ 256 chars per id, strict
+10 s timeout, redirects re-validated per hop), NEVER persisted as
+authority. Mutations go through the audited Workbench command layer with
+the M10 atomicity invariant (authority row + OperatorAction evidence +
+stored outcome commit in ONE transaction).
 
 ## Model selection is execution provenance
 
 ```text
-operator selects model M
+operator selects model M through a provider of the runtime
   -> Tenvyr validates M against the frozen target/source (allowedTargets)
   -> M becomes frozen execution configuration (step metadata.tenvyrModelId)
   -> attempt claim freezes ExecutorDescriptorV1.requestedModelId
@@ -46,116 +95,24 @@ operator selects model M
   -> Capsule/provenance can reconstruct requested M
 ```
 
-Invariants:
+- Retries reuse the frozen descriptor; catalog refreshes never rewrite
+  historical attempts; `observedModelId` only when the runtime itself
+  reports it; NO Tenvyr-side model fallback.
 
-- A retry reuses the frozen descriptor — a retry never silently switches
-  models.
-- A later catalog refresh or source deletion never rewrites historical
-  attempts (verified by the phase-2 dogfood Postgres suite).
-- Model aliases/routes may resolve differently externally; Tenvyr records
-  the requested identifier EXACTLY (`requestedModelId`).
-- An `observedModelId` is recorded ONLY when the runtime/worker itself
-  reports it inside the bounded structured result — never fabricated. For
-  router-backed sources the UI shows "actual upstream: Not observed".
-- NO silent fallback in Tenvyr: `model A unavailable -> model B` never
-  happens inside Tenvyr. External runtimes/routers may implement their own
-  fallback; that fallback occurs inside the external runtime/router and is
-  outside Tenvyr's direct model-selection authority (provenance keeps
-  requested vs observed distinct).
+## Test semantics
 
-## Coordination authority (domain/coordination.ts)
-
-`CoordinationConfigV1` gains optional fields (schemaVersion stays 1; stored
-configs stay valid):
-
-- `plannerTarget` / `verifierTarget` — operator-frozen role targets. Valid
-  only for connection-kind roles whose name equals the target's
-  connectionId (a Planner can never route its own step onto another
-  connection).
-- `allowedTargets: RuntimeTargetRefV1[]` — the worker Runtime Target
-  allowlist. Every entry's connectionId must already be an allowed
-  connection worker.
-
-`validateTaskBatchProposal` enforces:
-
-- task `connectionId` + `modelId` must EXACTLY match an `allowedTargets`
-  entry — `MODEL_NOT_ALLOWED` otherwise.
-- connection-only emission is allowed only when that connection has 0
-  allowed targets (legacy) or exactly 1 (deterministic resolution at plan
-  compile via `deterministicWorkerModel`). Two or more allowed models
-  REQUIRE the Planner to specify one — Tenvyr never chooses arbitrarily.
-- `modelId` without `connectionId` is rejected at parse.
-
-Model IDs are DATA: `/^[A-Za-z0-9][A-Za-z0-9._/\-:@+]*$/`, max 256 chars,
-validated at every trust boundary (coordination parse, descriptor parse,
-invocation schema, executor host).
-
-## Model Source domain (model_sources table)
-
-Authoritative operator configuration; joins the backup inventory (33
-tables). Columns: sourceId, kind (`opencode | ninerouter |
-openai-compatible`), displayName, baseUrl (http/https, no userinfo, bounded),
-credentialEnvRef (environment variable NAME only — values never persist,
-never return to the frontend, never log), status projection
-(UNKNOWN/AVAILABLE/AUTH_REQUIRED/UNAVAILABLE/DEGRADED), lastTestedAt,
-lastCatalogRefreshAt, modelCount (bounded projection metadata).
-
-Catalogs are deliberately NOT persisted: they are bounded on-demand
-projections (≤ 5000 models, ≤ 1 MiB response, ≤ 256 chars per id, strict
-10 s timeout, redirects re-validated per hop). Mutations go through the
-audited Workbench command layer (`model-source-create/update/delete/test/
-refresh`).
-
-### Discovery per runtime (official docs re-fetched 2026-08-15)
-
-- **OpenCode (first-class)**: `opencode auth list` (authenticated providers,
-  bounded first-column parse), `opencode models [provider]` (catalog lines
-  in the documented `provider/model` format), `opencode models --refresh`.
-  The auth file (`~/.local/share/opencode/auth.json`) is NEVER read; raw
-  auth output is never persisted.
-- **Codex (best-effort)**: `codex debug models` is experimental — bounded
-  JSON parse; ANY failure yields an empty catalog (Runtime default / manual
-  entry). Model execution never depends on this command.
-- **Claude**: no model-list CLI exists in the current official docs —
-  manual model ID entry / Runtime default only.
-- **9Router / generic OpenAI-compatible**: `GET {baseUrl}/models` with
-  optional `Authorization: Bearer <env-ref value>` resolved ONLY at request
-  time. Normalization is a plain path join (`https://example.com/v1` →
-  `https://example.com/v1/models`), no interpolation.
-
-### 9Router integration
-
-9Router is an OPTIONAL external router/model source. It owns upstream
-provider login, OAuth, API keys, quota/fallback, and provider routing.
-Tenvyr connects only to the operator-configured endpoint (default candidate
-`http://localhost:20128/v1` — never assumed to exist) and reads its
-OpenAI-compatible `/models` catalog. Tenvyr does NOT copy 9Router's
-provider-account database, OAuth implementation, or routing. The UI offers
-"[Open 9Router Dashboard]" (the configured base URL) and "[Refresh Models]".
-
-## Invocation composition (executor host)
-
-The host's agent config declares a FIXED `modelArgvPrefix` (e.g.
-`["--model"]`) — operator configuration, never pipeline input. When the
-invocation carries a validated `requestedModelId`, the composed argv is
-`[...fixedArgs, ...modelArgvPrefix, modelId]` (model id is ONE bounded data
-element — never concatenated, never shell-interpreted). Without a model the
-argv is unchanged (Runtime default). The host FAILS CLOSED before spawn
-when an invocation requests a model but the agent declares no
-`modelArgvPrefix`, or when the model id is invalid.
+- **Check Authentication**: provider account/key/session appears configured
+  (auth-list / auth-status projections).
+- **Refresh Models**: the provider/runtime can enumerate models.
+- **Test Provider / Runtime Target**: explicit operator action using a
+  bounded runtime-owned invocation (e.g. `opencode models <provider>`);
+  never inference from the Orchestrator, never a chat-completions client.
 
 ## Security
 
-- Raw API keys never persisted, returned, or logged; credential env refs
-  only.
-- Bounded remote responses, strict timeouts, no shell, endpoint URL
-  validation (http/https only, no userinfo), redirects re-validated per hop.
-- SSRF: model sources are a single-owner operator feature (the External
-  Production Exposure Gate stays open); the operator configures the
-  endpoint, and every fetch is bounded and fail-closed.
-- No reading runtime credential files; no OAuth callback/token proxy; no
-  invented login flows (guided official commands only: `codex login`,
-  `claude auth login`, `opencode auth login` — rendered with Copy Command /
-  Check Again, never executed or credential-captured by Tenvyr).
-- Model IDs are data with fixed argv separation; no automatic model
-  fallback engine.
+Raw API keys never persisted/returned/logged; credential env refs only;
+bounded remote responses; strict timeouts; no shell; URL validation
+(http/https, no userinfo); redirects re-validated; SSRF documented
+(single-owner operator feature, External Production Exposure Gate stays
+open); no runtime credential files read; no OAuth proxy; model IDs are data
+with fixed argv separation.

@@ -1,1016 +1,1023 @@
 {
-  "version": 1,
-  "capabilities": [
-    {
-      "id": "contracts-v1",
-      "status": "implemented",
-      "sources": [
-        "contracts/schemas",
-        "packages/contracts/src"
-      ],
-      "tests": [
-        "packages/contracts/test",
-        "contracts/conformance"
-      ],
-      "docs": [
-        "docs/architecture/contracts/agent-protocol-v1.md",
-        "docs/architecture/contracts/json-interoperability.md"
-      ],
-      "limitations": [
-        "Protocol evolution beyond schemaVersion 1 is not implemented"
-      ]
-    },
-    {
-      "id": "kafka-agent-adapter",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
-        "services/orchestrator/src/services/kafka.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
-        "services/orchestrator/src/services/kafka.service.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/transports/kafka-runtime-v1.md"
-      ],
-      "limitations": [
-        "Kafka v1 topics and consumer identities remain compatibility identifiers"
-      ]
-    },
-    {
-      "id": "http-agent-adapter",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/agent-adapters/http-agent.adapter.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
-        "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/transports/http-agent-adapter-v1.md"
-      ],
-      "limitations": [
-        "Callback replay protection and dispatch state are process-local"
-      ]
-    },
-    {
-      "id": "typescript-worker-sdk",
-      "status": "implemented",
-      "sources": [
-        "packages/worker/src"
-      ],
-      "tests": [
-        "packages/worker/test"
-      ],
-      "docs": [
-        "docs/architecture/workers/typescript-worker-sdk.md"
-      ],
-      "limitations": [
-        "Queue, idempotency, and callback state are process-local"
-      ]
-    },
-    {
-      "id": "python-worker-sdk",
-      "status": "implemented",
-      "sources": [
-        "sdks/python-worker/src/tenvyr_worker"
-      ],
-      "tests": [
-        "sdks/python-worker/tests"
-      ],
-      "docs": [
-        "docs/architecture/workers/python-worker-sdk.md"
-      ],
-      "limitations": [
-        "Queue, idempotency, and callback state are process-local",
-        "Thread cancellation is cooperative"
-      ]
-    },
-    {
-      "id": "json-numeric-interoperability",
-      "status": "implemented",
-      "sources": [
-        "packages/contracts/src/validation.ts",
-        "sdks/python-worker/src/tenvyr_worker/_protocol/json_value.py"
-      ],
-      "tests": [
-        "packages/contracts/test/json-numbers.spec.ts",
-        "sdks/python-worker/tests/test_schema_protocol.py"
-      ],
-      "docs": [
-        "docs/architecture/contracts/json-interoperability.md"
-      ],
-      "limitations": [
-        "Exact cross-language decimal equality is not guaranteed for non-integer floats"
-      ]
-    },
-    {
-      "id": "gateway",
-      "status": "implemented",
-      "sources": [
-        "services/gateway/src"
-      ],
-      "tests": [
-        "services/gateway/src/app.controller.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Thin HTTP and WebSocket relay; no production agent-memory API",
-        "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
-      ]
-    },
-    {
-      "id": "orchestrator-pipeline-engine",
-      "status": "partial",
-      "sources": [
-        "services/orchestrator/src/services",
-        "services/orchestrator/src/entities",
-        "services/orchestrator/src/database/data-source.ts",
-        "services/orchestrator/src/database/migrations"
-      ],
-      "tests": [
-        "services/orchestrator/src/services/engine.service.spec.ts",
-        "services/orchestrator/src/services/agent-result.service.spec.ts",
-        "services/orchestrator/src/services/result-inbox.service.spec.ts",
-        "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
-        "services/orchestrator/src/services/runtime-recovery.service.spec.ts",
-        "services/orchestrator/src/services/pipeline-validation.service.spec.ts",
-        "services/orchestrator/src/services/execution.service.spec.ts",
-        "services/orchestrator/src/app.controller.spec.ts",
-        "services/orchestrator/src/database/data-source.spec.ts",
-        "services/orchestrator/src/database/migrations/milestone-zero-foundation.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Execution plan snapshots and attempt history are durable",
-        "Logical steps materialize unfrozen (PENDING, frozenSpecHash/frozenAt null) and freeze only when a claim or gate decision becomes authoritative; engine-level reconcileExecution is the single idempotent autonomous progression path and resumeAfterResult is a compatibility alias",
-        "Targeted dispatchAttempt(stepAttemptId) gives claim-to-dispatch affinity; dispatchNext/recover() is the global background drain with per-record retryable isolation and a bounded batch; terminal dispatch failures are reconciled against the execution that actually owns the attempt",
-        "Legacy migration backfills StepAttempts only from persisted evidence (COMPLETED->SUCCESS, FAILED->FAILED, CANCELLED->CANCELLED, RUNNING->RUNNING); never-attempted/ambiguous rows stay attempt-free and no invalid status is ever written; overwritten legacy retry history is documented as non-reconstructable",
-        "Real-PostgreSQL integration coverage (concurrency, affinity, fairness, legacy-schema adoption) runs only when TEST_DATABASE_URL is provided",
-        "AgentEvent/watchdog persistence remains outside Milestone 0"
-      ]
-    },
-    {
-      "id": "agent-events-supervision",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/services/agent-event.service.ts",
-        "services/orchestrator/src/services/supervision.service.ts",
-        "services/orchestrator/src/services/supervision-config.service.ts",
-        "services/orchestrator/src/database/migrations/1722270001000-MilestoneOneAgentEvents.ts",
-        "packages/worker/src/events/event-emitter.ts",
-        "sdks/python-worker/src/tenvyr_worker/_runtime/worker.py"
-      ],
-      "tests": [
-        "services/orchestrator/src/services/agent-event.service.spec.ts",
-        "services/orchestrator/src/services/supervision.service.spec.ts",
-        "services/orchestrator/src/services/supervision-config.service.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "packages/worker/test/events.spec.ts",
-        "sdks/python-worker/tests/test_events.py"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md",
-        "docs/architecture/contracts/agent-protocol-v1.md"
-      ],
-      "limitations": [
-        "Heartbeat supervision applies only to explicitly configured agents; agents without expectations are never failed",
-        "Worker-local event delivery is not durable; only Orchestrator-accepted events become durable PostgreSQL evidence",
-        "AgentEvents are evidence, not authority: they can never terminalize an attempt or change a step outcome",
-        "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
-      ]
-    },
-    {
-      "id": "java-agent-runner",
-      "status": "implemented",
-      "sources": [
-        "services/agent-runner/src/main/java"
-      ],
-      "tests": [
-        "services/agent-runner/src/test/java"
-      ],
-      "docs": [
-        "docs/architecture/agents-and-runners.md",
-        "docs/showcase/using-model-providers.md"
-      ],
-      "limitations": [
-        "Provider HTTP is unit-tested with mocks; live APIs are not called in CI",
-        "Token usage is estimated and labeled usageSource=estimated"
-      ]
-    },
-    {
-      "id": "code-reviewer-agent",
-      "status": "implemented",
-      "sources": [
-        "services/agent-code-reviewer/src"
-      ],
-      "tests": [
-        "services/agent-code-reviewer/src/app.controller.spec.ts",
-        "services/agent-code-reviewer/src/kafka.service.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/agents-and-runners.md"
-      ],
-      "limitations": [
-        "Kafka-specialized service; not a general framework integration"
-      ]
-    },
-    {
-      "id": "observability-agent",
-      "status": "implemented",
-      "sources": [
-        "services/agent-observability/src"
-      ],
-      "tests": [
-        "services/agent-observability/src/app.controller.spec.ts",
-        "services/agent-observability/src/kafka.service.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/agents-and-runners.md"
-      ],
-      "limitations": [
-        "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
-      ]
-    },
-    {
-      "id": "frontend-dashboard",
-      "status": "implemented",
-      "sources": [
-        "frontend/src/app",
-        "frontend/src/components",
-        "frontend/src/lib/tenvyr-api"
-      ],
-      "tests": [
-        "frontend/src/app/dashboard/safe-preview.test.mjs",
-        "frontend/src/lib/tenvyr-api/client.test.mjs"
-      ],
-      "docs": [
-        "docs/architecture/workbench.md",
-        "docs/architecture/overview.md",
-        "docs/user-manual.md",
-        "docs/showcase/demo-guide.md"
-      ],
-      "limitations": [
-        "Next.js operator workbench on port 4000 is canonical product UI; safe-preview logic and API client layers have unit test suites; UI build verified in production pipeline"
-      ]
-    },
-    {
-      "id": "setup-readiness-check",
-      "status": "implemented",
-      "sources": [
-        "scripts/setup-check.mjs"
-      ],
-      "tests": [
-        "scripts/setup-check.mjs"
-      ],
-      "docs": [
-        "docs/operations/local-development.md"
-      ],
-      "limitations": [
-        "Reports machine state and actions but does not install or reconfigure prerequisites"
-      ]
-    },
-    {
-      "id": "offline-showcase",
-      "status": "implemented",
-      "sources": [
-        "docker-compose.showcase.yml",
-        "scripts/smoke-e2e.mjs",
-        "services/orchestrator/Dockerfile",
-        "services/orchestrator/tsconfig.json",
-        "services/agent-code-reviewer/Dockerfile",
-        "services/agent-observability/Dockerfile"
-      ],
-      "tests": [
-        "scripts/setup-check.test.mjs",
-        "scripts/smoke-e2e.test.mjs"
-      ],
-      "docs": [
-        "docs/showcase/demo-guide.md",
-        "docs/showcase/case-study.md"
-      ],
-      "limitations": [
-        "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
-        "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
-        "Final release requires a successful Docker-backed smoke run on the exact merged commit"
-      ]
-    },
-    {
-      "id": "package-verification",
-      "status": "implemented",
-      "sources": [
-        "scripts/verify-package-packs.mjs",
-        "scripts/verify-python-worker-package.py"
-      ],
-      "tests": [
-        "scripts/verify-package-packs.mjs",
-        "scripts/verify-python-worker-package.py"
-      ],
-      "docs": [
-        "docs/operations/package-verification.md"
-      ],
-      "limitations": [
-        "Verification is local/private and does not authorize publication"
-      ]
-    },
-    {
-      "id": "identity-migration",
-      "status": "implemented",
-      "sources": [
-        "LICENSE",
-        "scripts/verify-product-identity.mjs",
-        "packages/contracts/package.json",
-        "packages/worker/package.json",
-        "sdks/python-worker/pyproject.toml"
-      ],
-      "tests": [
-        "scripts/verify-product-identity.test.mjs",
-        "scripts/verify-package-packs.mjs",
-        "scripts/verify-python-worker-package.py"
-      ],
-      "docs": [
-        "docs/product/identity.md"
-      ],
-      "limitations": [
-        "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
-      ]
-    },
-    {
-      "id": "opentelemetry",
-      "status": "partial",
-      "sources": [
-        "services/orchestrator/src/services/execution-capsule.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md",
-        "docs/roadmap/observability-provenance.md"
-      ],
-      "limitations": [
-        "A bounded metadata-only OTLP-shaped projection exists; no production OpenTelemetry SDK, exporter queue, or collector integration",
-        "Projection timings are unavailable and represented as zero"
-      ]
-    },
-    {
-      "id": "w3c-context-propagation",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
-        "services/orchestrator/src/services/execution-capsule.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Outbound-only traceparent (no inbound trust); tracestate not propagated; OTLP exporter surface not wired"
-      ]
-    },
-    {
-      "id": "artifact-store",
-      "status": "partial",
-      "sources": [
-        "services/orchestrator/src/entities/artifact.entity.ts",
-        "services/orchestrator/src/entities/artifact-exposure.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270002000-MilestoneTwoArtifactIdentity.ts",
-        "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
-        "services/orchestrator/src/services/artifact-projection.resolver.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/result-inbox.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/services/result-inbox.service.spec.ts",
-        "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
-        "services/orchestrator/src/domain/context-snapshot.spec.ts",
-        "services/orchestrator/src/database/migrations/milestone-two-artifact-identity.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md",
-        "docs/roadmap/observability-provenance.md"
-      ],
-      "limitations": [
-        "Immutable reference identity, producer lineage, bounded attempt projection, and exposure lineage exist; exposure is not proof of URI access or semantic consumption",
-        "No content/blob storage, uploads/downloads, signed URLs, encryption, retention, deletion APIs, or external-byte replay fidelity",
-        "No public/Gateway/frontend artifact read APIs (current APIs are unauthenticated and artifact metadata may be sensitive)",
-        "No historical backfill: authoritative artifact identity begins after the M2 migration",
-        "Artifact database records are immutable references; external bytes are not verified or claimed immutable",
-        "Artifact AgentEvents remain non-authoritative append-only evidence"
-      ]
-    },
-    {
-      "id": "execution-state",
-      "status": "partial",
-      "sources": [
-        "services/orchestrator/src/domain/execution-state.ts",
-        "services/orchestrator/src/services/artifact-projection.resolver.ts",
-        "services/orchestrator/src/entities/artifact-exposure.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
-        "services/orchestrator/src/domain/context-snapshot.ts",
-        "services/orchestrator/src/services/execution-state.service.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/pipeline-validation.service.ts",
-        "services/orchestrator/src/entities/execution.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270003000-MilestoneTwoExecutionState.ts",
-        "services/orchestrator/src/domain/state-writes.ts",
-        "services/orchestrator/src/entities/state-write-evidence.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270005000-MilestoneTwoStateWriteEvidence.ts",
-        "services/orchestrator/src/services/result-inbox.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/execution-state.spec.ts",
-        "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
-        "services/orchestrator/src/domain/context-snapshot.spec.ts",
-        "services/orchestrator/src/services/execution-state.service.spec.ts",
-        "services/orchestrator/src/services/execution.service.spec.ts",
-        "services/orchestrator/src/services/engine.service.spec.ts",
-        "services/orchestrator/src/services/pipeline-validation.service.spec.ts",
-        "services/orchestrator/src/architecture.spec.ts",
-        "services/orchestrator/src/database/migrations/milestone-two-execution-state.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "services/orchestrator/src/domain/state-writes.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Internal durable primitive only: no agent/result mutation authority and no AgentResultV1.statePatch",
-        "Mutation evidence is not full event-sourced state history (no revision table)",
-        "Exposure proves the reference entered committed context, never dispatch success, URI opening, or semantic consumption",
-        "Artifact bytes are never owned, fetched, verified, or claimed immutable",
-        "No public state/artifact/lineage API (current APIs are unauthenticated)",
-        "No memory, RAG, semantic search, or provider prompt construction",
-        "Controlled replay creates a new execution from source input and plan; historical mutable state is not copied",
-        "Patch semantics are top-level key set/delete only; nested merges are future work"
-      ]
-    },
-    {
-      "id": "policy-engine",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/policy.ts",
-        "services/orchestrator/src/services/policy.service.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/plan-proposal.service.ts",
-        "services/orchestrator/src/services/delegation.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/policy.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Trusted configuration uses bounded deterministic exact-match rules, not a general policy language",
-        "Operator/admin control surfaces remain service-level while the external exposure gate is open"
-      ]
-    },
-    {
-      "id": "cli-adapter",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
-      "docs": [
-        "docs/roadmap/README.md"
-      ],
-      "limitations": [
-        "No CLI transport adapter"
-      ]
-    },
-    {
-      "id": "framework-integrations",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
-      "docs": [
-        "docs/roadmap/README.md"
-      ],
-      "limitations": [
-        "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
-      ]
-    },
-    {
-      "id": "durable-worker-outbox",
-      "status": "planned",
-      "sources": [],
-      "tests": [],
-      "docs": [
-        "docs/roadmap/README.md"
-      ],
-      "limitations": [
-        "Worker callback and idempotency records are lost on process restart"
-      ]
-    },
-    {
-      "id": "public-package-release",
-      "status": "blocked",
-      "sources": [],
-      "tests": [],
-      "docs": [
-        "docs/product/identity.md"
-      ],
-      "limitations": [
-        "Blocked by registry, legal, repository, and explicit publication approval gates"
-      ]
-    },
-    {
-      "id": "local-executor-host",
-      "status": "implemented",
-      "sources": [
-        "services/local-executor-host/src/config.ts",
-        "services/local-executor-host/src/supervisor.ts",
-        "services/local-executor-host/src/state.ts",
-        "services/local-executor-host/src/main.ts",
-        "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
-      ],
-      "tests": [
-        "services/local-executor-host/test/config.spec.ts",
-        "services/local-executor-host/test/supervisor.spec.ts",
-        "services/local-executor-host/test/state.spec.ts",
-        "services/local-executor-host/integration/local-executor-host.integration.spec.ts",
-        "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/executors/local-executor-host.md",
-        "docs/architecture/transports/adapter-model.md"
-      ],
-      "limitations": [
-        "Trusted-code-only: no sandbox; operator deployment configuration is the trust boundary",
-        "One canonical result per run; the child cannot emit progress/artifact events",
-        "Remote cancel is not supported (HTTP executor capability stays false); deadline/shutdown kills are the cancel mechanism",
-        "Orphaned children from a crashed host are terminated on restart, never adopted or re-spawned",
-        "Local/operator-only while the external exposure gate is open"
-      ]
-    },
-    {
-      "id": "approvals-waiting",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/approval.ts",
-        "services/orchestrator/src/entities/approval-request.entity.ts",
-        "services/orchestrator/src/services/approval.service.ts",
-        "services/orchestrator/src/database/migrations/1722270008000-MilestoneFourApprovals.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/runtime-recovery.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "No operator/admin approval API surface yet (external exposure gate open); transitions are service-level",
-        "Approval expiry default is 7 days (bounded by config)"
-      ]
-    },
-    {
-      "id": "execution-capsule",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/services/execution-capsule.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Export, replay, comparison, provenance, and telemetry projection are service-level while the external exposure gate is open",
-        "The OTLP-shaped projection is not a wired exporter and has no real timings",
-        "Replay does not claim deterministic model output or verified external artifact bytes"
-      ]
-    },
-    {
-      "id": "supervised-delegation-requests",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/entities/delegation-request.entity.ts",
-        "services/orchestrator/src/entities/delegation-request-conflict.entity.ts",
-        "services/orchestrator/src/services/delegation.service.ts",
-        "services/orchestrator/src/database/migrations/1722270011000-MilestoneSixDelegationRequests.ts",
-        "services/orchestrator/src/database/migrations/1722270013000-RoadmapLineageIntegrity.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Service-level request/decision only; runtimes without a durable pause/resume capability use explicit workflow child work outside a paused attempt",
-        "No public delegation graph/control API while the external exposure gate is open"
-      ]
-    },
-    {
-      "id": "delegation-observed-evidence",
-      "status": "implemented",
-      "sources": [
-        "contracts/schemas/agent-result.v1.schema.json",
-        "services/orchestrator/src/entities/delegation-observation.entity.ts",
-        "services/orchestrator/src/entities/delegation-observation-conflict.entity.ts",
-        "services/orchestrator/src/services/result-inbox.service.ts",
-        "services/orchestrator/src/database/migrations/1722270010000-MilestoneSixDelegationObservations.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Observed evidence remains a runtime assertion and never proves Tenvyr authority or semantic consumption",
-        "Opaque runtime children intentionally create no lineage"
-      ]
-    },
-    {
-      "id": "plan-proposal-policy",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/services/plan-proposal.service.ts",
-        "services/orchestrator/src/services/approval.service.ts",
-        "services/orchestrator/src/domain/policy.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Policy rules match actionType/agents/executors; growth is bounded structurally by candidate validation, not by policy rules"
-      ]
-    },
-    {
-      "id": "planner-trigger",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/services/result-inbox.service.ts",
-        "services/orchestrator/src/services/plan-proposal.service.ts",
-        "services/orchestrator/src/services/pipeline-validation.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Explicit planner-step trigger only; Tenvyr does not implement a general autonomous planning framework"
-      ]
-    },
-    {
-      "id": "plan-proposals",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/entities/plan-proposal.entity.ts",
-        "services/orchestrator/src/services/plan-proposal.service.ts",
-        "services/orchestrator/src/database/migrations/1722270009000-MilestoneFivePlanProposals.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Proposal activation and approval are service-level while the external exposure gate is open"
-      ]
-    },
-    {
-      "id": "plan-patch",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/plan-patch.ts",
-        "services/orchestrator/src/services/pipeline-validation.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/plan-patch.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Patch operations intentionally remain restricted to addStep and replaceUnfrozenStep"
-      ]
-    },
-    {
-      "id": "budget-hierarchy",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/budget.ts",
-        "services/orchestrator/src/services/budget-ledger.service.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/approval.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Adjust is not idempotency-keyed (explicit operator correction)",
-        "Tenant/plan accounts are operator-created; no grant-rotation API beyond adjust"
-      ]
-    },
-    {
-      "id": "policy-decision-boundary",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/policy.ts",
-        "services/orchestrator/src/entities/policy-snapshot.entity.ts",
-        "services/orchestrator/src/entities/policy-decision.entity.ts",
-        "services/orchestrator/src/services/policy.service.ts",
-        "services/orchestrator/src/database/migrations/1722270007000-MilestoneFourPolicy.ts",
-        "services/orchestrator/src/services/execution.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/policy.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Interception is wired at dispatch, PlanPatch activation, and supervised delegation approval",
-        "REQUIRE_APPROVAL produces the durable ApprovalRequest + WAITING flow for dispatch and PlanPatch; supervised delegation uses its explicit operator approval seam",
-        "Rule data is minimal (actionType + exact agent/executor constraints); no numeric/resource constraints yet",
-        "Unlisted action types default to ALLOW (policy is opt-in declarative data)"
-      ]
-    },
-    {
-      "id": "budget-ledger",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/budget.ts",
-        "services/orchestrator/src/entities/budget-account.entity.ts",
-        "services/orchestrator/src/entities/budget-reservation.entity.ts",
-        "services/orchestrator/src/entities/budget-ledger-entry.entity.ts",
-        "services/orchestrator/src/services/budget-ledger.service.ts",
-        "services/orchestrator/src/database/migrations/1722270006000-MilestoneFourBudgetLedger.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/budget.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/control-plane.md"
-      ],
-      "limitations": [
-        "Enforcement is opt-in per pipeline budget declaration; un-budgeted pipelines run unchanged",
-        "Supervised child accounts are linked to parent execution accounts and every child attempt reserve traverses the ancestor chain",
-        "Adjust is not idempotency-keyed (explicit operator correction; chain-propagated since M4-S5)",
-        "Projection is exact below 10,000 entries per account; larger accounts need paging",
-        "Terminal results without usage leave the reservation consumed by default (unknown semantics); only cancellation/failed-dispatch release explicitly"
-      ]
-    },
-    {
-      "id": "single-owner-self-hosted",
-      "status": "implemented",
-      "sources": [
-        "docker-compose.self-hosted.yml",
-        ".env.self-hosted.example",
-        "scripts/self-hosted/preflight.mjs",
-        "scripts/self-hosted/backup.mjs",
-        "scripts/self-hosted/restore.mjs",
-        "scripts/self-hosted/contract.test.mjs",
-        "services/orchestrator/src/services/execution.service.ts"
-      ],
-      "tests": [
-        "scripts/self-hosted/contract.test.mjs",
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "services/orchestrator/src/app.controller.spec.ts"
-      ],
-      "docs": [
-        "docs/operations/self-hosted.md",
-        "docs/operations/self-hosted-runbooks.md"
-      ],
-      "limitations": [
-        "M11 milestone implemented: supported profile + contract, references-only bootstrap/preflight, verified backup/restore with two clean drills, migration-failure rollback proof, readiness health, and runbooks are in place",
-        "Milestone closure is Sol's decision; M11 is READY FOR INDEPENDENT TECH LEAD VERIFICATION; M8-M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
-        "External Production Exposure Gate stays OPEN; no public bindings by default; no HA/Kubernetes/sandbox claims",
-        "No prior-version upgrade drill (no published prior version); upgrade path documented, migration machinery proven",
-        "M11 closure hardening (implementer): numeric semantic version comparison (major/minor/patch, no JS array relational traps); upgrade propagates TENVYR_VERSION into the resolved and running deployment with fail-closed target verification BEFORE mutation and AFTER recreate; deploy.env deployed-version metadata is persisted only after proven success; restore explicitly separates --drill (isolated verification database; active authority never touched) from --promote (verify then swap with rollback, bounded pre-restore safety copy, restart, readiness, invariants, and a post-recovery write proof through the app API); migration-failure runbook identifies the executable recovery path",
-        "M11 closure hardening 2 (implementer): ONE documented deployment identity model — TENVYR_VERSION is the releaseVersion (vMAJOR.MINOR.PATCH, must name a real git tag) and TENVYR_SOURCE_REVISION is the immutable full commit SHA; a source-build upgrade PROVES the checkout is the exact clean release commit (tag == HEAD == clean tree), bakes the proven SHA into the images (ARG/ENV TENVYR_SOURCE_REVISION), verifies it on the RUNNING containers after recreate (an image tag alone is never sufficient proof), and persists both values in deploy.env only after success; missing release tags fail closed with the documented prerequisite; backups REQUIRE source provenance and capture bounded snapshot anchors (migration ledger fingerprint, table inventory/count fingerprint, plan revision hash-ledger fingerprint, execution provenance anchor, terminal Capsule/export anchor) into the manifest, which is the RESTORE AUTHORITY — restore recomputes anchors on the restored snapshot and compares against the MANIFEST, never the current active database (drift vs current is informational only), making legitimate historical recovery possible after the live database has advanced; disposable-infrastructure recovery E2E (state A -> backup -> live B -> drill A PASS -> promote A -> identity A -> readiness -> new write) in scripts/self-hosted/recovery.test.mjs",
-        "M11 closure hardening 3 (implementer): VERIFIED backup invariant — backup.mjs reports PASS only after the dump was restored into an isolated verification database (tenvyr_backup_verify) and ALL manifest anchors were computed FROM THE RESTORED DUMP (never the live DB) and proven structurally valid; a failed verification removes the staging artifact and never labels it a backup; the backup inventory is the complete authoritative 31-table entity/schema set (pipelines and plan_proposals added; regression compares anchors.mjs TABLES against the entity and migration inventories so a future authority table cannot be silently omitted); restore --promote now verifies (checksum + manifest + deep manifest-relative integrity) BEFORE quiescing any writer, and the authority swap is an explicit state machine with deterministic automatic rollback (tenvyr -> tenvyr_pre_restore, tenvyr_restore -> tenvyr; on second-rename failure tenvyr_pre_restore -> tenvyr is attempted immediately; rollback failure preserves every copy and prints the exact observed state plus bounded operator recovery commands); the pre-recovery safety copy is kept until ALL post-promotion gates pass (start, orchestrator readiness, gateway readiness, invariants, Capsule/provenance reconstruction, post-recovery write); any gate failure automatically rolls back (restored active -> bounded tenvyr_failed_promotion; safety -> active; restart; readiness; invariants; failure, never PASS); quiesce partial failure restarts both services; bounded one-shot TENVYR_RESTORE_FAULT test hooks (second-rename/rollback-rename/post-gate-readiness) drive real fault-injection E2E tests (concurrent-write backup consistency, invalid-backup promotion safety, rename-failure rollback, rollback-failure recovery commands, post-promotion gate rollback); upgrade.mjs refuses build/up mutation when the verified backup fails; hosted CI adds a real-PostgreSQL job running the integration suite TWICE on reinitialized state with a no-silent-skip guard (scripts/assert-jest-run.mjs), a required self-hosted contract gate, and a required disposable recovery E2E job",
-        "M11 closure hardening 4 (implementer): CRASH-RECOVERABLE recovery — restore --promote writes a durable phase journal (backups/.recovery-journal.json) BEFORE every destructive database step (verify-done -> quiescing -> swap-active-to-safety -> swap-verified-to-active -> post-gates -> complete); after ANY process death the next recovery invocation (drill, promote, or the new --reconcile mode) reconciles the OBSERVED database state BEFORE any destructive DROP/rename — tenvyr_pre_restore is only ever renamed back (never blindly dropped because a new promote started), an unproven candidate is preserved under bounded tenvyr_failed_promotion, interrupted promotions abort with retry-required, and a durable 'complete' marker (written before PASS) distinguishes a completed recovery's retained safety copy from an interrupted one; real SIGKILL fault hooks (crash-after-first-rename, crash-after-promotion) drive the crash E2Es, and the pure planReconciliation decision table is contract-tested; MAINTENANCE MUTUAL EXCLUSION — every backup/restore acquires an exclusive crash-release process-lifetime lock (backups/.maintenance.lock, dead-owner-PID stale reclaim); concurrent operations fail fast with 'maintenance operation already active' (no interleaving of tenvyr_backup_verify/staging paths/authority-swap names), and upgrade owns the lock with the backup child inheriting via TENVYR_MAINTENANCE_OWNED=1 (no self-deadlock); concurrent-backup and concurrent-promotion E2Es prove exactly one operation may mutate; MANIFEST CONTRACT FAILS CLOSED — validateManifestContract enforces the checksum triple (dump SHA-256 == sidecar == manifest.checksum; any mismatch fails), verified marker, version, sha256 algorithm, 40-hex sourceRevision, non-null well-formed required structural anchors (optional anchors stay nullable), and the canonical 31-table inventory, all pre-quiesce; operator recovery instructions are re-audited to be valid for the exact observed DB-name state (never a blind safety->active while an active DB exists); docs describe the actual crash-recovery and mutual-exclusion semantics",
-        "M11 closure hardening 5 (implementer): AUTHENTICATED MAINTENANCE INHERITANCE — the lock record carries a random operation token; upgrade always acquires as OWNER (allowInheritance:false; a stray token in the shell can never turn it into an inheritor) and passes the token to its REAL backup child via TENVYR_MAINTENANCE_TOKEN; the child's inherited claim is authenticated against the held lock (token equality AND direct parent PID == lock owner PID); forged claims (wrong token or a non-owner parent) are DENIED and fail hard, and an inherited child never releases the parent's lock — the previous forgeable TENVYR_MAINTENANCE_OWNED=1 bypass is gone and the real upgrade->real backup path no longer rejects its own lock (regressions use the REAL lock code and REAL backup.mjs child); FAIL-SAFE RECOVERY JOURNAL — writes are atomic + durable (temp file -> fsync -> rename -> parent-dir fsync where supported), never truncating the only record in place, and readJournalState() reports the evidence state (valid/absent/malformed); reconciliation is CONSERVATIVE when the evidence is unusable: original-only-under-safety (active missing, safety exists) is never followed by a path that can DROP the safety copy (restore-original or block), the ambiguous active+safety-without-usable-journal layout FAILS CLOSED preserving both copies with bounded instructions, no-active+no-safety blocks, tenvyr_failed_promotion is never auto-dropped without valid journal evidence, and the durable 'complete' marker persists for as long as the retained safety copy exists (a --drill never erases completion evidence); REQUIRED MANIFEST CHECKSUM — manifest.checksum must exist, be exactly 64 lowercase hex, and equal the computed dump SHA-256 (the .sha256 sidecar must agree when present); missing/null/malformed/non-lowercase checksums fail closed pre-quiesce",
-        "M11 closure hardening 6 (implementer): CRASH-LINEARIZABLE MAINTENANCE LOCK — the verified-backup operation is an exported callable (runVerifiedBackup) invoked IN THE LOCK OWNER'S PROCESS: upgrade no longer spawns a backup child, so nothing capable of using the shared maintenance resources can survive the owner's death and overlap a new owner (the TENVYR_MAINTENANCE_TOKEN inheritance mechanism is entirely removed); stale-lock reclaim is a single atomic RENAME of the lock file to a tombstone followed by a verify-and-restore of the tombstone record — a contender that races a LIVE owner's fresh lock restores it immediately and yields, an unreadable owner record FAILS CLOSED with operator instructions, and two simultaneous reclaimers can never both become owner (no rm-then-create TOCTOU; regression runs concurrent reclaim rounds with overlapping-hold-window detection + an owner-SIGKILL regression proving no backup.mjs process survives); RECOVERY E2E ISOLATION BY CONSTRUCTION — the suite runs under the unique tenvyr-recovery-e2e project with unique container names, PostgreSQL volume, host ports, and its own disposable deploy env (backups/.recovery-e2e-deploy.env); the base compose parameterizes container names/ports/volume (TENVYR_SELF_HOSTED_PREFIX, TENVYR_POSTGRES_PORT, TENVYR_ORCHESTRATOR_PORT, TENVYR_GATEWAY_PORT, TENVYR_POSTGRES_VOLUME — production defaults unchanged); the safety guard inspects docker ps -a (RUNNING OR STOPPED) + the real deployment volume + leftover E2E stacks BEFORE creating anything, teardown is gated by disposableStackCreated and only ever targets the disposable project (fake-docker regressions prove ZERO compose-down/volume-delete actions on guard failure, incl. the stopped-production-container and production-volume scenarios), and CI's always() cleanup targets only tenvyr-recovery-e2e; AVAILABILITY-RESTORING RECONCILE — the quiescing marker is written BEFORE the quiesce attempt (meaning: writers may be partially or fully stopped, the DB authority is still the original); planReconciliation maps quiescing/swap-active-to-safety to a new restart-original action (restart + readiness + invariants + abort retry-required) and the mid-reconciliation windows (rollback renames done, restart pending) to proceed-with-restartServices; journal clears were reordered to AFTER restart+prove so a crash in the window is finished by the next invocation; --reconcile after a SIGKILL at/after quiesce or after rollback renames restarts the original deployment and reports the interrupted operation — never 'no interrupted promotion detected' while the app is offline (E2E G1/G2); COLLISION-SAFE FAILED-PROMOTION — candidates are preserved under non-colliding bounded names (tenvyr_failed_promotion, tenvyr_failed_promotion_1, _2, ...): an existing preserved candidate is never overwritten, no rollback rename may target an existing database, printUnrecoverableState inspects FAILED_PROMOTION_DB and prints the free name for the exact observed state, and the rollback cleans up only the name it created (E2E F9: manual ambiguous-state repair -> preserved candidate + reconciled journal -> later post-promotion gate failure rolls back with a non-colliding preserve and the original authority becomes healthy)",
-        "Product Phase 1 (implementer): REAL SUPERVISED CODING TEAM DOGFOOD — WORKSPACE: first-class WorkspaceSnapshotV1 + workspaces table + bounded git identity capture (root/branch/HEAD/dirty via bounded git probes; non-git dirs are valid best-effort snapshots; never reads credentials) + run freeze (coordination_runs.workspace jsonb + acceptanceEvidence jsonb, migration 1722270018000); the frozen snapshot is injected into EVERY worker step input envelope (compileIterationPlanPatch) and the Verifier context (VerifierContextV1.workspace), and appears in the Capsule coordination record and the Workbench projection + UI; GUIDED RUNTIME ONBOARDING: workbench/onboarding/:kind detect-on-PATH -> version probe -> auth probe (documented exit-code contracts only; codex auth = the primary auth-status probe; opencode provider auth runtime-owned and not probed) + one-click workbench/commands/onboard-runtime (detect -> create from the documented template -> test); TEAM TEMPLATES: software-engineering + code-review (roles, bounded defaults, goal framing — Planner still proposes the TaskBatch, Tenvyr still authorizes it); ACCEPTANCE EVIDENCE: bounded optional test/build/lint/typecheck + required artifacts (run METADATA only — never executed by the orchestrator); WORKBENCH UX (gateway workbench-page.html): onboarding cards (Installed/Version/Auth/Connect/Test), workspace select + path + template prefill + evidence fields in the launch form, run summary block (workspace snapshot, acceptance evidence, iteration history with verifier decisions); DETERMINISTIC DOGFOOD: phase1-team-dogfood Postgres spec drives the REAL Workbench command path (startTeamRun with a real disposable git workspace + acceptance evidence + deterministic agents on the @tenvyr/worker SDK) -> Planner -> workers -> fan-in -> Verifier CONTINUE -> automatic iteration 2 -> ACCEPT, asserting the frozen workspace in worker inputs, the verifier context, the Capsule, and the projection; no paid credentials in CI",
-        "M11 FINAL closure (implementer): FAIL-CLOSED STALE-OWNER MAINTENANCE POLICY — a maintenance lock whose recorded owner PID is dead is NEVER auto-reclaimed, because a dead JS owner does NOT prove its external maintenance children (docker exec / pg_dump / pg_restore / psql) are dead: acquisition DENIES with bounded operator instructions (confirm no maintenance process, confirm no docker/DB descendant, inspect the journal, then clear explicitly, re-run --reconcile); the explicit `maintenance.mjs --clear-stale-lock` CLI removes the lock ONLY when the owner is provably dead (ESRCH-only) and refuses a live or unreadable owner; the atomic-rename tombstone reclaim and every auto-reclaim claim are REMOVED (the 3-party rename-overwrite race class no longer exists by construction); the process-tree regression drives the REAL backup against a FAKE long-running docker executable that records its PID and survives the owner's SIGKILL — a second REAL acquisition is DENIED (stale-maintenance-state) while the child lives, and after terminating the child + the explicit clear the lock is acquired again (live-owner contention stays fail-fast; the upgrade-SIGKILL regression now proves DENY-until-clear); E2E MAINTENANCE-STATE ISOLATION — all maintenance/backup state (lock, recovery journal, tombstones, dumps, manifests, checksums, deploy env) is relocatable via TENVYR_MAINTENANCE_DIR (production default <repo>/backups); the recovery E2E uses a UNIQUE PER-RUN directory backups/recovery-e2e-<run-id>/ with its own lock/journal/dumps/deploy env + a per-run project/containers/volume (project-name marker), so two simultaneous E2E invocations can never tear down or mutate each other's state; the safety guard runs FIRST — before ANY file creation — inspecting docker ps -a (running or stopped), the production volume, leftover E2E stacks, and recovery-e2e-* directories; the teardown removes ONLY the suite's own directory and project; the fake-docker guard regression plants production-like lock/journal SENTINELS and asserts they survive BYTE-IDENTICAL after a refused suite (production-container and production-volume scenarios); CI always() cleanup reads each E2E directory's project-name marker and targets only E2E-owned state (a no-op when no E2E directory exists)"
-      ]
-    },
-    {
-      "id": "operator-workbench-projections",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/services/workbench-projection.service.ts",
-        "services/orchestrator/src/workbench.controller.ts",
-        "services/orchestrator/src/services/workbench-command.service.ts",
-        "services/orchestrator/src/workbench-commands.controller.ts",
-        "services/orchestrator/src/entities/operator-action.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270016000-MilestoneTenOperatorActions.ts",
-        "services/gateway/src/app.controller.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/services/workbench-projection.service.spec.ts",
-        "services/orchestrator/src/services/workbench-command.service.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/workbench.md"
-      ],
-      "limitations": [
-        "M10 milestone implemented: bounded read projections, idempotent command surface with audit, accessible Workbench shell, inspection, deterministic offline demo, and full VERIFY (incl. live showcase smoke) are in place",
-        "Milestone closure is Sol's decision; M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
-        "External Production Exposure Gate stays OPEN: the workbench surface is loopback/private trusted-operator only",
-        "Design-partner interviews: 0 this cycle; no discovery-gated program is promoted without real evidence",
-        "M10 closure hardening (implementer): Runtime Connection create/revise/test/revoke run through the audited idempotent command layer — operator-action evidence commits in the same transaction as the authority mutation; same idempotency key with a conflicting payload is rejected (IDEMPOTENCY_CONFLICT); repeated revoke commands produce one effective transition; gateway proxies and the Workbench page send idempotency keys"
-      ]
-    },
-    {
-      "id": "coordinator-loop-domain",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/coordination.ts",
-        "services/orchestrator/src/services/runtime-coordination.service.ts",
-        "services/orchestrator/src/entities/coordination-run.entity.ts",
-        "services/orchestrator/src/entities/coordination-iteration.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270015000-MilestoneNineCoordination.ts",
-        "services/orchestrator/src/database/migrations/1722270017000-CoordinationApprovalResume.ts",
-        "services/orchestrator/src/services/delegation.service.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/engine.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/coordination.spec.ts",
-        "services/orchestrator/src/services/runtime-coordination.service.spec.ts",
-        "services/orchestrator/src/database/migrations/milestone-nine-coordination.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "services/orchestrator/src/services/engine.service.spec.ts",
-        "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/coordination-loop.md"
-      ],
-      "limitations": [
-        "M9 milestone implemented: pure semantics, durable run/iteration authority, Planner-to-batch over PlanPatch, fan-out/fan-in/decision loop, authority integration, and the deterministic real-HTTP team example are in place",
-        "Closure hardening: executor allowlist enforced at batch admission (agent-kind tasks resolve to `agent:<name>`, connection-kind to the revision's executorId); connection-kind Planner/Verifier routing with claimability rechecks; pending PlanPatch proposal identity persisted and resumed exactly once (no approval storms); coordinator-owned failures terminalize run AND execution atomically; run-level delegation depth enforced by chain walk",
-        "Milestone closure is Sol's decision; M9 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
-        "Connection-kind worker selectors are recorded on compiled steps, enforced at batch admission, and the typed selection freezes the connection revision at attempt claim; dispatch-time enforcement beyond admission is the existing M8 mechanism",
-        "M9-S8 closure hardening (implementer): run-creation authority parity (startRun/startRunWithManager enforce role connection claims + executor allowlist inside the create transaction; the manager path can no longer bypass them); concurrent equivalent starts converge on exactly one run (execution-row lock + unique-violation re-read); exact iteration identity at batch admission (current iteration only); Planner attempt ownership gate (same execution/iteration/Coordinator-owned step, terminal SUCCESS, frozen plan revision); strict baseRevision (proposal base == Planner frozen revision; active revision must still equal it, else deterministic STALE with no worker activation and no silent rebase); the Planner step input carries the frozen plan revision so truthful planners can declare it",
-        "M9-S8 closure hardening 2 (implementer): EXACT TaskBatch iteration identity — the untrusted proposal's embedded iterationNumber must equal run.currentIterationNumber (older and future proposal iterations are rejected with the same ITERATION_NOT_FOUND evidence as the caller-declared identity, before any worker/verifier materialization or plan revision creation; Postgres regressions for current=2/input=2 with proposal 1 and 3); the precheck/propose silent-rebase race is closed by acquiring the EXECUTION row lock BEFORE the authoritative active-revision check and holding it through proposal creation and activation — an authorized PlanPatch activating N+1 can never interleave between the check and the base-revision pin (T1 linearizes first with base N preserved and T2 becomes STALE, or T2 wins first and T1 is deterministically STALE; real-Postgres race tests with explicit pg_stat_activity lock-wait barriers prove both linearizations)"
-      ]
-    },
-    {
-      "id": "executor-descriptor",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/executors/executor-descriptor.ts",
-        "services/orchestrator/src/agent-adapters/agent-adapter.types.ts",
-        "services/orchestrator/src/agent-adapters/agent-adapter.router.ts",
-        "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
-        "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
-        "services/orchestrator/src/services/dispatch-outbox.service.ts",
-        "services/orchestrator/src/services/engine.service.ts",
-        "services/orchestrator/src/services/execution.service.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/executors/executor-descriptor.spec.ts",
-        "services/orchestrator/src/agent-adapters/agent-adapter.router.spec.ts",
-        "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
-        "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
-        "services/orchestrator/src/services/engine.service.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/transports/adapter-model.md"
-      ],
-      "limitations": [
-        "Executor kinds cover Kafka/HTTP transports plus the trusted-code-only local host; Codex/Claude stay inside runtime applications and A2A remains deferred",
-        "Closure hardening: LocalExecutorProfileV1 freezes secret-free CLI execution data (command/argv/cwd/env REFERENCES — never values) into the attempt snapshot at claim for connection-selected steps",
-        "Capabilities are conservative and negotiated per configured executor; remote cancellation remains best-effort where supported",
-        "Cancel notification is best-effort post-commit evidence; it never guarantees the runtime stopped opaque work",
-        "No public executor administration API while the external exposure gate is open",
-        "Legacy { agent } snapshots keep live-configuration routing by design (never rewritten)"
-      ]
-    },
-    {
-      "id": "runtime-connection-domain",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/executors/runtime-connection.ts",
-        "services/orchestrator/src/executors/runtime-profiles.ts",
-        "services/orchestrator/src/services/runtime-connection.service.ts",
-        "services/orchestrator/src/services/cli-probe.ts",
-        "services/orchestrator/src/entities/runtime-connection.entity.ts",
-        "services/orchestrator/src/entities/connection-revision.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270014000-MilestoneEightConnections.ts",
-        "services/orchestrator/src/executors/executor-descriptor.ts",
-        "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/dispatch-outbox.service.ts",
-        "services/orchestrator/src/connections.controller.ts",
-        "services/gateway/src/app.controller.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/executors/runtime-connection.spec.ts",
-        "services/orchestrator/src/executors/runtime-profiles.spec.ts",
-        "services/orchestrator/src/services/runtime-connection.service.spec.ts",
-        "services/orchestrator/src/services/cli-probe.spec.ts",
-        "services/orchestrator/src/connections.controller.spec.ts",
-        "services/orchestrator/src/database/migrations/milestone-eight-connections.spec.ts",
-        "services/orchestrator/src/database/postgres.integration.spec.ts",
-        "services/orchestrator/src/m8-cli-connections.e2e.spec.ts",
-        "services/gateway/src/app.controller.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/executors/runtime-connections.md",
-        "docs/operations/configuration.md",
-        "docs/plans/active/tenvyr-productization-roadmap/RESEARCH_REGISTER.md"
-      ],
-      "limitations": [
-        "Milestone closure is Sol's decision; implementer verification is complete (READY FOR INDEPENDENT SOL VERIFICATION)",
-        "Closure hardening: typed step selection (`metadata.tenvyrConnectionId`) beats static transport config at claim and freezes the connection revision plus a secret-free local CLI profile (command/argv/cwd/env references) in the attempt snapshot; create/revise API surface exists (POST/PATCH /connections with gateway proxies); testConnection persists conditionally under row lock (REVOKED stays terminal, stale probes yield a superseded receipt); revise resets the card to DRAFT with cleared tested metadata",
-        "Connection administration is local/internal behind the open External Production Exposure Gate; no public admin API claim",
-        "Installed Claude Code (2.1.97) predates the template pin (2.1.228); detected versions are evidence, pins are operator-tested versions",
-        "Probe concurrency is limited per connection (in-flight dedupe); a global probe semaphore would matter for multi-replica deployments",
-        "Live runtime gates are opt-in and non-billable; deterministic fake-CLI conformance always runs",
-        "Connection health status is projection, not dispatch authority; only REVOKED denies claims and pending delivery",
-        "M8 closure hardening (implementer): claimRevision is linearizable under the authority-row lock (manager-aware claimRevisionWithManager for caller-owned transactions); a revoke committed before the claim lock denies the claim, a claim that locks first returns its immutable frozen revision and the later revoke applies at dispatch; Python Worker schema re-synced to canonical (AgentInvocationV1 optional connection identity) with both acceptance paths proven"
-      ]
-    },
-    {
-      "id": "runtime-target-model-selection",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/domain/coordination.ts",
-        "services/orchestrator/src/executors/executor-descriptor.ts",
-        "services/orchestrator/src/services/execution.service.ts",
-        "services/orchestrator/src/services/runtime-coordination.service.ts",
-        "services/local-executor-host/src/supervisor.ts",
-        "services/local-executor-host/src/main.ts",
-        "packages/contracts/src/types.ts",
-        "contracts/schemas/agent-invocation.v1.schema.json"
-      ],
-      "tests": [
-        "services/orchestrator/src/domain/coordination-p2-model-targets.spec.ts",
-        "services/orchestrator/src/executors/executor-descriptor.spec.ts",
-        "services/orchestrator/src/executors/runtime-profiles.spec.ts",
-        "services/orchestrator/src/phase2-model-targets-dogfood.spec.ts",
-        "services/local-executor-host/test/config.spec.ts",
-        "services/local-executor-host/test/supervisor.spec.ts"
-      ],
-      "docs": [
-        "docs/architecture/model-sources.md",
-        "docs/architecture/executors/runtime-connections.md"
-      ],
-      "limitations": [
-        "Runtime Target models are frozen data identifiers; external runtimes/routers may resolve them differently and may implement their own fallback (outside Tenvyr's model-selection authority)",
-        "observedModelId is recorded only when the runtime/worker itself reports it inside the bounded structured result; Tenvyr never fabricates an observed model",
-        "A Test Runtime Target (bounded end-to-end invocation) is operator-explicit and out of scope for this slice"
-      ]
-    },
-    {
-      "id": "model-sources",
-      "status": "implemented",
-      "sources": [
-        "services/orchestrator/src/executors/model-source.ts",
-        "services/orchestrator/src/services/model-source.service.ts",
-        "services/orchestrator/src/services/model-discovery.service.ts",
-        "services/orchestrator/src/entities/model-source.entity.ts",
-        "services/orchestrator/src/database/migrations/1722270019000-ModelSources.ts",
-        "services/orchestrator/src/model-sources.controller.ts",
-        "services/gateway/src/app.controller.ts"
-      ],
-      "tests": [
-        "services/orchestrator/src/model-source-p2.spec.ts",
-        "scripts/self-hosted/contract.test.mjs"
-      ],
-      "docs": [
-        "docs/architecture/model-sources.md"
-      ],
-      "limitations": [
-        "Catalogs are bounded on-demand projections, never persisted as authority; modelCount is projection metadata of the last refresh",
-        "9Router integration is optional and reads only the OpenAI-compatible /models catalog; Tenvyr is not a router and never sends inference requests through sources",
-        "External Production Exposure Gate stays open: model sources are a single-owner operator feature (SSRF threat documented)"
-      ]
-    }
-  ]
+ "version": 1,
+ "capabilities": [
+  {
+   "id": "contracts-v1",
+   "status": "implemented",
+   "sources": [
+    "contracts/schemas",
+    "packages/contracts/src"
+   ],
+   "tests": [
+    "packages/contracts/test",
+    "contracts/conformance"
+   ],
+   "docs": [
+    "docs/architecture/contracts/agent-protocol-v1.md",
+    "docs/architecture/contracts/json-interoperability.md"
+   ],
+   "limitations": [
+    "Protocol evolution beyond schemaVersion 1 is not implemented"
+   ]
+  },
+  {
+   "id": "kafka-agent-adapter",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
+    "services/orchestrator/src/services/kafka.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
+    "services/orchestrator/src/services/kafka.service.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/transports/kafka-runtime-v1.md"
+   ],
+   "limitations": [
+    "Kafka v1 topics and consumer identities remain compatibility identifiers"
+   ]
+  },
+  {
+   "id": "http-agent-adapter",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/agent-adapters/http-agent.adapter.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
+    "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/transports/http-agent-adapter-v1.md"
+   ],
+   "limitations": [
+    "Callback replay protection and dispatch state are process-local"
+   ]
+  },
+  {
+   "id": "typescript-worker-sdk",
+   "status": "implemented",
+   "sources": [
+    "packages/worker/src"
+   ],
+   "tests": [
+    "packages/worker/test"
+   ],
+   "docs": [
+    "docs/architecture/workers/typescript-worker-sdk.md"
+   ],
+   "limitations": [
+    "Queue, idempotency, and callback state are process-local"
+   ]
+  },
+  {
+   "id": "python-worker-sdk",
+   "status": "implemented",
+   "sources": [
+    "sdks/python-worker/src/tenvyr_worker"
+   ],
+   "tests": [
+    "sdks/python-worker/tests"
+   ],
+   "docs": [
+    "docs/architecture/workers/python-worker-sdk.md"
+   ],
+   "limitations": [
+    "Queue, idempotency, and callback state are process-local",
+    "Thread cancellation is cooperative"
+   ]
+  },
+  {
+   "id": "json-numeric-interoperability",
+   "status": "implemented",
+   "sources": [
+    "packages/contracts/src/validation.ts",
+    "sdks/python-worker/src/tenvyr_worker/_protocol/json_value.py"
+   ],
+   "tests": [
+    "packages/contracts/test/json-numbers.spec.ts",
+    "sdks/python-worker/tests/test_schema_protocol.py"
+   ],
+   "docs": [
+    "docs/architecture/contracts/json-interoperability.md"
+   ],
+   "limitations": [
+    "Exact cross-language decimal equality is not guaranteed for non-integer floats"
+   ]
+  },
+  {
+   "id": "gateway",
+   "status": "implemented",
+   "sources": [
+    "services/gateway/src"
+   ],
+   "tests": [
+    "services/gateway/src/app.controller.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Thin HTTP and WebSocket relay; no production agent-memory API",
+    "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
+   ]
+  },
+  {
+   "id": "orchestrator-pipeline-engine",
+   "status": "partial",
+   "sources": [
+    "services/orchestrator/src/services",
+    "services/orchestrator/src/entities",
+    "services/orchestrator/src/database/data-source.ts",
+    "services/orchestrator/src/database/migrations"
+   ],
+   "tests": [
+    "services/orchestrator/src/services/engine.service.spec.ts",
+    "services/orchestrator/src/services/agent-result.service.spec.ts",
+    "services/orchestrator/src/services/result-inbox.service.spec.ts",
+    "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
+    "services/orchestrator/src/services/runtime-recovery.service.spec.ts",
+    "services/orchestrator/src/services/pipeline-validation.service.spec.ts",
+    "services/orchestrator/src/services/execution.service.spec.ts",
+    "services/orchestrator/src/app.controller.spec.ts",
+    "services/orchestrator/src/database/data-source.spec.ts",
+    "services/orchestrator/src/database/migrations/milestone-zero-foundation.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Execution plan snapshots and attempt history are durable",
+    "Logical steps materialize unfrozen (PENDING, frozenSpecHash/frozenAt null) and freeze only when a claim or gate decision becomes authoritative; engine-level reconcileExecution is the single idempotent autonomous progression path and resumeAfterResult is a compatibility alias",
+    "Targeted dispatchAttempt(stepAttemptId) gives claim-to-dispatch affinity; dispatchNext/recover() is the global background drain with per-record retryable isolation and a bounded batch; terminal dispatch failures are reconciled against the execution that actually owns the attempt",
+    "Legacy migration backfills StepAttempts only from persisted evidence (COMPLETED->SUCCESS, FAILED->FAILED, CANCELLED->CANCELLED, RUNNING->RUNNING); never-attempted/ambiguous rows stay attempt-free and no invalid status is ever written; overwritten legacy retry history is documented as non-reconstructable",
+    "Real-PostgreSQL integration coverage (concurrency, affinity, fairness, legacy-schema adoption) runs only when TEST_DATABASE_URL is provided",
+    "AgentEvent/watchdog persistence remains outside Milestone 0"
+   ]
+  },
+  {
+   "id": "agent-events-supervision",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/services/agent-event.service.ts",
+    "services/orchestrator/src/services/supervision.service.ts",
+    "services/orchestrator/src/services/supervision-config.service.ts",
+    "services/orchestrator/src/database/migrations/1722270001000-MilestoneOneAgentEvents.ts",
+    "packages/worker/src/events/event-emitter.ts",
+    "sdks/python-worker/src/tenvyr_worker/_runtime/worker.py"
+   ],
+   "tests": [
+    "services/orchestrator/src/services/agent-event.service.spec.ts",
+    "services/orchestrator/src/services/supervision.service.spec.ts",
+    "services/orchestrator/src/services/supervision-config.service.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "packages/worker/test/events.spec.ts",
+    "sdks/python-worker/tests/test_events.py"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md",
+    "docs/architecture/contracts/agent-protocol-v1.md"
+   ],
+   "limitations": [
+    "Heartbeat supervision applies only to explicitly configured agents; agents without expectations are never failed",
+    "Worker-local event delivery is not durable; only Orchestrator-accepted events become durable PostgreSQL evidence",
+    "AgentEvents are evidence, not authority: they can never terminalize an attempt or change a step outcome",
+    "API and Gateway webhook endpoints are unauthenticated by design in Milestone 0; authentication is an explicit future security requirement before externally exposed production deployment or auth milestones"
+   ]
+  },
+  {
+   "id": "java-agent-runner",
+   "status": "implemented",
+   "sources": [
+    "services/agent-runner/src/main/java"
+   ],
+   "tests": [
+    "services/agent-runner/src/test/java"
+   ],
+   "docs": [
+    "docs/architecture/agents-and-runners.md",
+    "docs/showcase/using-model-providers.md"
+   ],
+   "limitations": [
+    "Provider HTTP is unit-tested with mocks; live APIs are not called in CI",
+    "Token usage is estimated and labeled usageSource=estimated"
+   ]
+  },
+  {
+   "id": "code-reviewer-agent",
+   "status": "implemented",
+   "sources": [
+    "services/agent-code-reviewer/src"
+   ],
+   "tests": [
+    "services/agent-code-reviewer/src/app.controller.spec.ts",
+    "services/agent-code-reviewer/src/kafka.service.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/agents-and-runners.md"
+   ],
+   "limitations": [
+    "Kafka-specialized service; not a general framework integration"
+   ]
+  },
+  {
+   "id": "observability-agent",
+   "status": "implemented",
+   "sources": [
+    "services/agent-observability/src"
+   ],
+   "tests": [
+    "services/agent-observability/src/app.controller.spec.ts",
+    "services/agent-observability/src/kafka.service.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/agents-and-runners.md"
+   ],
+   "limitations": [
+    "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
+   ]
+  },
+  {
+   "id": "frontend-dashboard",
+   "status": "implemented",
+   "sources": [
+    "frontend/src/app",
+    "frontend/src/components",
+    "frontend/src/lib/tenvyr-api"
+   ],
+   "tests": [
+    "frontend/src/app/dashboard/safe-preview.test.mjs",
+    "frontend/src/lib/tenvyr-api/client.test.mjs"
+   ],
+   "docs": [
+    "docs/architecture/workbench.md",
+    "docs/architecture/overview.md",
+    "docs/user-manual.md",
+    "docs/showcase/demo-guide.md"
+   ],
+   "limitations": [
+    "Next.js operator workbench on port 4000 is canonical product UI; safe-preview logic and API client layers have unit test suites; UI build verified in production pipeline"
+   ]
+  },
+  {
+   "id": "setup-readiness-check",
+   "status": "implemented",
+   "sources": [
+    "scripts/setup-check.mjs"
+   ],
+   "tests": [
+    "scripts/setup-check.mjs"
+   ],
+   "docs": [
+    "docs/operations/local-development.md"
+   ],
+   "limitations": [
+    "Reports machine state and actions but does not install or reconfigure prerequisites"
+   ]
+  },
+  {
+   "id": "offline-showcase",
+   "status": "implemented",
+   "sources": [
+    "docker-compose.showcase.yml",
+    "scripts/smoke-e2e.mjs",
+    "services/orchestrator/Dockerfile",
+    "services/orchestrator/tsconfig.json",
+    "services/agent-code-reviewer/Dockerfile",
+    "services/agent-observability/Dockerfile"
+   ],
+   "tests": [
+    "scripts/setup-check.test.mjs",
+    "scripts/smoke-e2e.test.mjs"
+   ],
+   "docs": [
+    "docs/showcase/demo-guide.md",
+    "docs/showcase/case-study.md"
+   ],
+   "limitations": [
+    "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
+    "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
+    "Final release requires a successful Docker-backed smoke run on the exact merged commit"
+   ]
+  },
+  {
+   "id": "package-verification",
+   "status": "implemented",
+   "sources": [
+    "scripts/verify-package-packs.mjs",
+    "scripts/verify-python-worker-package.py"
+   ],
+   "tests": [
+    "scripts/verify-package-packs.mjs",
+    "scripts/verify-python-worker-package.py"
+   ],
+   "docs": [
+    "docs/operations/package-verification.md"
+   ],
+   "limitations": [
+    "Verification is local/private and does not authorize publication"
+   ]
+  },
+  {
+   "id": "identity-migration",
+   "status": "implemented",
+   "sources": [
+    "LICENSE",
+    "scripts/verify-product-identity.mjs",
+    "packages/contracts/package.json",
+    "packages/worker/package.json",
+    "sdks/python-worker/pyproject.toml"
+   ],
+   "tests": [
+    "scripts/verify-product-identity.test.mjs",
+    "scripts/verify-package-packs.mjs",
+    "scripts/verify-python-worker-package.py"
+   ],
+   "docs": [
+    "docs/product/identity.md"
+   ],
+   "limitations": [
+    "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
+   ]
+  },
+  {
+   "id": "opentelemetry",
+   "status": "partial",
+   "sources": [
+    "services/orchestrator/src/services/execution-capsule.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md",
+    "docs/roadmap/observability-provenance.md"
+   ],
+   "limitations": [
+    "A bounded metadata-only OTLP-shaped projection exists; no production OpenTelemetry SDK, exporter queue, or collector integration",
+    "Projection timings are unavailable and represented as zero"
+   ]
+  },
+  {
+   "id": "w3c-context-propagation",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
+    "services/orchestrator/src/services/execution-capsule.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Outbound-only traceparent (no inbound trust); tracestate not propagated; OTLP exporter surface not wired"
+   ]
+  },
+  {
+   "id": "artifact-store",
+   "status": "partial",
+   "sources": [
+    "services/orchestrator/src/entities/artifact.entity.ts",
+    "services/orchestrator/src/entities/artifact-exposure.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270002000-MilestoneTwoArtifactIdentity.ts",
+    "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
+    "services/orchestrator/src/services/artifact-projection.resolver.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/result-inbox.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/services/result-inbox.service.spec.ts",
+    "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
+    "services/orchestrator/src/domain/context-snapshot.spec.ts",
+    "services/orchestrator/src/database/migrations/milestone-two-artifact-identity.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md",
+    "docs/roadmap/observability-provenance.md"
+   ],
+   "limitations": [
+    "Immutable reference identity, producer lineage, bounded attempt projection, and exposure lineage exist; exposure is not proof of URI access or semantic consumption",
+    "No content/blob storage, uploads/downloads, signed URLs, encryption, retention, deletion APIs, or external-byte replay fidelity",
+    "No public/Gateway/frontend artifact read APIs (current APIs are unauthenticated and artifact metadata may be sensitive)",
+    "No historical backfill: authoritative artifact identity begins after the M2 migration",
+    "Artifact database records are immutable references; external bytes are not verified or claimed immutable",
+    "Artifact AgentEvents remain non-authoritative append-only evidence"
+   ]
+  },
+  {
+   "id": "execution-state",
+   "status": "partial",
+   "sources": [
+    "services/orchestrator/src/domain/execution-state.ts",
+    "services/orchestrator/src/services/artifact-projection.resolver.ts",
+    "services/orchestrator/src/entities/artifact-exposure.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
+    "services/orchestrator/src/domain/context-snapshot.ts",
+    "services/orchestrator/src/services/execution-state.service.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/pipeline-validation.service.ts",
+    "services/orchestrator/src/entities/execution.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270003000-MilestoneTwoExecutionState.ts",
+    "services/orchestrator/src/domain/state-writes.ts",
+    "services/orchestrator/src/entities/state-write-evidence.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270005000-MilestoneTwoStateWriteEvidence.ts",
+    "services/orchestrator/src/services/result-inbox.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/execution-state.spec.ts",
+    "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
+    "services/orchestrator/src/domain/context-snapshot.spec.ts",
+    "services/orchestrator/src/services/execution-state.service.spec.ts",
+    "services/orchestrator/src/services/execution.service.spec.ts",
+    "services/orchestrator/src/services/engine.service.spec.ts",
+    "services/orchestrator/src/services/pipeline-validation.service.spec.ts",
+    "services/orchestrator/src/architecture.spec.ts",
+    "services/orchestrator/src/database/migrations/milestone-two-execution-state.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/domain/state-writes.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Internal durable primitive only: no agent/result mutation authority and no AgentResultV1.statePatch",
+    "Mutation evidence is not full event-sourced state history (no revision table)",
+    "Exposure proves the reference entered committed context, never dispatch success, URI opening, or semantic consumption",
+    "Artifact bytes are never owned, fetched, verified, or claimed immutable",
+    "No public state/artifact/lineage API (current APIs are unauthenticated)",
+    "No memory, RAG, semantic search, or provider prompt construction",
+    "Controlled replay creates a new execution from source input and plan; historical mutable state is not copied",
+    "Patch semantics are top-level key set/delete only; nested merges are future work"
+   ]
+  },
+  {
+   "id": "policy-engine",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/policy.ts",
+    "services/orchestrator/src/services/policy.service.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/plan-proposal.service.ts",
+    "services/orchestrator/src/services/delegation.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/policy.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Trusted configuration uses bounded deterministic exact-match rules, not a general policy language",
+    "Operator/admin control surfaces remain service-level while the external exposure gate is open"
+   ]
+  },
+  {
+   "id": "cli-adapter",
+   "status": "planned",
+   "sources": [],
+   "tests": [],
+   "docs": [
+    "docs/roadmap/README.md"
+   ],
+   "limitations": [
+    "No CLI transport adapter"
+   ]
+  },
+  {
+   "id": "framework-integrations",
+   "status": "planned",
+   "sources": [],
+   "tests": [],
+   "docs": [
+    "docs/roadmap/README.md"
+   ],
+   "limitations": [
+    "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
+   ]
+  },
+  {
+   "id": "durable-worker-outbox",
+   "status": "planned",
+   "sources": [],
+   "tests": [],
+   "docs": [
+    "docs/roadmap/README.md"
+   ],
+   "limitations": [
+    "Worker callback and idempotency records are lost on process restart"
+   ]
+  },
+  {
+   "id": "public-package-release",
+   "status": "blocked",
+   "sources": [],
+   "tests": [],
+   "docs": [
+    "docs/product/identity.md"
+   ],
+   "limitations": [
+    "Blocked by registry, legal, repository, and explicit publication approval gates"
+   ]
+  },
+  {
+   "id": "local-executor-host",
+   "status": "implemented",
+   "sources": [
+    "services/local-executor-host/src/config.ts",
+    "services/local-executor-host/src/supervisor.ts",
+    "services/local-executor-host/src/state.ts",
+    "services/local-executor-host/src/main.ts",
+    "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
+   ],
+   "tests": [
+    "services/local-executor-host/test/config.spec.ts",
+    "services/local-executor-host/test/supervisor.spec.ts",
+    "services/local-executor-host/test/state.spec.ts",
+    "services/local-executor-host/integration/local-executor-host.integration.spec.ts",
+    "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/executors/local-executor-host.md",
+    "docs/architecture/transports/adapter-model.md"
+   ],
+   "limitations": [
+    "Trusted-code-only: no sandbox; operator deployment configuration is the trust boundary",
+    "One canonical result per run; the child cannot emit progress/artifact events",
+    "Remote cancel is not supported (HTTP executor capability stays false); deadline/shutdown kills are the cancel mechanism",
+    "Orphaned children from a crashed host are terminated on restart, never adopted or re-spawned",
+    "Local/operator-only while the external exposure gate is open"
+   ]
+  },
+  {
+   "id": "approvals-waiting",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/approval.ts",
+    "services/orchestrator/src/entities/approval-request.entity.ts",
+    "services/orchestrator/src/services/approval.service.ts",
+    "services/orchestrator/src/database/migrations/1722270008000-MilestoneFourApprovals.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/runtime-recovery.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "No operator/admin approval API surface yet (external exposure gate open); transitions are service-level",
+    "Approval expiry default is 7 days (bounded by config)"
+   ]
+  },
+  {
+   "id": "execution-capsule",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/services/execution-capsule.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Export, replay, comparison, provenance, and telemetry projection are service-level while the external exposure gate is open",
+    "The OTLP-shaped projection is not a wired exporter and has no real timings",
+    "Replay does not claim deterministic model output or verified external artifact bytes"
+   ]
+  },
+  {
+   "id": "supervised-delegation-requests",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/entities/delegation-request.entity.ts",
+    "services/orchestrator/src/entities/delegation-request-conflict.entity.ts",
+    "services/orchestrator/src/services/delegation.service.ts",
+    "services/orchestrator/src/database/migrations/1722270011000-MilestoneSixDelegationRequests.ts",
+    "services/orchestrator/src/database/migrations/1722270013000-RoadmapLineageIntegrity.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Service-level request/decision only; runtimes without a durable pause/resume capability use explicit workflow child work outside a paused attempt",
+    "No public delegation graph/control API while the external exposure gate is open"
+   ]
+  },
+  {
+   "id": "delegation-observed-evidence",
+   "status": "implemented",
+   "sources": [
+    "contracts/schemas/agent-result.v1.schema.json",
+    "services/orchestrator/src/entities/delegation-observation.entity.ts",
+    "services/orchestrator/src/entities/delegation-observation-conflict.entity.ts",
+    "services/orchestrator/src/services/result-inbox.service.ts",
+    "services/orchestrator/src/database/migrations/1722270010000-MilestoneSixDelegationObservations.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Observed evidence remains a runtime assertion and never proves Tenvyr authority or semantic consumption",
+    "Opaque runtime children intentionally create no lineage"
+   ]
+  },
+  {
+   "id": "plan-proposal-policy",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/services/plan-proposal.service.ts",
+    "services/orchestrator/src/services/approval.service.ts",
+    "services/orchestrator/src/domain/policy.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Policy rules match actionType/agents/executors; growth is bounded structurally by candidate validation, not by policy rules"
+   ]
+  },
+  {
+   "id": "planner-trigger",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/services/result-inbox.service.ts",
+    "services/orchestrator/src/services/plan-proposal.service.ts",
+    "services/orchestrator/src/services/pipeline-validation.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Explicit planner-step trigger only; Tenvyr does not implement a general autonomous planning framework"
+   ]
+  },
+  {
+   "id": "plan-proposals",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/entities/plan-proposal.entity.ts",
+    "services/orchestrator/src/services/plan-proposal.service.ts",
+    "services/orchestrator/src/database/migrations/1722270009000-MilestoneFivePlanProposals.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Proposal activation and approval are service-level while the external exposure gate is open"
+   ]
+  },
+  {
+   "id": "plan-patch",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/plan-patch.ts",
+    "services/orchestrator/src/services/pipeline-validation.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/plan-patch.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Patch operations intentionally remain restricted to addStep and replaceUnfrozenStep"
+   ]
+  },
+  {
+   "id": "budget-hierarchy",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/budget.ts",
+    "services/orchestrator/src/services/budget-ledger.service.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/approval.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Adjust is not idempotency-keyed (explicit operator correction)",
+    "Tenant/plan accounts are operator-created; no grant-rotation API beyond adjust"
+   ]
+  },
+  {
+   "id": "policy-decision-boundary",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/policy.ts",
+    "services/orchestrator/src/entities/policy-snapshot.entity.ts",
+    "services/orchestrator/src/entities/policy-decision.entity.ts",
+    "services/orchestrator/src/services/policy.service.ts",
+    "services/orchestrator/src/database/migrations/1722270007000-MilestoneFourPolicy.ts",
+    "services/orchestrator/src/services/execution.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/policy.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Interception is wired at dispatch, PlanPatch activation, and supervised delegation approval",
+    "REQUIRE_APPROVAL produces the durable ApprovalRequest + WAITING flow for dispatch and PlanPatch; supervised delegation uses its explicit operator approval seam",
+    "Rule data is minimal (actionType + exact agent/executor constraints); no numeric/resource constraints yet",
+    "Unlisted action types default to ALLOW (policy is opt-in declarative data)"
+   ]
+  },
+  {
+   "id": "budget-ledger",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/budget.ts",
+    "services/orchestrator/src/entities/budget-account.entity.ts",
+    "services/orchestrator/src/entities/budget-reservation.entity.ts",
+    "services/orchestrator/src/entities/budget-ledger-entry.entity.ts",
+    "services/orchestrator/src/services/budget-ledger.service.ts",
+    "services/orchestrator/src/database/migrations/1722270006000-MilestoneFourBudgetLedger.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/budget.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/control-plane.md"
+   ],
+   "limitations": [
+    "Enforcement is opt-in per pipeline budget declaration; un-budgeted pipelines run unchanged",
+    "Supervised child accounts are linked to parent execution accounts and every child attempt reserve traverses the ancestor chain",
+    "Adjust is not idempotency-keyed (explicit operator correction; chain-propagated since M4-S5)",
+    "Projection is exact below 10,000 entries per account; larger accounts need paging",
+    "Terminal results without usage leave the reservation consumed by default (unknown semantics); only cancellation/failed-dispatch release explicitly"
+   ]
+  },
+  {
+   "id": "single-owner-self-hosted",
+   "status": "implemented",
+   "sources": [
+    "docker-compose.self-hosted.yml",
+    ".env.self-hosted.example",
+    "scripts/self-hosted/preflight.mjs",
+    "scripts/self-hosted/backup.mjs",
+    "scripts/self-hosted/restore.mjs",
+    "scripts/self-hosted/contract.test.mjs",
+    "services/orchestrator/src/services/execution.service.ts"
+   ],
+   "tests": [
+    "scripts/self-hosted/contract.test.mjs",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/app.controller.spec.ts"
+   ],
+   "docs": [
+    "docs/operations/self-hosted.md",
+    "docs/operations/self-hosted-runbooks.md"
+   ],
+   "limitations": [
+    "M11 milestone implemented: supported profile + contract, references-only bootstrap/preflight, verified backup/restore with two clean drills, migration-failure rollback proof, readiness health, and runbooks are in place",
+    "Milestone closure is Sol's decision; M11 is READY FOR INDEPENDENT TECH LEAD VERIFICATION; M8-M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
+    "External Production Exposure Gate stays OPEN; no public bindings by default; no HA/Kubernetes/sandbox claims",
+    "No prior-version upgrade drill (no published prior version); upgrade path documented, migration machinery proven",
+    "M11 closure hardening (implementer): numeric semantic version comparison (major/minor/patch, no JS array relational traps); upgrade propagates TENVYR_VERSION into the resolved and running deployment with fail-closed target verification BEFORE mutation and AFTER recreate; deploy.env deployed-version metadata is persisted only after proven success; restore explicitly separates --drill (isolated verification database; active authority never touched) from --promote (verify then swap with rollback, bounded pre-restore safety copy, restart, readiness, invariants, and a post-recovery write proof through the app API); migration-failure runbook identifies the executable recovery path",
+    "M11 closure hardening 2 (implementer): ONE documented deployment identity model \u2014 TENVYR_VERSION is the releaseVersion (vMAJOR.MINOR.PATCH, must name a real git tag) and TENVYR_SOURCE_REVISION is the immutable full commit SHA; a source-build upgrade PROVES the checkout is the exact clean release commit (tag == HEAD == clean tree), bakes the proven SHA into the images (ARG/ENV TENVYR_SOURCE_REVISION), verifies it on the RUNNING containers after recreate (an image tag alone is never sufficient proof), and persists both values in deploy.env only after success; missing release tags fail closed with the documented prerequisite; backups REQUIRE source provenance and capture bounded snapshot anchors (migration ledger fingerprint, table inventory/count fingerprint, plan revision hash-ledger fingerprint, execution provenance anchor, terminal Capsule/export anchor) into the manifest, which is the RESTORE AUTHORITY \u2014 restore recomputes anchors on the restored snapshot and compares against the MANIFEST, never the current active database (drift vs current is informational only), making legitimate historical recovery possible after the live database has advanced; disposable-infrastructure recovery E2E (state A -> backup -> live B -> drill A PASS -> promote A -> identity A -> readiness -> new write) in scripts/self-hosted/recovery.test.mjs",
+    "M11 closure hardening 3 (implementer): VERIFIED backup invariant \u2014 backup.mjs reports PASS only after the dump was restored into an isolated verification database (tenvyr_backup_verify) and ALL manifest anchors were computed FROM THE RESTORED DUMP (never the live DB) and proven structurally valid; a failed verification removes the staging artifact and never labels it a backup; the backup inventory is the complete authoritative 31-table entity/schema set (pipelines and plan_proposals added; regression compares anchors.mjs TABLES against the entity and migration inventories so a future authority table cannot be silently omitted); restore --promote now verifies (checksum + manifest + deep manifest-relative integrity) BEFORE quiescing any writer, and the authority swap is an explicit state machine with deterministic automatic rollback (tenvyr -> tenvyr_pre_restore, tenvyr_restore -> tenvyr; on second-rename failure tenvyr_pre_restore -> tenvyr is attempted immediately; rollback failure preserves every copy and prints the exact observed state plus bounded operator recovery commands); the pre-recovery safety copy is kept until ALL post-promotion gates pass (start, orchestrator readiness, gateway readiness, invariants, Capsule/provenance reconstruction, post-recovery write); any gate failure automatically rolls back (restored active -> bounded tenvyr_failed_promotion; safety -> active; restart; readiness; invariants; failure, never PASS); quiesce partial failure restarts both services; bounded one-shot TENVYR_RESTORE_FAULT test hooks (second-rename/rollback-rename/post-gate-readiness) drive real fault-injection E2E tests (concurrent-write backup consistency, invalid-backup promotion safety, rename-failure rollback, rollback-failure recovery commands, post-promotion gate rollback); upgrade.mjs refuses build/up mutation when the verified backup fails; hosted CI adds a real-PostgreSQL job running the integration suite TWICE on reinitialized state with a no-silent-skip guard (scripts/assert-jest-run.mjs), a required self-hosted contract gate, and a required disposable recovery E2E job",
+    "M11 closure hardening 4 (implementer): CRASH-RECOVERABLE recovery \u2014 restore --promote writes a durable phase journal (backups/.recovery-journal.json) BEFORE every destructive database step (verify-done -> quiescing -> swap-active-to-safety -> swap-verified-to-active -> post-gates -> complete); after ANY process death the next recovery invocation (drill, promote, or the new --reconcile mode) reconciles the OBSERVED database state BEFORE any destructive DROP/rename \u2014 tenvyr_pre_restore is only ever renamed back (never blindly dropped because a new promote started), an unproven candidate is preserved under bounded tenvyr_failed_promotion, interrupted promotions abort with retry-required, and a durable 'complete' marker (written before PASS) distinguishes a completed recovery's retained safety copy from an interrupted one; real SIGKILL fault hooks (crash-after-first-rename, crash-after-promotion) drive the crash E2Es, and the pure planReconciliation decision table is contract-tested; MAINTENANCE MUTUAL EXCLUSION \u2014 every backup/restore acquires an exclusive crash-release process-lifetime lock (backups/.maintenance.lock, dead-owner-PID stale reclaim); concurrent operations fail fast with 'maintenance operation already active' (no interleaving of tenvyr_backup_verify/staging paths/authority-swap names), and upgrade owns the lock with the backup child inheriting via TENVYR_MAINTENANCE_OWNED=1 (no self-deadlock); concurrent-backup and concurrent-promotion E2Es prove exactly one operation may mutate; MANIFEST CONTRACT FAILS CLOSED \u2014 validateManifestContract enforces the checksum triple (dump SHA-256 == sidecar == manifest.checksum; any mismatch fails), verified marker, version, sha256 algorithm, 40-hex sourceRevision, non-null well-formed required structural anchors (optional anchors stay nullable), and the canonical 31-table inventory, all pre-quiesce; operator recovery instructions are re-audited to be valid for the exact observed DB-name state (never a blind safety->active while an active DB exists); docs describe the actual crash-recovery and mutual-exclusion semantics",
+    "M11 closure hardening 5 (implementer): AUTHENTICATED MAINTENANCE INHERITANCE \u2014 the lock record carries a random operation token; upgrade always acquires as OWNER (allowInheritance:false; a stray token in the shell can never turn it into an inheritor) and passes the token to its REAL backup child via TENVYR_MAINTENANCE_TOKEN; the child's inherited claim is authenticated against the held lock (token equality AND direct parent PID == lock owner PID); forged claims (wrong token or a non-owner parent) are DENIED and fail hard, and an inherited child never releases the parent's lock \u2014 the previous forgeable TENVYR_MAINTENANCE_OWNED=1 bypass is gone and the real upgrade->real backup path no longer rejects its own lock (regressions use the REAL lock code and REAL backup.mjs child); FAIL-SAFE RECOVERY JOURNAL \u2014 writes are atomic + durable (temp file -> fsync -> rename -> parent-dir fsync where supported), never truncating the only record in place, and readJournalState() reports the evidence state (valid/absent/malformed); reconciliation is CONSERVATIVE when the evidence is unusable: original-only-under-safety (active missing, safety exists) is never followed by a path that can DROP the safety copy (restore-original or block), the ambiguous active+safety-without-usable-journal layout FAILS CLOSED preserving both copies with bounded instructions, no-active+no-safety blocks, tenvyr_failed_promotion is never auto-dropped without valid journal evidence, and the durable 'complete' marker persists for as long as the retained safety copy exists (a --drill never erases completion evidence); REQUIRED MANIFEST CHECKSUM \u2014 manifest.checksum must exist, be exactly 64 lowercase hex, and equal the computed dump SHA-256 (the .sha256 sidecar must agree when present); missing/null/malformed/non-lowercase checksums fail closed pre-quiesce",
+    "M11 closure hardening 6 (implementer): CRASH-LINEARIZABLE MAINTENANCE LOCK \u2014 the verified-backup operation is an exported callable (runVerifiedBackup) invoked IN THE LOCK OWNER'S PROCESS: upgrade no longer spawns a backup child, so nothing capable of using the shared maintenance resources can survive the owner's death and overlap a new owner (the TENVYR_MAINTENANCE_TOKEN inheritance mechanism is entirely removed); stale-lock reclaim is a single atomic RENAME of the lock file to a tombstone followed by a verify-and-restore of the tombstone record \u2014 a contender that races a LIVE owner's fresh lock restores it immediately and yields, an unreadable owner record FAILS CLOSED with operator instructions, and two simultaneous reclaimers can never both become owner (no rm-then-create TOCTOU; regression runs concurrent reclaim rounds with overlapping-hold-window detection + an owner-SIGKILL regression proving no backup.mjs process survives); RECOVERY E2E ISOLATION BY CONSTRUCTION \u2014 the suite runs under the unique tenvyr-recovery-e2e project with unique container names, PostgreSQL volume, host ports, and its own disposable deploy env (backups/.recovery-e2e-deploy.env); the base compose parameterizes container names/ports/volume (TENVYR_SELF_HOSTED_PREFIX, TENVYR_POSTGRES_PORT, TENVYR_ORCHESTRATOR_PORT, TENVYR_GATEWAY_PORT, TENVYR_POSTGRES_VOLUME \u2014 production defaults unchanged); the safety guard inspects docker ps -a (RUNNING OR STOPPED) + the real deployment volume + leftover E2E stacks BEFORE creating anything, teardown is gated by disposableStackCreated and only ever targets the disposable project (fake-docker regressions prove ZERO compose-down/volume-delete actions on guard failure, incl. the stopped-production-container and production-volume scenarios), and CI's always() cleanup targets only tenvyr-recovery-e2e; AVAILABILITY-RESTORING RECONCILE \u2014 the quiescing marker is written BEFORE the quiesce attempt (meaning: writers may be partially or fully stopped, the DB authority is still the original); planReconciliation maps quiescing/swap-active-to-safety to a new restart-original action (restart + readiness + invariants + abort retry-required) and the mid-reconciliation windows (rollback renames done, restart pending) to proceed-with-restartServices; journal clears were reordered to AFTER restart+prove so a crash in the window is finished by the next invocation; --reconcile after a SIGKILL at/after quiesce or after rollback renames restarts the original deployment and reports the interrupted operation \u2014 never 'no interrupted promotion detected' while the app is offline (E2E G1/G2); COLLISION-SAFE FAILED-PROMOTION \u2014 candidates are preserved under non-colliding bounded names (tenvyr_failed_promotion, tenvyr_failed_promotion_1, _2, ...): an existing preserved candidate is never overwritten, no rollback rename may target an existing database, printUnrecoverableState inspects FAILED_PROMOTION_DB and prints the free name for the exact observed state, and the rollback cleans up only the name it created (E2E F9: manual ambiguous-state repair -> preserved candidate + reconciled journal -> later post-promotion gate failure rolls back with a non-colliding preserve and the original authority becomes healthy)",
+    "Product Phase 1 (implementer): REAL SUPERVISED CODING TEAM DOGFOOD \u2014 WORKSPACE: first-class WorkspaceSnapshotV1 + workspaces table + bounded git identity capture (root/branch/HEAD/dirty via bounded git probes; non-git dirs are valid best-effort snapshots; never reads credentials) + run freeze (coordination_runs.workspace jsonb + acceptanceEvidence jsonb, migration 1722270018000); the frozen snapshot is injected into EVERY worker step input envelope (compileIterationPlanPatch) and the Verifier context (VerifierContextV1.workspace), and appears in the Capsule coordination record and the Workbench projection + UI; GUIDED RUNTIME ONBOARDING: workbench/onboarding/:kind detect-on-PATH -> version probe -> auth probe (documented exit-code contracts only; codex auth = the primary auth-status probe; opencode provider auth runtime-owned and not probed) + one-click workbench/commands/onboard-runtime (detect -> create from the documented template -> test); TEAM TEMPLATES: software-engineering + code-review (roles, bounded defaults, goal framing \u2014 Planner still proposes the TaskBatch, Tenvyr still authorizes it); ACCEPTANCE EVIDENCE: bounded optional test/build/lint/typecheck + required artifacts (run METADATA only \u2014 never executed by the orchestrator); WORKBENCH UX (gateway workbench-page.html): onboarding cards (Installed/Version/Auth/Connect/Test), workspace select + path + template prefill + evidence fields in the launch form, run summary block (workspace snapshot, acceptance evidence, iteration history with verifier decisions); DETERMINISTIC DOGFOOD: phase1-team-dogfood Postgres spec drives the REAL Workbench command path (startTeamRun with a real disposable git workspace + acceptance evidence + deterministic agents on the @tenvyr/worker SDK) -> Planner -> workers -> fan-in -> Verifier CONTINUE -> automatic iteration 2 -> ACCEPT, asserting the frozen workspace in worker inputs, the verifier context, the Capsule, and the projection; no paid credentials in CI",
+    "M11 FINAL closure (implementer): FAIL-CLOSED STALE-OWNER MAINTENANCE POLICY \u2014 a maintenance lock whose recorded owner PID is dead is NEVER auto-reclaimed, because a dead JS owner does NOT prove its external maintenance children (docker exec / pg_dump / pg_restore / psql) are dead: acquisition DENIES with bounded operator instructions (confirm no maintenance process, confirm no docker/DB descendant, inspect the journal, then clear explicitly, re-run --reconcile); the explicit `maintenance.mjs --clear-stale-lock` CLI removes the lock ONLY when the owner is provably dead (ESRCH-only) and refuses a live or unreadable owner; the atomic-rename tombstone reclaim and every auto-reclaim claim are REMOVED (the 3-party rename-overwrite race class no longer exists by construction); the process-tree regression drives the REAL backup against a FAKE long-running docker executable that records its PID and survives the owner's SIGKILL \u2014 a second REAL acquisition is DENIED (stale-maintenance-state) while the child lives, and after terminating the child + the explicit clear the lock is acquired again (live-owner contention stays fail-fast; the upgrade-SIGKILL regression now proves DENY-until-clear); E2E MAINTENANCE-STATE ISOLATION \u2014 all maintenance/backup state (lock, recovery journal, tombstones, dumps, manifests, checksums, deploy env) is relocatable via TENVYR_MAINTENANCE_DIR (production default <repo>/backups); the recovery E2E uses a UNIQUE PER-RUN directory backups/recovery-e2e-<run-id>/ with its own lock/journal/dumps/deploy env + a per-run project/containers/volume (project-name marker), so two simultaneous E2E invocations can never tear down or mutate each other's state; the safety guard runs FIRST \u2014 before ANY file creation \u2014 inspecting docker ps -a (running or stopped), the production volume, leftover E2E stacks, and recovery-e2e-* directories; the teardown removes ONLY the suite's own directory and project; the fake-docker guard regression plants production-like lock/journal SENTINELS and asserts they survive BYTE-IDENTICAL after a refused suite (production-container and production-volume scenarios); CI always() cleanup reads each E2E directory's project-name marker and targets only E2E-owned state (a no-op when no E2E directory exists)"
+   ]
+  },
+  {
+   "id": "operator-workbench-projections",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/services/workbench-projection.service.ts",
+    "services/orchestrator/src/workbench.controller.ts",
+    "services/orchestrator/src/services/workbench-command.service.ts",
+    "services/orchestrator/src/workbench-commands.controller.ts",
+    "services/orchestrator/src/entities/operator-action.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270016000-MilestoneTenOperatorActions.ts",
+    "services/gateway/src/app.controller.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/services/workbench-projection.service.spec.ts",
+    "services/orchestrator/src/services/workbench-command.service.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/workbench.md"
+   ],
+   "limitations": [
+    "M10 milestone implemented: bounded read projections, idempotent command surface with audit, accessible Workbench shell, inspection, deterministic offline demo, and full VERIFY (incl. live showcase smoke) are in place",
+    "Milestone closure is Sol's decision; M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
+    "External Production Exposure Gate stays OPEN: the workbench surface is loopback/private trusted-operator only",
+    "Design-partner interviews: 0 this cycle; no discovery-gated program is promoted without real evidence",
+    "M10 closure hardening (implementer): Runtime Connection create/revise/test/revoke run through the audited idempotent command layer \u2014 operator-action evidence commits in the same transaction as the authority mutation; same idempotency key with a conflicting payload is rejected (IDEMPOTENCY_CONFLICT); repeated revoke commands produce one effective transition; gateway proxies and the Workbench page send idempotency keys"
+   ]
+  },
+  {
+   "id": "coordinator-loop-domain",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/coordination.ts",
+    "services/orchestrator/src/services/runtime-coordination.service.ts",
+    "services/orchestrator/src/entities/coordination-run.entity.ts",
+    "services/orchestrator/src/entities/coordination-iteration.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270015000-MilestoneNineCoordination.ts",
+    "services/orchestrator/src/database/migrations/1722270017000-CoordinationApprovalResume.ts",
+    "services/orchestrator/src/services/delegation.service.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/engine.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/coordination.spec.ts",
+    "services/orchestrator/src/services/runtime-coordination.service.spec.ts",
+    "services/orchestrator/src/database/migrations/milestone-nine-coordination.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/services/engine.service.spec.ts",
+    "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/coordination-loop.md"
+   ],
+   "limitations": [
+    "M9 milestone implemented: pure semantics, durable run/iteration authority, Planner-to-batch over PlanPatch, fan-out/fan-in/decision loop, authority integration, and the deterministic real-HTTP team example are in place",
+    "Closure hardening: executor allowlist enforced at batch admission (agent-kind tasks resolve to `agent:<name>`, connection-kind to the revision's executorId); connection-kind Planner/Verifier routing with claimability rechecks; pending PlanPatch proposal identity persisted and resumed exactly once (no approval storms); coordinator-owned failures terminalize run AND execution atomically; run-level delegation depth enforced by chain walk",
+    "Milestone closure is Sol's decision; M9 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
+    "Connection-kind worker selectors are recorded on compiled steps, enforced at batch admission, and the typed selection freezes the connection revision at attempt claim; dispatch-time enforcement beyond admission is the existing M8 mechanism",
+    "M9-S8 closure hardening (implementer): run-creation authority parity (startRun/startRunWithManager enforce role connection claims + executor allowlist inside the create transaction; the manager path can no longer bypass them); concurrent equivalent starts converge on exactly one run (execution-row lock + unique-violation re-read); exact iteration identity at batch admission (current iteration only); Planner attempt ownership gate (same execution/iteration/Coordinator-owned step, terminal SUCCESS, frozen plan revision); strict baseRevision (proposal base == Planner frozen revision; active revision must still equal it, else deterministic STALE with no worker activation and no silent rebase); the Planner step input carries the frozen plan revision so truthful planners can declare it",
+    "M9-S8 closure hardening 2 (implementer): EXACT TaskBatch iteration identity \u2014 the untrusted proposal's embedded iterationNumber must equal run.currentIterationNumber (older and future proposal iterations are rejected with the same ITERATION_NOT_FOUND evidence as the caller-declared identity, before any worker/verifier materialization or plan revision creation; Postgres regressions for current=2/input=2 with proposal 1 and 3); the precheck/propose silent-rebase race is closed by acquiring the EXECUTION row lock BEFORE the authoritative active-revision check and holding it through proposal creation and activation \u2014 an authorized PlanPatch activating N+1 can never interleave between the check and the base-revision pin (T1 linearizes first with base N preserved and T2 becomes STALE, or T2 wins first and T1 is deterministically STALE; real-Postgres race tests with explicit pg_stat_activity lock-wait barriers prove both linearizations)"
+   ]
+  },
+  {
+   "id": "executor-descriptor",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/executors/executor-descriptor.ts",
+    "services/orchestrator/src/agent-adapters/agent-adapter.types.ts",
+    "services/orchestrator/src/agent-adapters/agent-adapter.router.ts",
+    "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
+    "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
+    "services/orchestrator/src/services/dispatch-outbox.service.ts",
+    "services/orchestrator/src/services/engine.service.ts",
+    "services/orchestrator/src/services/execution.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/executors/executor-descriptor.spec.ts",
+    "services/orchestrator/src/agent-adapters/agent-adapter.router.spec.ts",
+    "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
+    "services/orchestrator/src/services/dispatch-outbox.service.spec.ts",
+    "services/orchestrator/src/services/engine.service.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/transports/adapter-model.md"
+   ],
+   "limitations": [
+    "Executor kinds cover Kafka/HTTP transports plus the trusted-code-only local host; Codex/Claude stay inside runtime applications and A2A remains deferred",
+    "Closure hardening: LocalExecutorProfileV1 freezes secret-free CLI execution data (command/argv/cwd/env REFERENCES \u2014 never values) into the attempt snapshot at claim for connection-selected steps",
+    "Capabilities are conservative and negotiated per configured executor; remote cancellation remains best-effort where supported",
+    "Cancel notification is best-effort post-commit evidence; it never guarantees the runtime stopped opaque work",
+    "No public executor administration API while the external exposure gate is open",
+    "Legacy { agent } snapshots keep live-configuration routing by design (never rewritten)"
+   ]
+  },
+  {
+   "id": "runtime-connection-domain",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/executors/runtime-connection.ts",
+    "services/orchestrator/src/executors/runtime-profiles.ts",
+    "services/orchestrator/src/services/runtime-connection.service.ts",
+    "services/orchestrator/src/services/cli-probe.ts",
+    "services/orchestrator/src/entities/runtime-connection.entity.ts",
+    "services/orchestrator/src/entities/connection-revision.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270014000-MilestoneEightConnections.ts",
+    "services/orchestrator/src/executors/executor-descriptor.ts",
+    "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/dispatch-outbox.service.ts",
+    "services/orchestrator/src/connections.controller.ts",
+    "services/gateway/src/app.controller.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/executors/runtime-connection.spec.ts",
+    "services/orchestrator/src/executors/runtime-profiles.spec.ts",
+    "services/orchestrator/src/services/runtime-connection.service.spec.ts",
+    "services/orchestrator/src/services/cli-probe.spec.ts",
+    "services/orchestrator/src/connections.controller.spec.ts",
+    "services/orchestrator/src/database/migrations/milestone-eight-connections.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/m8-cli-connections.e2e.spec.ts",
+    "services/gateway/src/app.controller.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/executors/runtime-connections.md",
+    "docs/operations/configuration.md",
+    "docs/plans/active/tenvyr-productization-roadmap/RESEARCH_REGISTER.md"
+   ],
+   "limitations": [
+    "Milestone closure is Sol's decision; implementer verification is complete (READY FOR INDEPENDENT SOL VERIFICATION)",
+    "Closure hardening: typed step selection (`metadata.tenvyrConnectionId`) beats static transport config at claim and freezes the connection revision plus a secret-free local CLI profile (command/argv/cwd/env references) in the attempt snapshot; create/revise API surface exists (POST/PATCH /connections with gateway proxies); testConnection persists conditionally under row lock (REVOKED stays terminal, stale probes yield a superseded receipt); revise resets the card to DRAFT with cleared tested metadata",
+    "Connection administration is local/internal behind the open External Production Exposure Gate; no public admin API claim",
+    "Installed Claude Code (2.1.97) predates the template pin (2.1.228); detected versions are evidence, pins are operator-tested versions",
+    "Probe concurrency is limited per connection (in-flight dedupe); a global probe semaphore would matter for multi-replica deployments",
+    "Live runtime gates are opt-in and non-billable; deterministic fake-CLI conformance always runs",
+    "Connection health status is projection, not dispatch authority; only REVOKED denies claims and pending delivery",
+    "M8 closure hardening (implementer): claimRevision is linearizable under the authority-row lock (manager-aware claimRevisionWithManager for caller-owned transactions); a revoke committed before the claim lock denies the claim, a claim that locks first returns its immutable frozen revision and the later revoke applies at dispatch; Python Worker schema re-synced to canonical (AgentInvocationV1 optional connection identity) with both acceptance paths proven"
+   ]
+  },
+  {
+   "id": "runtime-target-model-selection",
+   "status": "implemented",
+   "sources": [
+    "contracts/schemas/agent-invocation.v1.schema.json",
+    "frontend/src/components/shared/RuntimeTargetPicker.tsx",
+    "packages/contracts/src/types.ts",
+    "services/local-executor-host/src/main.ts",
+    "services/local-executor-host/src/supervisor.ts",
+    "services/orchestrator/src/domain/coordination.ts",
+    "services/orchestrator/src/executors/executor-descriptor.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/runtime-coordination.service.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/coordination-p2-model-targets.spec.ts",
+    "services/orchestrator/src/executors/executor-descriptor.spec.ts",
+    "services/orchestrator/src/executors/runtime-profiles.spec.ts",
+    "services/orchestrator/src/phase2-model-targets-dogfood.spec.ts",
+    "services/local-executor-host/test/config.spec.ts",
+    "services/local-executor-host/test/supervisor.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/provider-connections.md",
+    "docs/architecture/executors/runtime-connections.md"
+   ],
+   "limitations": [
+    "Runtime Target models are frozen data identifiers; external runtimes/routers may resolve them differently and may implement their own fallback (outside Tenvyr's model-selection authority)",
+    "observedModelId is recorded only when the runtime/worker itself reports it inside the bounded structured result; Tenvyr never fabricates an observed model",
+    "A Test Runtime Target (bounded end-to-end invocation) is operator-explicit and out of scope for this slice"
+   ]
+  },
+  {
+   "id": "model-sources",
+   "status": "implemented",
+   "sources": [
+    "services/gateway/src/app.controller.ts",
+    "services/orchestrator/src/database/migrations/1722270019000-ModelSources.ts",
+    "services/orchestrator/src/entities/model-source.entity.ts",
+    "services/orchestrator/src/executors/model-source.ts",
+    "services/orchestrator/src/model-sources.controller.ts",
+    "services/orchestrator/src/phase2-provider-command.spec.ts",
+    "services/orchestrator/src/services/model-discovery.service.ts",
+    "services/orchestrator/src/services/model-source.service.ts",
+    "services/orchestrator/src/services/workbench-command.service.ts"
+   ],
+   "tests": [
+    "frontend/src/lib/tenvyr-api/client.test.mjs",
+    "frontend/src/lib/tenvyr-api/guards.test.mjs",
+    "scripts/self-hosted/contract.test.mjs",
+    "services/orchestrator/src/model-source-p2.spec.ts",
+    "services/orchestrator/src/phase2-provider-command.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/provider-connections.md"
+   ],
+   "limitations": [
+    "model_sources is the GENERIC OpenAI-compatible catalog endpoint configuration only (advanced surface); provider state is RUNTIME-OWNED (official CLI discovery: OpenCode auth list/models, codex login status, claude auth status) and never a source row",
+    "9Router is NOT a first-class Tenvyr concept (it inspired the provider-management UX only); an existing instance connects as a generic OpenAI-compatible endpoint \u2014 Tenvyr contains no routing/fallback/quota/rotation/alias logic",
+    "Catalogs are bounded on-demand projections, never persisted as authority; catalog visibility never equals execution compatibility",
+    "External Production Exposure Gate stays open: catalog endpoints are a single-owner operator feature (SSRF threat documented)"
+   ]
+  }
+ ]
 }

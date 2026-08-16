@@ -3,7 +3,7 @@ title: "Supervised coding team runs"
 status: current
 audience:
   - operator
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 sources:
   - services/orchestrator/src/domain/workspace.ts
   - services/orchestrator/src/domain/team-templates.ts
@@ -143,6 +143,16 @@ Team runs freeze **Runtime Targets** per role at launch:
 - **Worker Targets** — an `allowedTargets` allowlist of `{ connectionId,
 modelId? }` entries; every entry's connectionId must already be an allowed
   connection worker.
+
+The model picker is **Runtime → Provider → Model**: options come ONLY from
+providers authenticated/available THROUGH the selected runtime — never from
+unrelated endpoint catalogs. The provider step is hidden when it is purely
+implicit (a single implied provider, e.g. OpenAI for Codex, Anthropic for
+Claude Code). An incompatible runtime/provider/model combination is
+impossible by construction: a model is selectable only when the selected
+runtime can actually invoke its provider. Tenvyr contains no routing,
+fallback, or account-rotation logic — the chain stays
+`Tenvyr -> Executor -> Agent Runtime -> Provider`.
 
 Model selection authority stays with Tenvyr:
 

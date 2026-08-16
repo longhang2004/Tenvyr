@@ -22,12 +22,13 @@ picks a model per Planner / Worker / Verifier role (or Runtime default),
 Tenvyr validates it against the frozen target allowlist, and the exact
 requested model is frozen into every attempt, invocation, and Capsule —
 retries never silently switch models and later catalog refreshes never
-rewrite history. Model Sources (P2) provide bounded, credential-free
-discovery: the OpenCode CLI catalog (the auth file is never read), an
-optional 9Router endpoint (Tenvyr is not a router and only reads its
-OpenAI-compatible `/models` catalog), and generic OpenAI-compatible
-endpoints (credential env-var references only, never values). Tenvyr
-performs no automatic model fallback.
+rewrite history. Provider Connections (P2) are runtime-owned projections
+discovered through official CLI surfaces — `opencode auth list` /
+`opencode models`, `codex login status`, `claude auth status` — so Tenvyr
+never stores provider credentials. There is no first-class 9Router: it
+inspired the provider-management UX only, and an existing instance connects
+as a generic OpenAI-compatible endpoint. Tenvyr performs no routing,
+fallback, or account rotation.
 
 ## Why it exists
 
@@ -81,12 +82,12 @@ callbacks with HMAC signatures. Both paths produce the same versioned
 
 Local runtime connection profiles (M8, official docs accessed 2026-08-12):
 
-| Runtime connection | Pinned version | Probe (documented, non-billable)                    |
-| ------------------ | -------------- | --------------------------------------------------- |
-| Codex CLI          | 0.147.0        | `codex login status` (auth; version output not documented) |
-| Claude Code        | 2.1.228        | `claude --version` + `claude auth status`           |
-| OpenCode           | 1.18.16        | `opencode --version` (provider auth is runtime-owned) |
-| Generic CLI        | operator-declared | fixed `--version`-style probe per operator profile  |
+| Runtime connection | Pinned version    | Probe (documented, non-billable)                           |
+| ------------------ | ----------------- | ---------------------------------------------------------- |
+| Codex CLI          | 0.147.0           | `codex login status` (auth; version output not documented) |
+| Claude Code        | 2.1.228           | `claude --version` + `claude auth status`                  |
+| OpenCode           | 1.18.16           | `opencode --version` (provider auth is runtime-owned)      |
+| Generic CLI        | operator-declared | fixed `--version`-style probe per operator profile         |
 
 Live gates are opt-in and non-billable; deterministic fake-CLI conformance
 tests always run. Detected installed versions are evidence — the pin is the

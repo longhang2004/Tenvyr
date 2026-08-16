@@ -15,7 +15,7 @@ sources:
 # P2 Goal: Runtime Model Sources + Model Selection + Auth UX
 
 Slice documents: [PLAN](PLAN.md) · [SPEC](SPEC.md) · [VERIFY](VERIFY.md) ·
-[implementation report](IMPLEMENTATION_REPORT.md)
+[CLOSURE-PLAN](CLOSURE-PLAN.md) · [implementation report](IMPLEMENTATION_REPORT.md)
 
 ## Product outcome
 

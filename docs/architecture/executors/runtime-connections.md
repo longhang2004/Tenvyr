@@ -150,7 +150,7 @@ in `RESEARCH_REGISTER.md` and in the templates themselves):
 ## Runtime Targets and model selection (P2 — implemented)
 
 A Runtime Connection answers "which runtime executes the work?". A **Model
-Source** (see [model sources and runtime targets](../model-sources.md))
+Source** (see [provider connections and runtime targets](../provider-connections.md))
 answers "where may Tenvyr safely discover model identifiers?". A **Runtime
 Target** `{ connectionId, modelId? }` is the usable unit selected for
 Planner / Worker / Verifier roles.

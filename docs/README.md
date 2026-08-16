@@ -44,7 +44,7 @@ prose. The conflict must still be corrected rather than ignored.
   [HTTP adapter v1](architecture/transports/http-agent-adapter-v1.md)
 - Executors: [local executor host](architecture/executors/local-executor-host.md),
   [runtime connections](architecture/executors/runtime-connections.md),
-  [model sources and runtime targets](architecture/model-sources.md),
+  [model sources and runtime targets](architecture/provider-connections.md),
   and the [native integration matrix](architecture/executors/native-integrations.md)
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md), and the

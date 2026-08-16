@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 sources:
   - package.json
   - README.md
@@ -267,10 +267,12 @@ Trang `http://localhost:4000/runtimes` có hai tab.
 - **Agent Runtimes** — thẻ runtime có hướng dẫn cho Codex, Claude Code và
   OpenCode: Installed / Version / Authentication / Connection status /
   Default Model, kèm các thao tác **Test Runtime**, **Models** và **Manage**.
-  Đăng nhập là luồng chính thức có hướng dẫn — trang hiển thị
-  `Run: <command>` cùng **Copy Command** và **Check Again**; người vận hành
-  chạy lệnh trong terminal của chính mình. Tenvyr không bao giờ thu thập
-  thông tin xác thực của provider và không bao giờ tự chạy lệnh đăng nhập:
+  Mỗi thẻ mở rộng thành các **Provider Connections** (Kết nối Provider) của
+  runtime — xem mục 10. Đăng nhập là luồng chính thức có hướng dẫn — trang
+  hiển thị `Run: <command>` cùng **Copy Command** và **Check Again**; người
+  vận hành chạy lệnh trong terminal của chính mình. Tenvyr không bao giờ thu
+  thập thông tin xác thực của provider và không bao giờ tự chạy lệnh đăng
+  nhập:
 
   ```bash
   codex login          # Codex
@@ -278,7 +280,7 @@ Trang `http://localhost:4000/runtimes` có hai tab.
   opencode auth login  # OpenCode
   ```
 
-- **Model Sources** — xem phần tiếp theo.
+- **Advanced Catalogs** — xem phần tiếp theo.
 
 ### Runtime Connections (runtime CLI)
 
@@ -304,31 +306,40 @@ Công thức onboard, thu hồi và các lưu ý:
 [runtime connections](architecture/executors/runtime-connections.md) và
 [runbook self-hosted](operations/self-hosted-runbooks.md#runtime-connections).
 
-## 10. Nguồn model (Model Sources)
+## 10. Kết nối Provider (Provider Connections)
 
-Model Source cho Tenvyr biết nơi nó có thể KHÁM PHÁ (discover) định danh model
-một cách an toàn cho một runtime — chỉ khám phá, không bao giờ suy luận.
-Tenvyr không bao giờ gửi yêu cầu suy luận qua một source, không bao giờ lưu
-thông tin xác thực provider (chỉ lưu tham chiếu TÊN biến môi trường), và coi
-mọi catalog là projection có giới hạn, không có thẩm quyền.
+Provider là tài sản của RUNTIME: một provider chỉ tồn tại như hình chiếu
+(projection) của những gì đã được xác thực và khả dụng THÔNG QUA một Agent
+Runtime. Các hàng provider nằm dưới thẻ runtime tương ứng, và Tenvyr không
+bao giờ lưu thông tin xác thực provider. Kết nối Provider KHÔNG có nghĩa
+Tenvyr định tuyến lưu lượng suy luận — chuỗi luôn là
+`Tenvyr -> Executor -> Agent Runtime -> Provider`.
 
-- **9Router** — router/nguồn model ngoài TÙY CHỌN, sở hữu đăng nhập provider
-  gốc, OAuth, API key, quota/fallback và định tuyến provider. Tenvyr chỉ kết
-  nối tới endpoint do người vận hành cấu hình (ứng viên mặc định
-  `http://localhost:20128/v1` — không bao giờ giả định nó tồn tại) và đọc
-  catalog `/models` tương thích OpenAI. Thẻ source có **Open 9Router
-  Dashboard** và **Refresh Models**.
-- **Endpoint tương thích OpenAI** — base URL cộng một tham chiếu thông tin
-  xác thực (TÊN biến môi trường, chỉ phân giải lúc yêu cầu; giá trị không bao
-  giờ được lưu, trả về UI hay ghi log).
-- **OpenCode Providers** — catalog CLI chính thức `opencode` (`opencode auth
-list`, `opencode models [provider]`, `opencode models --refresh`). File auth
-  KHÔNG bao giờ bị đọc; output auth thô không bao giờ được lưu.
+- **OpenCode** — quản lý provider hạng nhất. Mỗi provider một hàng (provider
+  id, Connected / Not connected, **Models** / **Test** cho provider đã kết
+  nối). Provider chưa kết nối có nút **[Connect]**, sao chép lệnh chính thức
+  `opencode auth login --provider <id>` kèm **Copy Command** / **Check
+  Again** — thông tin xác thực không bao giờ đi qua Tenvyr; file auth không
+  bao giờ bị đọc và output auth thô không bao giờ được lưu.
+- **Codex** — một provider ngầm định duy nhất (OpenAI); trạng thái xác thực
+  từ probe onboarding runtime, đăng nhập qua `codex login`.
+- **Claude Code** — một provider ngầm định duy nhất (Anthropic); trạng thái
+  xác thực từ `claude auth status`, đăng nhập qua `claude auth login`.
+- **Provider dùng API key** (ví dụ DeepSeek qua OpenCode) — được thể hiện
+  qua runtime có thể gọi chúng; Tenvyr chỉ lưu tham chiếu TÊN biến môi
+  trường, không bao giờ lưu giá trị. Catalog hiển thị KHÔNG bao giờ đồng
+  nghĩa với khả năng thực thi: một model chỉ chọn được khi runtime đã chọn
+  thực sự gọi được provider của nó.
 
-Thẻ source hiển thị Endpoint, Credential ref, số Models và Last refreshed,
-kèm **Refresh Models**, **Test Source** và thao tác xóa. Catalog là các
-projection có giới hạn theo yêu cầu (≤ 5000 model, timeout nghiêm ngặt) và
-không bao giờ được lưu trữ.
+### Advanced Catalogs
+
+Tab **Advanced Catalogs** chứa các endpoint tương thích OpenAI thông dụng
+(base URL + tham chiếu TÊN biến môi trường tùy chọn) chỉ dùng để khám phá
+catalog — projection có giới hạn theo yêu cầu, không bao giờ được lưu, không
+có thẩm quyền. Một instance 9Router hiện có chỉ là một endpoint như vậy:
+9Router từng truyền cảm hứng cho UX quản lý provider nhưng KHÔNG phải khái
+niệm sản phẩm của Tenvyr. Tenvyr không định tuyến, không fallback, không
+xoay vòng tài khoản.
 
 ## 11. Team Run: chọn model
 
@@ -346,8 +357,8 @@ Chọn model là execution provenance:
   (đúng định danh như đã chọn); retry dùng lại descriptor đã đóng băng và
   không bao giờ âm thầm đổi model.
 - Việc refresh catalog sau này không bao giờ viết lại lịch sử attempt.
-- Model quan sát được chỉ hiển thị khi chính runtime báo cáo nó — không bao
-  giờ bịa đặt (source qua router hiển thị "actual upstream: Not observed").
+- Model quan sát được chỉ hiển thị khi chính runtime báo cáo nó — không
+  bao giờ bịa đặt.
 
 ## 12. Viết Worker đầu tiên của bạn
 

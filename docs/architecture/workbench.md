@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 sources:
   - services/orchestrator/src/services/workbench-projection.service.ts
   - services/orchestrator/src/workbench.controller.ts
@@ -141,7 +141,7 @@ logs, chain of thought, or artifact bytes.
 
 - Canonical Operator Workbench UI hosted via Next.js on port 4000:
   - `/dashboard`: System readiness, runtime connection summary, active/recent runs, pending approvals attention, New Team Run CTA.
-  - `/runtimes`: Two tabs — **Agent Runtimes** (guided onboarding for Codex, Claude Code, OpenCode: CLI auth guidance, connection testing, revision, revocation) and **Model Sources** (P2).
+  - `/runtimes`: Two tabs — **Agent Runtimes** (guided onboarding for Codex, Claude Code, OpenCode: CLI auth guidance, runtime-owned provider rows, connection testing, revision, revocation) and **Advanced Catalogs** (P2).
   - `/workspaces`: Workspace repository management, frozen snapshot views, mutable working tree contract clarity.
   - `/runs/new`: Progressive team run wizard (Goal -> Workspace -> Team selection with template defaults -> Guardrails -> Acceptance evidence -> Client-side UUID idempotency launch).
   - `/runs/[executionId]`: Supervised loop visibility (phase pipeline, iteration history, planner proposal cards, worker manifests, verifier decision outcome/reason/recommendation, WAITING_FOR_HUMAN approval/denial banner, Capsule drawer/tab, replay/cancel actions).
@@ -154,30 +154,39 @@ logs, chain of thought, or artifact bytes.
 - Bounded planner proposal, decision reason, and recommendation projection fields in `WorkbenchExecutionProjectionV1`.
 - Gateway proxying and Next.js route rewrites for seamless local and production operations.
 
-## Implemented (P2 — runtime model sources + auth UX)
+## Implemented (P2 — runtime-owned provider connections + auth UX)
 
 - `/runtimes` is now two tabs:
   - **Agent Runtimes** — guided runtime cards per CLI (Codex, Claude Code,
     OpenCode): Installed / Version / Authentication / Connection status /
     Default Model, with **Test Runtime**, **Models**, and **Manage** actions.
-    Sign-in is a guided official flow: the page renders `Run: <command>`
-    with **Copy Command** and **Check Again** — Tenvyr never collects
-    provider credentials, never executes the command itself, and only
-    re-probes after the operator reports they ran it.
-  - **Model Sources** — source cards with Endpoint, Credential ref (an
-    environment variable NAME only — values never persist, never return to
-    the frontend, never log), Models count, and Last refreshed, plus
-    **Refresh Models**, **Test Source**, **Open 9Router** (ninerouter kind
-    only), and delete actions. The **Add Model Source** form offers three
-    kinds: 9Router / OpenAI-compatible / OpenCode Providers.
-
+    Cards expand into runtime-owned **Provider Connections**:
+    - **OpenCode** — first-class provider management: one row per provider
+      (provider id, Connected / Not connected, **Models** and **Test** per
+      connected provider). A not-connected provider offers **[Connect]**,
+      which copies the OFFICIAL `opencode auth login --provider <id>`
+      command with **Copy Command** / **Check Again** — Tenvyr never
+      collects provider credentials, never executes the command itself,
+      and only re-probes after the operator reports they ran it.
+    - **Codex / Claude Code** — a single implied provider (OpenAI /
+      Anthropic) whose auth status comes from the runtime onboarding
+      probe.
+  - **Advanced Catalogs** (renamed from Model Sources) — generic
+    OpenAI-compatible endpoints only; an existing 9Router instance is just
+    such an endpoint, not a Tenvyr product concept.
 - New audited Workbench command actions — `model-source-create/update/
 delete/test/refresh` — idempotent and audit-recorded exactly like the M10
   connection commands (create / revise / test / revoke): one transaction for
   the evidence row + authority mutation, same idempotency-key replay and
   `IDEMPOTENCY_CONFLICT` handling. Catalogs are bounded on-demand
-  projections and are never persisted.
+  projections and are never persisted. These commands run through the
+  runCommand EntityManager (M10 atomicity invariant restored), and
+  `WorkbenchCommandService` received the real `ModelSourceService`
+  dependency — the P2 DI crash is fixed.
 - Connection-test contract: the test receipt is nested under
   `data.result.receipt`; the frontend parses it with typed guards and never
   fabricates readiness — a malformed or missing receipt renders
-  `Unknown / malformed response`, never `READY`.
+  `Unknown / malformed response`, never `READY`. All workbench command
+  envelopes are parsed with `parseWorkbenchCommandResult`
+  (executed / duplicate / rejected / malformed) — never optimistic
+  defaults.
