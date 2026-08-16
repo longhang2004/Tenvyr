@@ -15,6 +15,7 @@ import {
   Shield,
 } from "lucide-react";
 import { tenvyrApi } from "../../../lib/tenvyr-api/client.ts";
+import { parseWorkbenchCommandResult } from "../../../lib/tenvyr-api/guards.ts";
 import type {
   WorkbenchExecutionProjectionV1,
   CapsuleSummaryV1,
@@ -101,7 +102,8 @@ export default function RunDetailPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.resolveWait(runId, approve);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      const command = parseWorkbenchCommandResult(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({
           type: "success",
           message: approve
@@ -112,7 +114,7 @@ export default function RunDetailPage() {
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || "Failed to resolve approval",
+          message: command.error?.message || "Failed to resolve approval",
         });
       }
     } catch (err: unknown) {
@@ -138,13 +140,14 @@ export default function RunDetailPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.cancelWorkbenchExecution(executionId);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      const command = parseWorkbenchCommandResult(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({ type: "info", message: "Cancellation signal recorded." });
         await loadData();
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || "Failed to cancel execution",
+          message: command.error?.message || "Failed to cancel execution",
         });
       }
     } catch (err: unknown) {
@@ -160,19 +163,20 @@ export default function RunDetailPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.replayWorkbenchExecution(executionId);
+      const command = parseWorkbenchCommandResult<{ executionId: string }>(res.data);
       if (
-        (res.outcome === "executed" || res.outcome === "duplicate") &&
-        res.result?.executionId
+        (command.outcome === "executed" || command.outcome === "duplicate") &&
+        command.result?.executionId
       ) {
         setNotice({
           type: "success",
           message: "Replay created. Navigating to new execution…",
         });
-        router.push(`/runs/${encodeURIComponent(res.result.executionId)}`);
+        router.push(`/runs/${encodeURIComponent(command.result.executionId)}`);
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || "Replay failed",
+          message: command.error?.message || "Replay failed",
         });
       }
     } catch (err: unknown) {

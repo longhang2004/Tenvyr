@@ -4,6 +4,7 @@ import {
   MalformedResponseError,
   parseConnectionTestReceipt,
   parseConnectionTestResult,
+  parseWorkbenchCommandResult,
 } from "./guards.ts";
 
 /**
@@ -143,5 +144,70 @@ describe("parseConnectionTestResult (Workbench command envelope)", () => {
     );
     assert.equal(result.outcome, "duplicate");
     assert.equal(result.result.receipt.state, "AUTH_REQUIRED");
+  });
+});
+
+describe("parseWorkbenchCommandResult (P2 closure envelope)", () => {
+  const envelope = (overrides = {}) => ({
+    action: "model-source-create",
+    idempotencyKey: "key-1",
+    outcome: "executed",
+    result: { source: { sourceId: "src:generic" } },
+    ...overrides,
+  });
+
+  test("executed envelope parses with its result payload", () => {
+    const command = parseWorkbenchCommandResult(envelope());
+    assert.equal(command.outcome, "executed");
+    assert.equal(command.action, "model-source-create");
+    assert.equal(command.result.source.sourceId, "src:generic");
+  });
+
+  test("duplicate envelope parses", () => {
+    const command = parseWorkbenchCommandResult(envelope({ outcome: "duplicate" }));
+    assert.equal(command.outcome, "duplicate");
+    assert.equal(command.result.source.sourceId, "src:generic");
+  });
+
+  test("rejected envelope carries the bounded error", () => {
+    const command = parseWorkbenchCommandResult(
+      envelope({
+        outcome: "rejected",
+        result: undefined,
+        error: { code: "PAYLOAD_TOO_LARGE", message: "too big" },
+      }),
+    );
+    assert.equal(command.outcome, "rejected");
+    assert.equal(command.error?.code, "PAYLOAD_TOO_LARGE");
+    assert.equal(command.result, undefined);
+  });
+
+  test("malformed envelopes are rejected — never optimistic defaults", () => {
+    for (const bad of [
+      null,
+      "READY",
+      {},
+      envelope({ outcome: "pending" }),
+      envelope({ outcome: undefined }),
+      envelope({ action: "" }),
+      envelope({ result: "not-an-object" }),
+      envelope({ error: { code: "X" } }),
+    ]) {
+      assert.throws(
+        () => parseWorkbenchCommandResult(bad),
+        MalformedResponseError,
+        JSON.stringify(bad),
+      );
+    }
+  });
+
+  test("top-level outcome reads are undefined by construction (the bug class)", () => {
+    // The gateway passes { success, data: <envelope> } through verbatim —
+    // a consumer reading res.outcome at the top level always gets
+    // undefined and must fall into the error branch, never a fake success.
+    const gatewayBody = { success: true, data: envelope() };
+    assert.equal(gatewayBody.outcome, undefined);
+    const command = parseWorkbenchCommandResult(gatewayBody.data);
+    assert.equal(command.outcome, "executed");
   });
 });

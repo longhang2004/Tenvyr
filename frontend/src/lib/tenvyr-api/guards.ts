@@ -14,6 +14,7 @@ import {
   type ConnectionStatusState,
   type ConnectionTestReceiptV1,
   type ConnectionTestResultV1,
+  type WorkbenchCommandResultV1,
 } from "./types.ts";
 
 export class MalformedResponseError extends Error {
@@ -143,4 +144,58 @@ export function parseConnectionTestResult(
       receipt: parseConnectionTestReceipt(value.result.receipt),
     },
   };
+}
+
+/**
+ * Strict parse of the audited Workbench COMMAND envelope that the gateway
+ * passes through verbatim: `{ action, idempotencyKey, outcome, result? }`.
+ *
+ * The gateway/orchestrator response is `{ success, data: <envelope> }`;
+ * consumers MUST parse `data` with this guard — the previous class of bug
+ * read `outcome` at the wrong nesting level and fell into the error branch
+ * for every command (the AUTH_REQUIRED -> READY pattern). A malformed
+ * envelope is an error, never an optimistic default.
+ */
+export function parseWorkbenchCommandResult<T = unknown>(
+  value: unknown,
+): WorkbenchCommandResultV1<T> {
+  if (!isRecord(value)) throw new MalformedResponseError("workbench command result");
+  if (!isNonEmptyString(value.action)) {
+    throw new MalformedResponseError(`action (got ${String(value.action)})`);
+  }
+  if (!isNonEmptyString(value.idempotencyKey)) {
+    throw new MalformedResponseError("idempotencyKey");
+  }
+  if (
+    value.outcome !== "executed" &&
+    value.outcome !== "duplicate" &&
+    value.outcome !== "rejected"
+  ) {
+    throw new MalformedResponseError(`outcome (got ${String(value.outcome)})`);
+  }
+  const result: WorkbenchCommandResultV1<T> = {
+    action: value.action,
+    idempotencyKey: value.idempotencyKey,
+    outcome: value.outcome,
+  };
+  if (value.result !== undefined) {
+    if (!isRecord(value.result)) {
+      throw new MalformedResponseError("result");
+    }
+    result.result = value.result as T;
+  }
+  if (value.error !== undefined) {
+    if (
+      !isRecord(value.error) ||
+      typeof value.error.code !== "string" ||
+      typeof value.error.message !== "string"
+    ) {
+      throw new MalformedResponseError("error");
+    }
+    result.error = {
+      code: value.error.code,
+      message: value.error.message,
+    };
+  }
+  return result;
 }

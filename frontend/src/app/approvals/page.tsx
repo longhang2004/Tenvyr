@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
+import { parseWorkbenchCommandResult } from "../../lib/tenvyr-api/guards.ts";
 import type { WorkbenchExecutionSummaryV1 } from "../../lib/tenvyr-api/types.ts";
 import { EmptyState } from "../../components/shared/EmptyState.tsx";
 import { LoadingSpinner } from "../../components/shared/LoadingSpinner.tsx";
@@ -55,7 +56,8 @@ export default function ApprovalsPage() {
       }
 
       const res = await tenvyrApi.resolveWait(runId, approve);
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      const command = parseWorkbenchCommandResult(res.data);
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({
           type: "success",
           message: approve
@@ -64,7 +66,7 @@ export default function ApprovalsPage() {
         });
         await loadApprovals();
       } else {
-        setNotice({ type: "error", message: res.error?.message || "Failed to record approval decision" });
+        setNotice({ type: "error", message: command.error?.message || "Failed to record approval decision" });
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

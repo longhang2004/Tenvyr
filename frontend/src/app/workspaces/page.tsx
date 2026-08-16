@@ -14,6 +14,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
+import { parseWorkbenchCommandResult } from "../../lib/tenvyr-api/guards.ts";
 import type { WorkbenchWorkspaceV1 } from "../../lib/tenvyr-api/types.ts";
 import { EmptyState } from "../../components/shared/EmptyState.tsx";
 import { LoadingSpinner } from "../../components/shared/LoadingSpinner.tsx";
@@ -61,11 +62,12 @@ export default function WorkspacesPage() {
         path: newPath.trim(),
         ...(newName.trim() ? { name: newName.trim() } : {}),
       });
+      const command = parseWorkbenchCommandResult<{ workspace: WorkbenchWorkspaceV1 }>(res.data);
 
-      if (res.outcome === "executed" || res.outcome === "duplicate") {
+      if (command.outcome === "executed" || command.outcome === "duplicate") {
         setNotice({
           type: "success",
-          message: `Workspace "${res.result?.workspace?.name ?? newPath}" added successfully.`,
+          message: `Workspace "${command.result?.workspace?.name ?? newPath}" added successfully.`,
         });
         setNewPath("");
         setNewName("");
@@ -73,7 +75,7 @@ export default function WorkspacesPage() {
       } else {
         setNotice({
           type: "error",
-          message: res.error?.message || "Failed to add workspace",
+          message: command.error?.message || "Failed to add workspace",
         });
       }
     } catch (err: unknown) {

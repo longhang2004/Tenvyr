@@ -18,6 +18,7 @@ import type {
   ConnectionTestResultV1,
   ModelSourceV1,
   ModelCatalogSnapshotV1,
+  RuntimeProviderV1,
 } from "./types.ts";
 
 export const GATEWAY_API_URL =
@@ -102,7 +103,7 @@ export class TenvyrApiClient {
   async onboardRuntime(
     runtimeKind: RuntimeKind | string,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ connectionId: string }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ connectionId: string }>>> {
     return this.request("/api/workbench/commands/onboard-runtime", {
       method: "POST",
       body: { runtimeKind, idempotencyKey },
@@ -188,7 +189,7 @@ export class TenvyrApiClient {
   async createWorkspace(
     data: { name?: string; path: string },
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ workspace: WorkbenchWorkspaceV1 }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ workspace: WorkbenchWorkspaceV1 }>>> {
     return this.request("/api/workbench/commands/create-workspace", {
       method: "POST",
       body: { ...data, idempotencyKey },
@@ -203,7 +204,7 @@ export class TenvyrApiClient {
   async startTeamRun(
     request: StartTeamRunRequest,
   ): Promise<
-    WorkbenchCommandResultV1<{ executionId: string; workspace?: string }>
+    ApiResponse<WorkbenchCommandResultV1<{ executionId: string; workspace?: string }>>
   > {
     return this.request("/api/workbench/commands/start-team-run", {
       method: "POST",
@@ -219,7 +220,7 @@ export class TenvyrApiClient {
   async createModelSource(
     source: unknown,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ source: ModelSourceV1 }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ source: ModelSourceV1 }>>> {
     return this.request("/api/model-sources", {
       method: "POST",
       body: { idempotencyKey, source },
@@ -230,7 +231,7 @@ export class TenvyrApiClient {
     sourceId: string,
     patch: unknown,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ source: ModelSourceV1 }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ source: ModelSourceV1 }>>> {
     return this.request(`/api/model-sources/${encodeURIComponent(sourceId)}`, {
       method: "PATCH",
       body: { idempotencyKey, patch },
@@ -240,7 +241,7 @@ export class TenvyrApiClient {
   async deleteModelSource(
     sourceId: string,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1>> {
     return this.request(`/api/model-sources/${encodeURIComponent(sourceId)}`, {
       method: "DELETE",
       body: { idempotencyKey },
@@ -251,7 +252,7 @@ export class TenvyrApiClient {
   async testModelSource(
     sourceId: string,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ source: ModelSourceV1 }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ source: ModelSourceV1 }>>> {
     return this.request(
       `/api/model-sources/${encodeURIComponent(sourceId)}/test`,
       {
@@ -266,10 +267,9 @@ export class TenvyrApiClient {
     sourceId: string,
     idempotencyKey: string = crypto.randomUUID(),
   ): Promise<
-    WorkbenchCommandResultV1<{
-      source: ModelSourceV1;
-      catalog: ModelCatalogSnapshotV1;
-    }>
+    ApiResponse<
+      WorkbenchCommandResultV1<{ source: ModelSourceV1; catalog: ModelCatalogSnapshotV1 }>
+    >
   > {
     return this.request(
       `/api/model-sources/${encodeURIComponent(sourceId)}/refresh`,
@@ -280,12 +280,13 @@ export class TenvyrApiClient {
     );
   }
 
-  /** Runtime-owned catalog discovery without a source row (OpenCode
-   *  first-class; Codex best-effort). */
+  /** Runtime-owned provider discovery without a source row (OpenCode
+   *  first-class; Codex best-effort). Providers are projections of the
+   *  runtime's own state. */
   async discoverRuntimeCatalog(runtimeKind: string): Promise<
     ApiResponse<{
       runtimeKind: string;
-      providers: string[];
+      providers: RuntimeProviderV1[];
       catalog: ModelCatalogSnapshotV1;
     }>
   > {
@@ -319,7 +320,7 @@ export class TenvyrApiClient {
     runId: string,
     approve: boolean,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1>> {
     return this.request(
       `/api/workbench/commands/waits/${encodeURIComponent(runId)}`,
       {
@@ -332,7 +333,7 @@ export class TenvyrApiClient {
   async cancelWorkbenchExecution(
     executionId: string,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1>> {
     return this.request(
       `/api/workbench/commands/executions/${encodeURIComponent(executionId)}/cancel`,
       {
@@ -345,7 +346,7 @@ export class TenvyrApiClient {
   async replayWorkbenchExecution(
     executionId: string,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ executionId: string }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ executionId: string }>>> {
     return this.request(
       `/api/workbench/commands/executions/${encodeURIComponent(executionId)}/replay`,
       {
@@ -368,7 +369,7 @@ export class TenvyrApiClient {
     executionA: string,
     executionB: string,
     idempotencyKey: string = crypto.randomUUID(),
-  ): Promise<WorkbenchCommandResultV1<{ comparison: unknown }>> {
+  ): Promise<ApiResponse<WorkbenchCommandResultV1<{ comparison: unknown }>>> {
     return this.request("/api/workbench/commands/compare", {
       method: "POST",
       body: { executionA, executionB, idempotencyKey },

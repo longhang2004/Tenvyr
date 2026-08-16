@@ -77,6 +77,7 @@ export class WorkbenchCommandService {
     capsules?: ExecutionCapsuleService,
     connections?: RuntimeConnectionService,
     workspaces?: WorkspaceService,
+    modelSources?: ModelSourceService,
   ) {
     this.executionService =
       executionService ??
@@ -99,6 +100,10 @@ export class WorkbenchCommandService {
     this.connections =
       connections ?? new RuntimeConnectionService(this.dataSource);
     this.workspaces = workspaces ?? new WorkspaceService(this.dataSource);
+    // P2 closure: the model-source commands must receive the REAL service —
+    // an unassigned field crashed every model-source command at runtime.
+    this.modelSources =
+      modelSources ?? new ModelSourceService(this.dataSource);
   }
 
   private readonly executionService: ExecutionService;
@@ -615,6 +620,10 @@ export class WorkbenchCommandService {
   // P2: audited Model Source commands. Catalogs are bounded on-demand
   // projections returned to the caller — never persisted as authority.
   // Credential env REFERENCES only; values never cross this layer.
+  // P2 closure (M10 invariant): every authority mutation runs through the
+  // runCommand EntityManager (WithManager variants) so the authority row,
+  // the OperatorAction evidence row, and the stored outcome commit
+  // atomically — a failure anywhere rolls the whole transaction back.
 
   async createModelSource(input: {
     idempotencyKey: string;
@@ -626,7 +635,10 @@ export class WorkbenchCommandService {
       null,
       { source: input.source as Record<string, unknown> },
       async (manager) => {
-        const source = await this.modelSources.create(input.source);
+        const source = await this.modelSources.createWithManager(
+          manager,
+          input.source,
+        );
         return { source };
       },
     );
@@ -646,7 +658,8 @@ export class WorkbenchCommandService {
         patch: input.patch as Record<string, unknown>,
       },
       async (manager) => {
-        const source = await this.modelSources.update(
+        const source = await this.modelSources.updateWithManager(
+          manager,
           input.sourceId,
           input.patch,
         );
@@ -665,7 +678,7 @@ export class WorkbenchCommandService {
       input.sourceId,
       { sourceId: input.sourceId },
       async (manager) => {
-        await this.modelSources.delete(input.sourceId);
+        await this.modelSources.deleteWithManager(manager, input.sourceId);
         return { sourceId: input.sourceId, deleted: true };
       },
     );
@@ -682,7 +695,10 @@ export class WorkbenchCommandService {
       input.sourceId,
       { sourceId: input.sourceId },
       async (manager) => {
-        const source = await this.modelSources.test(input.sourceId);
+        const source = await this.modelSources.testWithManager(
+          manager,
+          input.sourceId,
+        );
         return { source };
       },
     );
@@ -699,7 +715,8 @@ export class WorkbenchCommandService {
       input.sourceId,
       { sourceId: input.sourceId },
       async (manager) => {
-        const { source, catalog } = await this.modelSources.refresh(
+        const { source, catalog } = await this.modelSources.refreshWithManager(
+          manager,
           input.sourceId,
         );
         return { source, catalog };

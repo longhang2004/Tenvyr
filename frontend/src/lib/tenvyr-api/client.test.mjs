@@ -2,7 +2,7 @@ import { test, describe, mock } from "node:test";
 import assert from "node:assert/strict";
 import { TenvyrApiClient } from "./client.ts";
 import { TenvyrApiError } from "./errors.ts";
-import { parseConnectionTestResult } from "./guards.ts";
+import { parseConnectionTestResult, parseWorkbenchCommandResult } from "./guards.ts";
 
 describe("TenvyrApiClient", () => {
   const fakeBaseUrl = "http://fake-gateway.local";
@@ -49,9 +49,15 @@ describe("TenvyrApiClient", () => {
       assert.equal(body.idempotencyKey, "test-idempotency-key");
       return new Response(
         JSON.stringify({
-          outcome: "executed",
-          action: "start-team-run",
-          result: { executionId: "exec-123", workspace: "/srv/work" },
+          // P2 closure: the REAL gateway envelope — the command result is
+          // nested under data, never at the top level.
+          success: true,
+          data: {
+            action: "start-team-run",
+            idempotencyKey: "test-idempotency-key",
+            outcome: "executed",
+            result: { executionId: "exec-123", workspace: "/srv/work" },
+          },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -75,8 +81,9 @@ describe("TenvyrApiClient", () => {
           allowedExecutors: ["local-host"],
         },
       });
-      assert.equal(res.outcome, "executed");
-      assert.equal(res.result?.executionId, "exec-123");
+      const command = parseWorkbenchCommandResult(res.data);
+      assert.equal(command.outcome, "executed");
+      assert.equal(command.result?.executionId, "exec-123");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -152,6 +159,61 @@ describe("TenvyrApiClient", () => {
       assert.equal(res.data.status, undefined);
       assert.equal(res.data.state, undefined);
       assert.notEqual(parsed.result.receipt.state, "READY");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("model-source commands parse the REAL nested envelope (P2 closure: never read outcome at top level)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock.fn(async (url, options) => {
+      assert.equal(url, `${fakeBaseUrl}/api/model-sources`);
+      assert.equal(options.method, "POST");
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            action: "model-source-create",
+            idempotencyKey: "ms-key-1",
+            outcome: "executed",
+            result: {
+              source: {
+                sourceId: "src:generic",
+                kind: "openai-compatible",
+                displayName: "Generic",
+                baseUrl: "https://example.com/v1",
+                status: "UNKNOWN",
+                reasonCode: "none",
+                createdAt: "2026-08-16T00:00:00.000Z",
+                updatedAt: "2026-08-16T00:00:00.000Z",
+                modelCount: 0,
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    try {
+      const client = new TenvyrApiClient(fakeBaseUrl);
+      const res = await client.createModelSource({
+        sourceId: "src:generic",
+        kind: "openai-compatible",
+        displayName: "Generic",
+        baseUrl: "https://example.com/v1",
+      });
+      // The bug class: res.outcome was undefined at the top level, so the
+      // UI always fell into the error branch. The envelope is under res.data.
+      assert.equal(res.data.outcome, "executed");
+      const command = parseWorkbenchCommandResult(res.data);
+      assert.equal(command.action, "model-source-create");
+      assert.equal(command.result?.source?.sourceId, "src:generic");
+      // The runtimes page handlers consume exactly this shape.
+      assert.equal(
+        command.outcome === "executed" || command.outcome === "duplicate",
+        true,
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

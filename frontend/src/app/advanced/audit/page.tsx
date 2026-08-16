@@ -9,6 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { tenvyrApi } from "../../../lib/tenvyr-api/client.ts";
+import { parseWorkbenchCommandResult } from "../../../lib/tenvyr-api/guards.ts";
 import type { AuditItemV1 } from "../../../lib/tenvyr-api/types.ts";
 import { LoadingSpinner } from "../../../components/shared/LoadingSpinner.tsx";
 
@@ -51,10 +52,11 @@ export default function AuditPage() {
     setNotice(null);
     try {
       const res = await tenvyrApi.compareExecutions(execA.trim(), execB.trim());
-      if (res.outcome === "executed" && res.result?.comparison) {
-        setComparisonResult(res.result.comparison);
+      const command = parseWorkbenchCommandResult<{ comparison: unknown }>(res.data);
+      if (command.outcome === "executed" && command.result?.comparison) {
+        setComparisonResult(command.result.comparison);
       } else {
-        setNotice({ type: "error", message: res.error?.message || "Comparison failed" });
+        setNotice({ type: "error", message: command.error?.message || "Comparison failed" });
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
