@@ -186,14 +186,51 @@ export class AppController {
     );
   }
 
-  @Post("api/model-sources/discover-runtime-catalog")
-  async discoverRuntimeCatalog(@Body() body: any) {
+  @Post("api/provider-discovery/discover")
+  async discoverProviders(@Body() body: any) {
+    return this.forwardToOrchestrator("/provider-discovery/discover", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Post("api/provider-discovery/refresh-models")
+  async refreshRuntimeModels(@Body() body: any) {
+    return this.forwardToOrchestrator("/provider-discovery/refresh-models", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Post("api/provider-discovery/auth-methods")
+  async providerAuthMethods(@Body() body: any) {
+    return this.forwardToOrchestrator("/provider-discovery/auth-methods", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Post("api/provider-discovery/commands/test-target")
+  async testRuntimeTarget(@Body() body: any) {
+    return this.forwardToOrchestrator("/provider-discovery/commands/test-target", {
+      method: "POST",
+      body,
+    });
+  }
+
+  @Post("api/provider-discovery/commands/oauth-authorize")
+  async openCodeOauthAuthorize(@Body() body: any) {
     return this.forwardToOrchestrator(
-      "/model-sources/discover-runtime-catalog",
-      {
-        method: "POST",
-        body,
-      },
+      "/provider-discovery/commands/oauth-authorize",
+      { method: "POST", body },
+    );
+  }
+
+  @Post("api/provider-discovery/commands/oauth-callback")
+  async openCodeOauthCallback(@Body() body: any) {
+    return this.forwardToOrchestrator(
+      "/provider-discovery/commands/oauth-callback",
+      { method: "POST", body },
     );
   }
 

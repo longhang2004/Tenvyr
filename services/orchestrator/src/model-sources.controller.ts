@@ -114,16 +114,6 @@ export class ModelSourcesController {
     });
   }
 
-  /** Runtime-owned catalog discovery without a source row (OpenCode
-   *  first-class; Codex best-effort). */
-  @Post("discover-runtime-catalog")
-  async discoverRuntimeCatalog(@Body() body: { runtimeKind: string }) {
-    return this.withMapping(async () => {
-      const data = await this.sources.discoverRuntimeCatalog(body.runtimeKind);
-      return { success: true, data };
-    });
-  }
-
   private async withMapping<T>(action: () => Promise<T>): Promise<T> {
     try {
       return await action();

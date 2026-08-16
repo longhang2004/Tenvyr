@@ -13,6 +13,7 @@ import { DelegationService } from "./delegation.service";
 import { RuntimeConnectionService } from "./runtime-connection.service";
 import { WorkspaceService } from "./workspace.service";
 import { ModelSourceService } from "./model-source.service";
+import { ProviderDiscoveryService } from "./provider-discovery.service";
 import type { ConnectionProfileV1 } from "../executors/runtime-connection";
 import { sha256Json } from "../domain/canonical-json";
 import {
@@ -78,6 +79,7 @@ export class WorkbenchCommandService {
     connections?: RuntimeConnectionService,
     workspaces?: WorkspaceService,
     modelSources?: ModelSourceService,
+    providerDiscovery?: ProviderDiscoveryService,
   ) {
     this.executionService =
       executionService ??
@@ -104,6 +106,11 @@ export class WorkbenchCommandService {
     // an unassigned field crashed every model-source command at runtime.
     this.modelSources =
       modelSources ?? new ModelSourceService(this.dataSource);
+    // P2 closure round 2: connection-scoped provider discovery (audited
+    // test-runtime-target + opencode oauth commands) — wired like the
+    // model-source service above (the round-1 DI crash must not repeat).
+    this.providerDiscovery =
+      providerDiscovery ?? new ProviderDiscoveryService(this.dataSource);
   }
 
   private readonly executionService: ExecutionService;
@@ -112,6 +119,7 @@ export class WorkbenchCommandService {
   private readonly connections: RuntimeConnectionService;
   private readonly workspaces: WorkspaceService;
   private readonly modelSources: ModelSourceService;
+  private readonly providerDiscovery: ProviderDiscoveryService;
 
   private boundedKey(idempotencyKey: string): string {
     if (
@@ -720,6 +728,84 @@ export class WorkbenchCommandService {
           input.sourceId,
         );
         return { source, catalog };
+      },
+    );
+  }
+
+  /**
+   * Test Runtime Target (P2 closure round 2): a SMALL BOUNDED REAL
+   * INVOCATION through the selected Runtime Connection's frozen profile
+   * and the requested model — audited because it may consume external
+   * provider credits/tokens. Failure is surfaced as failure, never READY.
+   */
+  async testRuntimeTarget(input: {
+    idempotencyKey: string;
+    connectionId: string;
+    modelId: string;
+  }): Promise<CommandResult> {
+    const connectionId = input.connectionId.slice(0, 255);
+    const modelId = input.modelId.slice(0, 255);
+    return this.runCommand(
+      "test-runtime-target",
+      input.idempotencyKey,
+      connectionId,
+      { connectionId, modelId },
+      async () => {
+        const evidence = await this.providerDiscovery.testRuntimeTarget(
+          connectionId,
+          modelId,
+        );
+        return { evidence };
+      },
+    );
+  }
+
+  /** OpenCode OAuth: start the runtime-owned authorization flow. Returns a
+   *  VALIDATED authorization URL for the operator; Tenvyr never sees or
+   *  stores tokens. Audited (runtime-state side effect). */
+  async openCodeOauthAuthorize(input: {
+    idempotencyKey: string;
+    connectionId: string;
+    providerId: string;
+  }): Promise<CommandResult> {
+    const connectionId = input.connectionId.slice(0, 255);
+    const providerId = input.providerId.slice(0, 255);
+    return this.runCommand(
+      "opencode-oauth-authorize",
+      input.idempotencyKey,
+      connectionId,
+      { connectionId, providerId },
+      async () => {
+        const { authorizationUrl } =
+          await this.providerDiscovery.authorizeOpenCodeOAuth(
+            connectionId,
+            providerId,
+          );
+        return { providerId, authorizationUrl };
+      },
+    );
+  }
+
+  /** OpenCode OAuth: complete the flow after the operator authorized in
+   *  the provider's own UI and report connected state. Audited. */
+  async openCodeOauthCallback(input: {
+    idempotencyKey: string;
+    connectionId: string;
+    providerId: string;
+  }): Promise<CommandResult> {
+    const connectionId = input.connectionId.slice(0, 255);
+    const providerId = input.providerId.slice(0, 255);
+    return this.runCommand(
+      "opencode-oauth-callback",
+      input.idempotencyKey,
+      connectionId,
+      { connectionId, providerId },
+      async () => {
+        const { connected } = await this.providerDiscovery.completeOpenCodeOAuth(
+          connectionId,
+          providerId,
+        );
+        return { providerId, connected };
       },
     );
   }

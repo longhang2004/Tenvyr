@@ -147,17 +147,10 @@ describe("OpenCode CLI discovery (bounded parsing, official commands only)", () 
     expect(models.every((entry) => entry.source === "opencode")).toBe(true);
   });
 
-  test("auth list parses provider names and skips headers", async () => {
-    const cli = fakeCli(`
-      process.stdout.write([
-        "PROVIDER  ID  TYPE",
-        "anthropic  x  oauth",
-        "opencode-go  y  oauth",
-      ].join("\\n") + "\\n");
-    `);
-    const providers = await service.discoverOpenCodeProviders(cli);
-    expect(providers).toEqual(["anthropic", "opencode-go"]);
-  });
+  // P2 closure round 2: `opencode auth list` (human-oriented, box-drawing
+  // decorated) is NEVER parsed — provider state comes from the official
+  // STRUCTURED Server API (GET /provider). The domain guards are tested
+  // in provider-discovery-p2.spec.ts against a fake management server.
 
   test("models <provider> requests AND returns only that provider's models", async () => {
     const cli = fakeCli(`
@@ -192,7 +185,6 @@ describe("OpenCode CLI discovery (bounded parsing, official commands only)", () 
 
   test("never reads the auth file; failing CLI yields empty catalogs", async () => {
     const cli = fakeCli(`process.exit(3);`);
-    expect(await service.discoverOpenCodeProviders(cli)).toEqual([]);
     expect(await service.discoverOpenCodeModels(cli)).toEqual([]);
   });
 

@@ -9,6 +9,7 @@ import {
   type ModelSourceReasonCode,
 } from "../executors/model-source";
 import { OPENAI_COMPATIBLE_KIND } from "../executors/model-source";
+import { parseOpenCodeModelLines as parseOpenCodeModelLinesCanonical } from "../executors/opencode-server";
 import { runBoundedCliCommand } from "./cli-probe";
 
 /**
@@ -32,18 +33,6 @@ const DISCOVERY_BOUNDS = {
   maxOutputBytes: 512 * 1024,
 } as const;
 
-/** Provider-name pattern for the first column of `opencode auth list`
- *  (human-oriented output; bounded parsing, never persisted). */
-const PROVIDER_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const AUTH_LIST_HEADER_TOKENS = new Set([
-  "PROVIDER",
-  "ID",
-  "TYPE",
-  "NAME",
-  "KIND",
-  "STATUS",
-]);
-
 export type ModelSourceTestResult = {
   ok: boolean;
   status: "AVAILABLE" | "AUTH_REQUIRED" | "UNAVAILABLE" | "DEGRADED";
@@ -54,30 +43,6 @@ export type ModelSourceTestResult = {
 };
 
 export class ModelDiscoveryService {
-  /** OpenCode: authenticated providers via the official `auth list`
-   *  command. Bounded first-column parse; output is never persisted. */
-  async discoverOpenCodeProviders(executable: string): Promise<string[]> {
-    const outcome = await runBoundedCliCommand({
-      command: executable,
-      args: ["auth", "list"],
-      wallTimeMs: DISCOVERY_BOUNDS.wallTimeMs,
-      maxOutputBytes: DISCOVERY_BOUNDS.maxOutputBytes,
-    });
-    if (!outcome.ok) return [];
-    const providers: string[] = [];
-    for (const rawLine of outcome.stdout.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line) continue;
-      const firstToken = line.split(/\s+/)[0];
-      if (!firstToken || AUTH_LIST_HEADER_TOKENS.has(firstToken)) continue;
-      if (PROVIDER_TOKEN_PATTERN.test(firstToken) && firstToken.length <= 255) {
-        if (!providers.includes(firstToken)) providers.push(firstToken);
-      }
-      if (providers.length >= 512) break;
-    }
-    return providers;
-  }
-
   /** OpenCode: model catalog via the official `models [provider]`
    *  command. Output lines are `provider/model` tokens (documented
    *  format); bounded parse with dedupe. When `provider` is given, only
@@ -95,7 +60,7 @@ export class ModelDiscoveryService {
       maxOutputBytes: DISCOVERY_BOUNDS.maxOutputBytes,
     });
     if (!outcome.ok) return [];
-    const all = parseOpenCodeModelLines(outcome.stdout);
+    const all = parseOpenCodeModelLinesCanonical(outcome.stdout);
     if (!provider) return all;
     return all.filter((entry) => entry.providerId === provider);
   }
@@ -267,25 +232,10 @@ export class ModelDiscoveryError extends Error {
 }
 
 /** Bounded stdout parse of `opencode models` output: one
- *  `provider/model` token per line (documented format). */
-export function parseOpenCodeModelLines(stdout: string): ModelCatalogEntryV1[] {
-  const entries: ModelCatalogEntryV1[] = [];
-  const seen = new Set<string>();
-  for (const rawLine of stdout.split(/\r?\n/)) {
-    const token = rawLine.trim();
-    if (!token || seen.has(token)) continue;
-    const slash = token.indexOf("/");
-    if (slash <= 0 || slash === token.length - 1) continue;
-    const providerId = token.slice(0, slash);
-    if (!PROVIDER_TOKEN_PATTERN.test(providerId) || providerId.length > 255)
-      continue;
-    if (!isBoundedModelId(token)) continue;
-    seen.add(token);
-    entries.push({ modelId: token, providerId, source: "opencode" });
-    if (entries.length >= MODEL_SOURCE_BOUNDS.modelsMaxCount) break;
-  }
-  return entries;
-}
+ *  `provider/model` token per line (documented format). Canonical
+ *  implementation lives in executors/opencode-server.ts (provider
+ *  filter); this alias keeps the historical import stable. */
+export { parseOpenCodeModelLines } from "../executors/opencode-server";
 
 export function isBoundedModelId(value: string): boolean {
   return (
