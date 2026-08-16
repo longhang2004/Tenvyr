@@ -1,4 +1,4 @@
-import { Injectable, Inject } from "@nestjs/common";
+import { Injectable, Inject, Optional } from "@nestjs/common";
 import { DataSource, type EntityManager, Repository } from "typeorm";
 import { ExecutionEntity, ExecutionStatus } from "../entities/execution.entity";
 import {
@@ -17,10 +17,23 @@ import type { PipelineStepConfig } from "../domain/pipeline-definition";
 import {
   ContextProjectionError,
   materializeContextSnapshot,
+  selectProjectedValues,
   type ArtifactContextReference,
   type TenvyrContextEnvelope,
 } from "../domain/context-snapshot";
 import type { ExecutionState } from "../domain/execution-state";
+import {
+  buildClaimEfficiencyEvidence,
+  computeContextBundleHash,
+  measureContextEnvelope,
+  workspaceIdentityOf,
+  type ContextMetricsV1,
+  type ContextWorkspaceIdentityV1,
+  type HarnessIdentityV1,
+  type InvocationEfficiencyEvidenceV1,
+} from "../domain/context-bundle";
+import { ContextProjectionCache } from "../executors/context-projection-cache";
+import { CoordinationRunEntity } from "../entities/coordination-run.entity";
 import { ArtifactExposureEntity } from "../entities/artifact-exposure.entity";
 import { ArtifactEntity } from "../entities/artifact.entity";
 import { ArtifactProjectionResolver } from "./artifact-projection.resolver";
@@ -104,6 +117,7 @@ export class ExecutionService {
     approvalService?: ApprovalService,
     connections?: RuntimeConnectionService,
     coordinationService?: RuntimeCoordinationService,
+    @Optional() bundleCache?: ContextProjectionCache,
   ) {
     // M4-S2: default ledger bound to the injected DataSource so direct
     // constructions (tests) and Nest DI both get a working instance.
@@ -116,6 +130,7 @@ export class ExecutionService {
       connections ?? new RuntimeConnectionService(this.dataSource);
     this.coordination =
       coordinationService ?? new RuntimeCoordinationService(this.dataSource);
+    this.bundleCache = bundleCache ?? new ContextProjectionCache();
   }
 
   private readonly budgetLedger: BudgetLedgerService;
@@ -123,6 +138,11 @@ export class ExecutionService {
   private readonly approvalService: ApprovalService;
   private readonly connections: RuntimeConnectionService;
   private readonly coordination: RuntimeCoordinationService;
+  /** P3: the ONE deterministic optimization — content-addressed reuse of
+   *  already-materialized immutable context envelopes. Process-local,
+   *  bounded, fail-closed on restart; never authority. Exposed for tests
+   *  and aggregate projections. */
+  readonly bundleCache: ContextProjectionCache;
 
   /**
    * M11-S4: liveness/readiness probe with safe reason codes (never
@@ -326,6 +346,18 @@ export class ExecutionService {
       // P2: the frozen requested model (data value) rides the same way.
       const stepModelId = stepModelIdOf(stepConfig);
 
+      // P3: coordinated runs freeze a WorkspaceSnapshot at start; its
+      // bounded structural identity participates in the ContextBundle
+      // fingerprint and the efficiency evidence. One indexed lookup per
+      // claim; absent for non-coordinated executions.
+      const coordinationRun = await manager
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { executionId } });
+      const workspaceIdentity: ContextWorkspaceIdentityV1 | undefined =
+        coordinationRun?.workspace
+          ? workspaceIdentityOf(coordinationRun.workspace)
+          : undefined;
+
       const allSteps = await logicalRepository.find({
         where: { executionId },
       });
@@ -377,6 +409,19 @@ export class ExecutionService {
       logicalStep.endTime = null;
       await logicalRepository.save(logicalStep);
 
+      // P3: resolve the frozen executor snapshot ONCE per claim. Every
+      // sub-path (projection, policy/budget failures, WAITING, dispatch)
+      // shares the same frozen harness identity, so the efficiency evidence
+      // is internally consistent, and connection revocation stays a LIVE
+      // authority gate — claimRevision asserts "not revoked" and throws
+      // before any outbox is created.
+      const executorSnapshot = await this.resolveAttemptSnapshot(
+        stepConfig.agent,
+        stepConnectionId,
+        stepModelId,
+        manager,
+      );
+
       // M2C/M2D: the execution lock is already held, so the state read below
       // is race-free. The immutable Tenvyr context envelope (state projection
       // plus resolved artifact references) is materialized here and persisted
@@ -386,17 +431,34 @@ export class ExecutionService {
       // with no outbox/exposure, then follows the frozen step's retry/continue/
       // stop policy in this same transaction. This records the consumed retry
       // budget without pretending any Worker received context.
+      //
+      // P3: the SAME deterministic projection inputs may already exist as an
+      // immutable ContextBundle — identical inputs → identical hash → the
+      // already-materialized bounded projection is REUSED (Context Projection
+      // Reuse) instead of rebuilding the envelope + validation pass. Authority
+      // gates below (capability, policy, budget, deadline, connection) run
+      // identically on hit AND miss.
       let contextSnapshot: TenvyrContextEnvelope | null = null;
       let exposureArtifacts: ArtifactEntity[] = [];
+      let contextBundleEvidence: { hash: string; reused: boolean } | null = null;
+      let contextMetrics: ContextMetricsV1 | null = null;
       if (stepConfig.contextProjection) {
         try {
           const projected = await this.materializeProjectedContext(
             manager,
             execution,
             stepConfig,
+            executorSnapshot,
+            revision.planHash ?? undefined,
+            workspaceIdentity,
           );
           contextSnapshot = projected.envelope;
           exposureArtifacts = projected.artifacts;
+          contextBundleEvidence = {
+            hash: projected.hash,
+            reused: projected.reused,
+          };
+          contextMetrics = projected.metrics;
         } catch (error) {
           if (!(error instanceof ContextProjectionError)) throw error;
 
@@ -411,11 +473,16 @@ export class ExecutionService {
               frozenSpecHash,
               inputSnapshot,
               contextSnapshot: null,
-              executorSnapshot: await this.resolveAttemptSnapshot(
+              executorSnapshot,
+              efficiency: this.claimEfficiencyEvidence(
+                `${logicalStep.id}:${attemptNumber}`,
                 stepConfig.agent,
-                stepConnectionId,
-                stepModelId,
-                manager,
+                executorSnapshot,
+                workspaceIdentity,
+                null,
+                null,
+                false,
+                now.toISOString(),
               ),
               status: "FAILED",
               deadlineAt: attemptDeadlineAt,
@@ -478,11 +545,16 @@ export class ExecutionService {
             frozenSpecHash,
             inputSnapshot,
             contextSnapshot,
-            executorSnapshot: await this.resolveAttemptSnapshot(
+            executorSnapshot,
+            efficiency: this.claimEfficiencyEvidence(
+              `${logicalStep.id}:${attemptNumber}`,
               stepConfig.agent,
-              stepConnectionId,
-              stepModelId,
-              manager,
+              executorSnapshot,
+              workspaceIdentity,
+              contextBundleEvidence,
+              contextMetrics,
+              false,
+              now.toISOString(),
             ),
             status: "FAILED",
             deadlineAt: attemptDeadlineAt,
@@ -558,11 +630,16 @@ export class ExecutionService {
               frozenSpecHash,
               inputSnapshot,
               contextSnapshot,
-              executorSnapshot: await this.resolveAttemptSnapshot(
+              executorSnapshot,
+              efficiency: this.claimEfficiencyEvidence(
+                `${logicalStep.id}:${attemptNumber}`,
                 stepConfig.agent,
-                stepConnectionId,
-                stepModelId,
-                manager,
+                executorSnapshot,
+                workspaceIdentity,
+                contextBundleEvidence,
+                contextMetrics,
+                false,
+                now.toISOString(),
               ),
               status: "WAITING",
               deadlineAt: attemptDeadlineAt,
@@ -616,14 +693,11 @@ export class ExecutionService {
       }
 
       // M8-S6: the frozen snapshot (connection reference + local profile)
-      // is computed ONCE per claim and reused for the attempt row AND the
-      // outbox invocation, so dispatch carries exactly what the claim froze.
-      const executorSnapshot = await this.resolveAttemptSnapshot(
-        stepConfig.agent,
-        stepConnectionId,
-        stepModelId,
-        manager,
-      );
+      // is computed ONCE per claim (above) and reused for the attempt row AND
+      // the outbox invocation, so dispatch carries exactly what the claim
+      // froze. The dispatchable attempt records session mode FRESH (a real
+      // runtime invocation is created out of this claim; current runtimes are
+      // all single-shot, so no session is ever reused/resumed).
       const attempt = await attemptRepository.save(
         attemptRepository.create({
           executionId,
@@ -635,6 +709,16 @@ export class ExecutionService {
           inputSnapshot,
           contextSnapshot,
           executorSnapshot,
+          efficiency: this.claimEfficiencyEvidence(
+            `${logicalStep.id}:${attemptNumber}`,
+            stepConfig.agent,
+            executorSnapshot,
+            workspaceIdentity,
+            contextBundleEvidence,
+            contextMetrics,
+            true,
+            now.toISOString(),
+          ),
           status: "CREATED",
           deadlineAt: attemptDeadlineAt,
         }),
@@ -706,20 +790,34 @@ export class ExecutionService {
   }
 
   /**
-   * M2C/M2D: build the immutable context envelope under the already-held
+   * M2C/M2D + P3: build the immutable context envelope under the already-held
    * execution lock. State values are selected from the authoritative semantic
    * state version; artifact references are resolved from the canonical
    * APPLIED results of declared dependency steps (same-execution only). The
    * complete envelope is bounded at 65,536 canonical UTF-8 bytes. Returns the
    * envelope plus the authoritative Artifact entities for exposure edges.
+   *
+   * P3 — Context Projection Reuse: the fingerprint is computed from canonical
+   * deterministic projection inputs BEFORE the expensive materialization +
+   * validation pass. An identical existing immutable bundle (same hash) is
+   * REUSED instead of rebuilt; a miss performs the normal non-cache path and
+   * stores the fresh bundle. Artifact resolution always executes — its
+   * resolved references are a load-bearing fingerprint input and the
+   * append-only exposure edges must be built from live resolution.
    */
   private async materializeProjectedContext(
     manager: EntityManager,
     execution: ExecutionEntity,
     stepConfig: PipelineStepConfig,
+    executorSnapshot: ExecutorDescriptorV1,
+    planHash: string | undefined,
+    workspace: ContextWorkspaceIdentityV1 | undefined,
   ): Promise<{
     envelope: TenvyrContextEnvelope;
     artifacts: ArtifactEntity[];
+    metrics: ContextMetricsV1;
+    reused: boolean;
+    hash: string;
   }> {
     const projection = stepConfig.contextProjection!;
     let references: ArtifactContextReference[] = [];
@@ -732,15 +830,84 @@ export class ExecutionService {
       references = resolved.references;
       artifacts = resolved.artifacts;
     }
-    return {
-      envelope: materializeContextSnapshot(
-        projection,
-        (execution.executionState ?? {}) as ExecutionState,
-        execution.executionStateVersion,
-        references,
-      ),
-      artifacts,
+    const state = (execution.executionState ?? {}) as ExecutionState;
+    const hash = computeContextBundleHash({
+      bundleSchemaVersion: 1,
+      contextSchemaVersion: 1,
+      stateProjection: {
+        version: execution.executionStateVersion,
+        values: selectProjectedValues(projection, state),
+      },
+      artifacts: references,
+      harness: this.harnessIdentityOf(stepConfig.agent, executorSnapshot),
+      ...(planHash !== undefined ? { planHash } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
+    });
+    const cached = this.bundleCache.get(hash);
+    if (cached) {
+      // HIT: reuse the already-materialized immutable projection (the cache
+      // hands out an isolated deep clone; callers persist it without ever
+      // mutating the stored bundle).
+      return {
+        envelope: cached.envelope,
+        artifacts,
+        metrics: cached.metrics,
+        reused: true,
+        hash,
+      };
+    }
+    const envelope = materializeContextSnapshot(
+      projection,
+      state,
+      execution.executionStateVersion,
+      references,
+    );
+    const metrics = measureContextEnvelope(envelope, state);
+    this.bundleCache.set(hash, envelope, metrics);
+    return { envelope, artifacts, metrics, reused: false, hash };
+  }
+
+  /** P3: frozen harness identity for one claim (no secrets, references
+   *  only). */
+  private harnessIdentityOf(
+    agent: string,
+    snapshot: ExecutorDescriptorV1,
+  ): HarnessIdentityV1 {
+    const harness: HarnessIdentityV1 = {
+      agent,
+      executorKind: snapshot.kind,
+      configHash: snapshot.configHash,
     };
+    if (snapshot.connection) {
+      harness.connectionId = snapshot.connection.connectionId;
+      harness.connectionRevision = snapshot.connection.revisionNumber;
+    }
+    if (snapshot.requestedModelId) {
+      harness.requestedModelId = snapshot.requestedModelId;
+    }
+    return harness;
+  }
+
+  /** P3: immutable claim-time efficiency evidence for one attempt. */
+  private claimEfficiencyEvidence(
+    invocationId: string,
+    agent: string,
+    executorSnapshot: ExecutorDescriptorV1,
+    workspace: ContextWorkspaceIdentityV1 | undefined,
+    contextBundle: { hash: string; reused: boolean } | null,
+    context: ContextMetricsV1 | null,
+    dispatchable: boolean,
+    startedAt: string,
+  ): InvocationEfficiencyEvidenceV1 {
+    return buildClaimEfficiencyEvidence({
+      invocationId,
+      harness: this.harnessIdentityOf(agent, executorSnapshot),
+      ...(workspace !== undefined ? { workspace } : {}),
+      contextBundle,
+      context,
+      dispatchable,
+      startedAt,
+    });
   }
 
   async createExecution(
@@ -1306,6 +1473,14 @@ export class ExecutionService {
           inputSnapshot: input,
           contextSnapshot: null,
           executorSnapshot: { agent },
+          efficiency: buildClaimEfficiencyEvidence({
+            invocationId: `${logicalStep.id}:${attemptNumber}`,
+            harness: { agent, executorKind: "legacy", configHash: frozenSpecHash },
+            contextBundle: null,
+            context: null,
+            dispatchable: true,
+            startedAt: new Date().toISOString(),
+          }),
           status: "CREATED",
           deadlineAt,
         }),

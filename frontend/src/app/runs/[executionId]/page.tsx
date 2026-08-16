@@ -13,6 +13,7 @@ import {
   StopCircle,
   RefreshCw,
   Shield,
+  BarChart3,
 } from "lucide-react";
 import { tenvyrApi } from "../../../lib/tenvyr-api/client.ts";
 import { parseWorkbenchCommandResult } from "../../../lib/tenvyr-api/guards.ts";
@@ -22,6 +23,7 @@ import type {
 } from "../../../lib/tenvyr-api/types.ts";
 import { StatusBadge } from "../../../components/shared/StatusBadge.tsx";
 import { LoadingSpinner } from "../../../components/shared/LoadingSpinner.tsx";
+import { EmptyState } from "../../../components/shared/EmptyState.tsx";
 
 export default function RunDetailPage() {
   const params = useParams();
@@ -33,9 +35,9 @@ export default function RunDetailPage() {
   const [projection, setProjection] =
     useState<WorkbenchExecutionProjectionV1 | null>(null);
   const [capsule, setCapsule] = useState<CapsuleSummaryV1 | null>(null);
-  const [activeTab, setActiveTab] = useState<"loop" | "evidence" | "capsule">(
-    "loop",
-  );
+  const [activeTab, setActiveTab] = useState<
+    "loop" | "evidence" | "capsule" | "efficiency"
+  >("loop");
   const [acting, setActing] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     type: "success" | "error" | "info";
@@ -87,7 +89,9 @@ export default function RunDetailPage() {
     }
   };
 
-  const handleTabChange = (tab: "loop" | "evidence" | "capsule") => {
+  const handleTabChange = (
+    tab: "loop" | "evidence" | "capsule" | "efficiency",
+  ) => {
     setActiveTab(tab);
     if (tab === "capsule" && !capsule) {
       loadCapsuleData();
@@ -203,6 +207,19 @@ export default function RunDetailPage() {
   const iterations = coordination?.iterations ?? [];
   const attempts = projection?.attempts ?? [];
   const artifacts = projection?.artifacts ?? [];
+  /** P3: bounded execution-level efficiency aggregate; empty defaults when
+   *  the projection is unavailable (never invented data). */
+  const efficiencyAggregate = projection?.efficiency ?? {
+    attemptCount: 0,
+    bundleAttempts: 0,
+    bundlesReused: 0,
+    bundlesBuilt: 0,
+    projectedTotalBytes: 0,
+    providerCacheEvidenceAttempts: 0,
+    providerCacheHitAttempts: 0,
+    runtimeDurationMs: null,
+    truncated: false,
+  };
   const isTerminal = ["COMPLETED", "FAILED", "CANCELLED"].includes(
     execution?.status ?? "",
   );
@@ -594,6 +611,29 @@ export default function RunDetailPage() {
           }}
         >
           Evidence & Attempts ({attempts.length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange("efficiency")}
+          style={{
+            background: "none",
+            border: "none",
+            borderBottom:
+              activeTab === "efficiency"
+                ? "2px solid var(--accent-blue)"
+                : "2px solid transparent",
+            padding: "0.6rem 0",
+            color:
+              activeTab === "efficiency"
+                ? "var(--text-primary)"
+                : "var(--text-secondary)",
+            fontWeight: 600,
+            fontSize: "0.9rem",
+            cursor: "pointer",
+          }}
+        >
+          Efficiency
         </button>
 
         <button
@@ -1296,6 +1336,232 @@ export default function RunDetailPage() {
           )}
         </div>
       )}
+
+      {/* TAB 4: Efficiency (Invocation Efficiency / Context Projection
+          baseline). Only shows data Tenvyr actually possesses: bundle
+          identity/reuse, bounded projection metrics, truthful session
+          mode, and usage exactly as the runtime reported it. Never raw
+          prompts or fabricated numbers. */}
+      {activeTab === "efficiency" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div className="card">
+            <h3 className="card-title" style={{ marginBottom: "0.75rem" }}>
+              Invocation Efficiency
+            </h3>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: "0.75rem",
+              }}
+            >
+              <div
+                style={{
+                  backgroundColor: "var(--bg-surface)",
+                  padding: "0.9rem",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  Context projected
+                </div>
+                <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                  {formatBytes(efficiencyAggregate.projectedTotalBytes)}
+                </div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                  {efficiencyAggregate.bundleAttempts} attempts with a
+                  ContextBundle
+                </div>
+              </div>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-surface)",
+                  padding: "0.9rem",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  Context bundles
+                </div>
+                <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                  {efficiencyAggregate.bundlesReused} reused ·{" "}
+                  {efficiencyAggregate.bundlesBuilt} built
+                </div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                  Tenvyr projection reuse (MISS/HIT), never provider cache
+                </div>
+              </div>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-surface)",
+                  padding: "0.9rem",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  Provider cached-input evidence
+                </div>
+                <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                  {efficiencyAggregate.providerCacheEvidenceAttempts} reported
+                </div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                  {efficiencyAggregate.providerCacheHitAttempts} with
+                  cachedInputTokens &gt; 0 — as reported by the runtime
+                </div>
+              </div>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-surface)",
+                  padding: "0.9rem",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  Runtime duration
+                </div>
+                <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                  {efficiencyAggregate.runtimeDurationMs === null
+                    ? "—"
+                    : formatMs(efficiencyAggregate.runtimeDurationMs)}
+                </div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                  Completed dispatches only
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h4 style={{ fontSize: "0.9rem", marginBottom: "0.5rem" }}>
+              Per-attempt efficiency evidence
+            </h4>
+            {attempts.filter((entry) => entry.efficiency).length === 0 ? (
+              <EmptyState
+                icon={BarChart3}
+                title="No efficiency evidence"
+                description="This execution predates the P3 baseline or its attempts recorded no context bundle / usage."
+              />
+            ) : (
+              <div className="table-container">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Step</th>
+                      <th>Attempt</th>
+                      <th>Status</th>
+                      <th>Context Bundle</th>
+                      <th>Projected</th>
+                      <th>Session</th>
+                      <th>Usage (input / cached / output)</th>
+                      <th>Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attempts.map((attempt) => {
+                      const eff = attempt.efficiency;
+                      if (!eff) return null;
+                      return (
+                        <tr key={`${attempt.stepId}:${attempt.attemptNumber}`}>
+                          <td>
+                            <code>{attempt.stepId}</code>
+                          </td>
+                          <td>#{attempt.attemptNumber}</td>
+                          <td>
+                            <StatusBadge status={attempt.status} />
+                          </td>
+                          <td>
+                            {eff.contextBundleHash ? (
+                              <>
+                                <code>{shortHash(eff.contextBundleHash)}</code>{" "}
+                                {eff.contextBundleReused ? (
+                                  <span className="badge badge-neutral">
+                                    reused
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-neutral">
+                                    built
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <span style={{ color: "var(--text-muted)" }}>
+                                none
+                              </span>
+                            )}
+                          </td>
+                          <td>
+                            {eff.projectedBytes === null
+                              ? "—"
+                              : `${formatBytes(eff.projectedBytes)} · ${eff.selectedContextItemCount} items · ${eff.selectedArtifactCount} artifacts`}
+                          </td>
+                          <td>{eff.sessionMode}</td>
+                          <td>
+                            {eff.usageReported ? (
+                              <>
+                                {eff.inputTokens?.toLocaleString() ?? "—"} /{" "}
+                                {eff.cachedInputTokens?.toLocaleString() ??
+                                  "not reported"}{" "}
+                                / {eff.outputTokens?.toLocaleString() ?? "—"}
+                              </>
+                            ) : (
+                              <span style={{ color: "var(--text-muted)" }}>
+                                Not reported by runtime
+                              </span>
+                            )}
+                          </td>
+                          <td>
+                            {eff.durationMs === null
+                              ? "—"
+                              : formatMs(eff.durationMs)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p
+              style={{
+                color: "var(--text-muted)",
+                fontSize: "0.75rem",
+                marginTop: "0.75rem",
+              }}
+            >
+              Tenvyr does not own provider KV cache and does not guarantee
+              prompt-cache hits. “reused” = the identical deterministic
+              context projection was not rebuilt; provider cached-input
+              numbers appear only when the runtime reported them.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** P3: bounded display formatters (bytes/ms) for the Efficiency tab. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function shortHash(hash: string): string {
+  return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash;
 }

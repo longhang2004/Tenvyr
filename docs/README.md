@@ -45,7 +45,9 @@ prose. The conflict must still be corrected rather than ignored.
 - Executors: [local executor host](architecture/executors/local-executor-host.md),
   [runtime connections](architecture/executors/runtime-connections.md),
   [model sources and runtime targets](architecture/provider-connections.md),
-  and the [native integration matrix](architecture/executors/native-integrations.md)
+  the [native integration matrix](architecture/executors/native-integrations.md),
+  and the
+  [invocation efficiency / context projection baseline](architecture/executors/invocation-efficiency.md)
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md), and the
   [machine parity ledger](architecture/workers/worker-sdk-parity.json)
@@ -89,6 +91,7 @@ Developer tooling is not a Tenvyr production runtime feature.
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
   the [P2 runtime model sources + model selection slice](plans/active/tenvyr-productization-roadmap/P2-runtime-model-sources/GOAL.md),
+  the [P3 runtime harness optimization + context efficiency slice](plans/active/tenvyr-productization-roadmap/P3-runtime-harness-optimization/GOAL.md),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take

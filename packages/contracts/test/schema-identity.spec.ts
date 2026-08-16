@@ -100,7 +100,7 @@ describe("schema identity", () => {
       "agent-invocation.v1.schema.json":
         "9362353567e8e867e514955f326290cb83ea08a6d7176b6474db88a5f58ad0ad",
       "agent-result.v1.schema.json":
-        "a3c46c4310d9305af2136fe8075ffd2f3fc6e36754c0e3c8323fe6c5786dbc39",
+        "4d5c6b4f31a081bdf942f23a7ca28c77a7f22f753fbaf0f79a723721526638cf",
       "agent-event.v1.schema.json":
         "c6692a9419220018886915e54eddbceff7f954370675fa18366ef02c844fa0ee",
       "http-agent-run-request.v1.schema.json":

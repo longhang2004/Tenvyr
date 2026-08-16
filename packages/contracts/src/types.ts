@@ -88,6 +88,11 @@ export type AgentResultV1 = {
     outputTokens?: number;
     totalTokens?: number;
     costUsd?: number;
+    /** P3: provider cache evidence as REPORTED by the runtime/provider.
+     *  Absent = not reported; never synthesized, never inferred from a
+     *  Tenvyr context-bundle match. */
+    cachedInputTokens?: number;
+    cacheWriteTokens?: number;
   };
   /** M6-S1: observed-mode delegation evidence (bounded, inert). */
   delegation?: AgentDelegationObservationV1[];

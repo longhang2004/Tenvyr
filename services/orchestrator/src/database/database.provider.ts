@@ -51,6 +51,7 @@ import { MilestoneTenOperatorActions1722270016000 } from "./migrations/172227001
 import { WorkspaceIdentity1722270018000 } from "./migrations/1722270018000-WorkspaceIdentity";
 import { CoordinationApprovalResume1722270017000 } from "./migrations/1722270017000-CoordinationApprovalResume";
 import { ModelSources1722270019000 } from "./migrations/1722270019000-ModelSources";
+import { P3ContextBundle1722270020000 } from "./migrations/1722270020000-P3ContextBundle";
 import { ModelSourceEntity } from "../entities/model-source.entity";
 
 export function databaseOptions(
@@ -124,6 +125,7 @@ export function databaseOptions(
       CoordinationApprovalResume1722270017000,
       WorkspaceIdentity1722270018000,
       ModelSources1722270019000,
+      P3ContextBundle1722270020000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

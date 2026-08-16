@@ -458,6 +458,45 @@ export type AttemptSummaryV1 = {
   /** P2: bounded observed model ONLY when the runtime/worker itself
    *  reported it inside the attempt result — never fabricated. */
   observedModelId?: string;
+  /** P3: bounded immutable efficiency evidence when the attempt recorded
+   *  one (hashes/sizes/counts/ids + observed usage only). Absent =
+   *  pre-P3 row or no projection. */
+  efficiency?: WorkbenchAttemptEfficiencyV1;
+};
+
+/** P3: bounded attempt-level efficiency projection. */
+export type WorkbenchAttemptEfficiencyV1 = {
+  contextBundleHash: string | null;
+  contextBundleReused: boolean | null;
+  projectedBytes: number | null;
+  projectedCharacters: number | null;
+  selectedContextItemCount: number | null;
+  selectedArtifactCount: number | null;
+  sessionMode: string;
+  usageReported: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  connectionId?: string;
+  workspaceId?: string;
+};
+
+/** P3: bounded execution-level efficiency aggregate (real data only —
+ *  absent bundles/usage are counted, never invented). */
+export type WorkbenchEfficiencyAggregateV1 = {
+  attemptCount: number;
+  bundleAttempts: number;
+  bundlesReused: number;
+  bundlesBuilt: number;
+  projectedTotalBytes: number;
+  providerCacheEvidenceAttempts: number;
+  providerCacheHitAttempts: number;
+  runtimeDurationMs: number | null;
+  truncated: boolean;
 };
 
 export type ArtifactRefV1 = {
@@ -486,6 +525,8 @@ export type WorkbenchExecutionProjectionV1 = {
   } | null;
   attempts: AttemptSummaryV1[];
   attemptsTruncated: boolean;
+  /** P3: bounded execution-level efficiency aggregate (real data only). */
+  efficiency: WorkbenchEfficiencyAggregateV1;
   approvals: { pending: number; decided: number };
   artifacts: ArtifactRefV1[];
   artifactsTruncated: boolean;

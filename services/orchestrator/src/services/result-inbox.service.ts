@@ -38,6 +38,11 @@ import { PlanProposalService } from "./plan-proposal.service";
 import { PipelineValidationService } from "./pipeline-validation.service";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
 import { usageFromResult, type UsageObservation } from "../domain/budget";
+import {
+  completeEfficiencyEvidence,
+  parseEfficiencyEvidence,
+  type InvocationEfficiencyEvidenceV1,
+} from "../domain/context-bundle";
 
 const TERMINAL_ATTEMPTS: StepAttemptStatus[] = [
   "SUCCESS",
@@ -346,6 +351,11 @@ export class ResultInboxService {
             error: postconditionFailure ?? this.error(result),
             terminationReason:
               postconditionFailure ?? this.terminationReason(result),
+            // P3: complete the immutable claim-time efficiency evidence with
+            // ACTUAL observed usage + terminal timing, atomically with this
+            // terminal transition. Usage appears only when the runtime
+            // reported it; the record stays immutable afterwards.
+            efficiency: this.completeEfficiency(attempt.efficiency, result, attempt),
           })
           .where("id = :id", { id: attempt.id })
           .andWhere("status NOT IN (:...terminal)", {
@@ -700,6 +710,37 @@ export class ResultInboxService {
     if (result.status === "cancelled") return "Worker cancelled the attempt";
     if (result.status === "timed_out") return "Worker reported a timeout";
     return this.error(result);
+  }
+
+  /**
+   * P3: complete the immutable claim-time efficiency evidence with ACTUAL
+   * observed usage + terminal timing. Returns null for records absent (no
+   * efficiency written), merges usage/timing for our own records, and
+   * leaves unrecognized/unknown records untouched. Usage numbers appear
+   * ONLY when the runtime reported them — absence stays not-reported.
+   */
+  private completeEfficiency(
+    stored: unknown,
+    result: AgentResultV1,
+    attempt: StepAttemptEntity,
+  ): unknown | null {
+    if (stored === null || stored === undefined) return null;
+    let evidence: InvocationEfficiencyEvidenceV1;
+    try {
+      evidence = parseEfficiencyEvidence(stored);
+    } catch {
+      // Not a record this version wrote — never fabricate evidence over an
+      // unknown snapshot.
+      return stored;
+    }
+    const startedAt =
+      attempt.dispatchedAt?.toISOString() ?? attempt.createdAt.toISOString();
+    return completeEfficiencyEvidence(
+      evidence,
+      result.usage,
+      new Date().toISOString(),
+      startedAt,
+    );
   }
 
   private source(transport: AgentTransportMetadata): {

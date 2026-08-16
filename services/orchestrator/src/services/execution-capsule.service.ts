@@ -202,6 +202,10 @@ export type ExecutionCapsuleV1 = {
     executorSnapshot: unknown;
     inputSnapshotHash: string | null;
     contextSnapshotHash: string | null;
+    /** P3: frozen immutable InvocationEfficiencyEvidenceV1 (bounded
+     *  telemetry — hashes/sizes/counts/ids/observed usage), when the
+     *  attempt recorded one. Null for pre-P3 rows. */
+    efficiency: unknown;
     terminalAt: Date | null;
     error: string | null;
   }>;
@@ -1183,6 +1187,7 @@ export class ExecutionCapsuleService {
             attempt.contextSnapshot === undefined
               ? null
               : sha256Json(attempt.contextSnapshot),
+          efficiency: attempt.efficiency ?? null,
           terminalAt: attempt.terminalAt ?? null,
           error: attempt.error ?? null,
         })),

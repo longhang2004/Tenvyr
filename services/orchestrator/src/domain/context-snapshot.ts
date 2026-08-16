@@ -244,23 +244,17 @@ export function validateArtifactSelectors(input: unknown): ArtifactSelector[] {
 }
 
 /**
- * Materialize the immutable Tenvyr context envelope for one attempt from the
- * authoritative state version read under the execution lock and the resolved
- * artifact references (M2D; empty by default).
- *
- * - selects only exact top-level keys (a dot is an ordinary key character);
- * - explicit JSON null is included; missing keys are a deterministic claim
- *   failure (TENVYR_CTX_MISSING_STATE_KEY);
- * - output keys are canonically sorted, independent of input ordering;
- * - selected values are isolated clones; the envelope is re-validated for
- *   JSON safety and the complete 65,536-byte bound after it is formed.
+ * P3: select and canonically order exactly the state values a projection
+ * would place in the Tenvyr context envelope, WITHOUT building the full
+ * envelope. Used to compute the ContextBundle fingerprint before the
+ * materialization/validation pass. Mirrors the selection inside
+ * `materializeContextSnapshot` exactly (same validation, same clones, same
+ * deterministic key order) so a cache miss produces identical semantics.
  */
-export function materializeContextSnapshot(
+export function selectProjectedValues(
   projection: unknown,
   state: ExecutionState,
-  version: number,
-  artifactReferences: ArtifactContextReference[] = [],
-): TenvyrContextEnvelope {
+): Record<string, JsonValue> {
   let validated: ContextProjection;
   try {
     validated = validateContextProjection(projection);
@@ -281,6 +275,28 @@ export function materializeContextSnapshot(
   for (const key of Object.keys(values).sort()) {
     ordered[key] = values[key];
   }
+  return ordered;
+}
+
+/**
+ * Materialize the immutable Tenvyr context envelope for one attempt from the
+ * authoritative state version read under the execution lock and the resolved
+ * artifact references (M2D; empty by default).
+ *
+ * - selects only exact top-level keys (a dot is an ordinary key character);
+ * - explicit JSON null is included; missing keys are a deterministic claim
+ *   failure (TENVYR_CTX_MISSING_STATE_KEY);
+ * - output keys are canonically sorted, independent of input ordering;
+ * - selected values are isolated clones; the envelope is re-validated for
+ *   JSON safety and the complete 65,536-byte bound after it is formed.
+ */
+export function materializeContextSnapshot(
+  projection: unknown,
+  state: ExecutionState,
+  version: number,
+  artifactReferences: ArtifactContextReference[] = [],
+): TenvyrContextEnvelope {
+  const ordered = selectProjectedValues(projection, state);
 
   const envelope: TenvyrContextEnvelope = {
     tenvyr: {

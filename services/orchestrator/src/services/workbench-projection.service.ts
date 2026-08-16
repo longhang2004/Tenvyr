@@ -14,6 +14,10 @@ import { ArtifactEntity } from "../entities/artifact.entity";
 import { DelegationService } from "./delegation.service";
 import { ExecutionService } from "./execution.service";
 import { ExecutionCapsuleService } from "./execution-capsule.service";
+import {
+  parseEfficiencyEvidence,
+  type InvocationEfficiencyEvidenceV1,
+} from "../domain/context-bundle";
 
 /**
  * M10-S1: bounded Workbench read projections. Every response has stable
@@ -56,6 +60,41 @@ export type WorkbenchExecutionSummaryV1 = {
   coordinationPhase: string | null;
   iterationNumber: number | null;
   stepCount: number;
+};
+
+export type WorkbenchAttemptEfficiencyV1 = {
+  contextBundleHash: string | null;
+  contextBundleReused: boolean | null;
+  projectedBytes: number | null;
+  projectedCharacters: number | null;
+  selectedContextItemCount: number | null;
+  selectedArtifactCount: number | null;
+  sessionMode: string;
+  usageReported: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  connectionId?: string;
+  workspaceId?: string;
+};
+
+/** P3: bounded execution-level efficiency aggregate — only what real
+ *  attempts actually recorded; absent bundles/usage are counted, never
+ *  invented. */
+export type WorkbenchEfficiencyAggregateV1 = {
+  attemptCount: number;
+  bundleAttempts: number;
+  bundlesReused: number;
+  bundlesBuilt: number;
+  projectedTotalBytes: number;
+  providerCacheEvidenceAttempts: number;
+  providerCacheHitAttempts: number;
+  runtimeDurationMs: number | null;
+  truncated: boolean;
 };
 
 export type WorkbenchExecutionProjectionV1 = {
@@ -128,8 +167,14 @@ export type WorkbenchExecutionProjectionV1 = {
     status: string;
     terminalAt: string | null;
     error: string | null;
+    /** P3: bounded efficiency evidence when the attempt recorded one
+     *  (parsed strictly; hashes/sizes/counts/ids only — never raw
+     *  context, prompts, or credentials). */
+    efficiency?: WorkbenchAttemptEfficiencyV1;
   }>;
   attemptsTruncated: boolean;
+  /** P3: bounded execution-level efficiency aggregate. */
+  efficiency: WorkbenchEfficiencyAggregateV1;
   approvals: { pending: number; decided: number };
   artifacts: Array<{
     artifactId: string;
@@ -145,6 +190,107 @@ export type WorkbenchExecutionProjectionV1 = {
   capsule: { contentHash: string | null } | null;
   bounds: typeof WORKBENCH_BOUNDS;
 };
+
+/**
+ * P3: bounded attempt-level efficiency projection. Parses the frozen
+ * immutable evidence strictly; an unreadable/unknown record is treated as
+ * absent (never fabricated, never re-validated from live state).
+ */
+export function boundedEfficiencyProjection(
+  stored: unknown,
+): WorkbenchAttemptEfficiencyV1 | undefined {
+  if (stored === null || stored === undefined) return undefined;
+  let evidence: InvocationEfficiencyEvidenceV1;
+  try {
+    evidence = parseEfficiencyEvidence(stored);
+  } catch {
+    return undefined;
+  }
+  const projection: WorkbenchAttemptEfficiencyV1 = {
+    contextBundleHash: evidence.contextBundle?.hash ?? null,
+    contextBundleReused: evidence.contextBundle?.reused ?? null,
+    projectedBytes: evidence.context?.projectedBytes ?? null,
+    projectedCharacters: evidence.context?.projectedCharacters ?? null,
+    selectedContextItemCount: evidence.context?.selectedContextItemCount ?? null,
+    selectedArtifactCount: evidence.context?.selectedArtifactCount ?? null,
+    sessionMode: evidence.session.mode,
+    usageReported: evidence.usage.reported,
+    startedAt: evidence.timing.startedAt,
+    completedAt: evidence.timing.completedAt ?? null,
+    durationMs: evidence.timing.durationMs ?? null,
+  };
+  if (evidence.usage.inputTokens !== undefined) {
+    projection.inputTokens = evidence.usage.inputTokens;
+  }
+  if (evidence.usage.outputTokens !== undefined) {
+    projection.outputTokens = evidence.usage.outputTokens;
+  }
+  if (evidence.usage.cachedInputTokens !== undefined) {
+    projection.cachedInputTokens = evidence.usage.cachedInputTokens;
+  }
+  if (evidence.usage.cacheWriteTokens !== undefined) {
+    projection.cacheWriteTokens = evidence.usage.cacheWriteTokens;
+  }
+  if (evidence.harness.connectionId !== undefined) {
+    projection.connectionId = evidence.harness.connectionId;
+  }
+  if (evidence.workspace !== undefined) {
+    projection.workspaceId = evidence.workspace.workspaceId;
+  }
+  return projection;
+}
+
+/** P3: bounded execution-level aggregate over the attempts actually
+ *  loaded for the projection window. */
+export function aggregateEfficiency(
+  attempts: Array<StepAttemptEntity>,
+  truncated: boolean,
+): WorkbenchEfficiencyAggregateV1 {
+  let bundleAttempts = 0;
+  let bundlesReused = 0;
+  let bundlesBuilt = 0;
+  let projectedTotalBytes = 0;
+  let providerCacheEvidenceAttempts = 0;
+  let providerCacheHitAttempts = 0;
+  let runtimeDurationMs: number | null = null;
+  for (const attempt of attempts) {
+    if (attempt.efficiency === null || attempt.efficiency === undefined) {
+      continue;
+    }
+    let evidence: InvocationEfficiencyEvidenceV1;
+    try {
+      evidence = parseEfficiencyEvidence(attempt.efficiency);
+    } catch {
+      continue;
+    }
+    if (evidence.contextBundle) {
+      bundleAttempts++;
+      if (evidence.contextBundle.reused) bundlesReused++;
+      else bundlesBuilt++;
+    }
+    if (evidence.context) {
+      projectedTotalBytes += evidence.context.projectedBytes;
+    }
+    if (evidence.usage.reported && evidence.usage.cachedInputTokens !== undefined) {
+      providerCacheEvidenceAttempts++;
+      if (evidence.usage.cachedInputTokens > 0) providerCacheHitAttempts++;
+    }
+    if (evidence.timing.durationMs !== null) {
+      runtimeDurationMs = (runtimeDurationMs ?? 0) + evidence.timing.durationMs;
+    }
+  }
+  return {
+    attemptCount: attempts.length,
+    bundleAttempts,
+    bundlesReused,
+    bundlesBuilt,
+    projectedTotalBytes,
+    providerCacheEvidenceAttempts,
+    providerCacheHitAttempts,
+    runtimeDurationMs,
+    truncated,
+  };
+}
 
 @Injectable()
 export class WorkbenchProjectionService {
@@ -517,6 +663,7 @@ export class WorkbenchProjectionService {
           error: string | null;
           requestedModelId?: string;
           observedModelId?: string;
+          efficiency?: WorkbenchAttemptEfficiencyV1;
         } = {
           stepId:
             stepIdByRow.get(attempt.logicalStepId) ?? attempt.logicalStepId,
@@ -551,9 +698,15 @@ export class WorkbenchProjectionService {
         ) {
           summary.observedModelId = resultOutput.observedModelId;
         }
+        // P3: bounded immutable efficiency evidence (bundle identity/reuse,
+        // projection metrics, session mode, reported usage, timing) when
+        // the attempt recorded one.
+        const efficiency = boundedEfficiencyProjection(attempt.efficiency);
+        if (efficiency !== undefined) summary.efficiency = efficiency;
         return summary;
       }),
       attemptsTruncated,
+      efficiency: aggregateEfficiency(attempts, attemptsTruncated),
       approvals: {
         pending: approvals.filter((approval) => approval.status === "PENDING")
           .length,

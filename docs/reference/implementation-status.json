@@ -1018,6 +1018,44 @@
     "Catalogs are bounded on-demand projections, never persisted as authority; catalog visibility never equals execution compatibility",
     "External Production Exposure Gate stays open: catalog endpoints are a single-owner operator feature (SSRF threat documented)"
    ]
+  },
+  {
+   "id": "runtime-harness-context-efficiency",
+   "status": "implemented",
+   "sources": [
+    "services/orchestrator/src/domain/context-bundle.ts",
+    "services/orchestrator/src/executors/context-projection-cache.ts",
+    "services/orchestrator/src/domain/context-snapshot.ts",
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/result-inbox.service.ts",
+    "services/orchestrator/src/services/workbench-projection.service.ts",
+    "services/orchestrator/src/services/execution-capsule.service.ts",
+    "services/orchestrator/src/entities/step-attempt.entity.ts",
+    "services/orchestrator/src/database/migrations/1722270020000-P3ContextBundle.ts",
+    "contracts/schemas/agent-result.v1.schema.json",
+    "packages/contracts/src/types.ts",
+    "frontend/src/app/runs/[executionId]/page.tsx",
+    "frontend/src/lib/tenvyr-api/types.ts"
+   ],
+   "tests": [
+    "services/orchestrator/src/domain/context-bundle.spec.ts",
+    "services/orchestrator/src/executors/context-projection-cache.spec.ts",
+    "services/orchestrator/src/p3-context-dogfood.integration.spec.ts",
+    "services/orchestrator/src/database/postgres.integration.spec.ts",
+    "services/orchestrator/src/services/workbench-projection.service.spec.ts",
+    "frontend/src/lib/tenvyr-api/client.test.mjs"
+   ],
+   "docs": [
+    "docs/architecture/executors/invocation-efficiency.md"
+   ],
+   "limitations": [
+    "Projection cache is process-local and disposable; restart starts empty (PostgreSQL attempts + Capsule remain the durable record)",
+    "Artifact resolution still executes per claim (resolved references are a load-bearing fingerprint input)",
+    "Workspace dirty CONTENT is not hashed (dirty flag participates; no production path projects file bytes into the envelope)",
+    "Coordination worker inputs remain planner-authored; the bundle covers the context-envelope projection path only",
+    "Full runtime session reuse is not implemented; all current invocations are single-shot FRESH",
+    "Usage evidence appears only when the runtime reports it; Tenvyr never infers cache hits from ContextBundle matches"
+   ]
   }
  ]
 }

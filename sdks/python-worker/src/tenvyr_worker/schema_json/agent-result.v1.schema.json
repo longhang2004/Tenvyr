@@ -42,8 +42,11 @@
         "inputTokens": { "type": "integer", "minimum": 0 },
         "outputTokens": { "type": "integer", "minimum": 0 },
         "totalTokens": { "type": "integer", "minimum": 0 },
-        "costUsd": { "type": "number", "minimum": 0 }
-      }
+        "costUsd": { "type": "number", "minimum": 0 },
+        "cachedInputTokens": { "type": "integer", "minimum": 0 },
+        "cacheWriteTokens": { "type": "integer", "minimum": 0 }
+      },
+      "description": "Optional bounded usage evidence reported by the runtime/provider. Absent fields mean NOT REPORTED, never zero. cachedInputTokens/cacheWriteTokens are provider cache evidence observed by the runtime — they are never inferred by Tenvyr."
     },
     "delegation": {
       "type": "array",

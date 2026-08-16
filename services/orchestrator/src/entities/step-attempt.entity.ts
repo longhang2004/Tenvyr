@@ -53,6 +53,14 @@ export class StepAttemptEntity {
   @Column({ type: "jsonb", nullable: true })
   contextSnapshot: unknown;
 
+  /** P3: immutable bounded InvocationEfficiencyEvidenceV1 for the attempt's
+   *  runtime invocation (ContextBundle identity/reuse, frozen harness,
+   *  workspace identity, context metrics, session mode, reported usage,
+   *  timing). Written once at claim, completed once at result acceptance.
+   *  Telemetry-safe by construction: hashes/sizes/counts/ids only. */
+  @Column({ type: "jsonb", nullable: true })
+  efficiency: unknown;
+
   @Column({ type: "jsonb" })
   executorSnapshot: Record<string, unknown>;
 
