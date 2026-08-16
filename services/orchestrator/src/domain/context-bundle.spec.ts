@@ -338,4 +338,68 @@ describe("P3 efficiency evidence parse (persistence trust boundary)", () => {
       parseEfficiencyEvidence({ ...complete, session: { mode: "warp" } }),
     ).toThrow();
   });
+
+  it("round-trips the legitimate `contextBundle: null` variant for a dispatchable no-projection claim", () => {
+    // A runtime invocation without a Tenvyr contextProjection records
+    // contextBundle = null AND context = null at claim time; the parser
+    // must accept null as the no-context-bundle state (regression: it
+    // previously threw "contextBundle must be an object", leaving the
+    // record unparseable for Workbench/Capsule).
+    const claim = buildClaimEfficiencyEvidence({
+      invocationId: "plain:1",
+      harness: { agent: "x", executorKind: "http", configHash: "a".repeat(64) },
+      contextBundle: null,
+      context: null,
+      dispatchable: true,
+      startedAt: "2026-08-16T00:00:00.000Z",
+    });
+    expect(claim.contextBundle).toBeNull();
+    expect(claim.context).toBeNull();
+    expect(claim.session.mode).toBe("fresh");
+
+    // Claim -> persisted JSONB -> parse round-trips the null variant.
+    const parsed = parseEfficiencyEvidence(structuredClone(claim));
+    expect(parsed).toEqual(claim);
+    expect(parsed.contextBundle).toBeNull();
+    expect(parsed.context).toBeNull();
+
+    // Result acceptance completes usage/timing while preserving null.
+    const completed = completeEfficiencyEvidence(
+      parsed,
+      { inputTokens: 7, cachedInputTokens: 3, outputTokens: 4 },
+      "2026-08-16T00:00:02.000Z",
+      "2026-08-16T00:00:00.000Z",
+    );
+    expect(completed.contextBundle).toBeNull();
+    expect(completed.usage).toEqual({
+      reported: true,
+      inputTokens: 7,
+      cachedInputTokens: 3,
+      outputTokens: 4,
+    });
+    expect(completed.timing.completedAt).toBe("2026-08-16T00:00:02.000Z");
+    expect(completed.timing.durationMs).toBe(2000);
+    // The completed record also round-trips the parser.
+    expect(parseEfficiencyEvidence(structuredClone(completed))).toEqual(completed);
+  });
+
+  it("round-trips the `contextBundle: null` variant for a pre-dispatch blocked/WAITING attempt", () => {
+    const blocked = buildClaimEfficiencyEvidence({
+      invocationId: "blocked:1",
+      harness: { agent: "x", executorKind: "http", configHash: "a".repeat(64) },
+      contextBundle: null,
+      context: null,
+      dispatchable: false,
+      startedAt: "2026-08-16T00:00:00.000Z",
+    });
+    expect(blocked.session.mode).toBe("unknown");
+    const parsed = parseEfficiencyEvidence(structuredClone(blocked));
+    expect(parsed.contextBundle).toBeNull();
+    expect(parsed.session.mode).toBe("unknown");
+    // A never-dispatched blocked attempt stays incomplete: usage absent
+    // (not reported, never zero), timing incomplete.
+    expect(parsed.usage).toEqual({ reported: false });
+    expect(parsed.timing.completedAt).toBeNull();
+    expect(parsed.timing.durationMs).toBeNull();
+  });
 });

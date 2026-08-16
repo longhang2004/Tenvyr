@@ -15,7 +15,39 @@ sources:
 Status: provisional implementer report; closure is the Technical Lead's
 decision. This slice does NOT close the P3 roadmap.
 
-## What was built
+## Closure — Technical Lead audit fixes (2026-08-16)
+
+Narrow closure only; the accepted architecture is unchanged.
+
+1. **`contextBundle: null` variant accepted.** `parseEfficiencyEvidence`
+   previously threw on the legitimate no-context-bundle state written by
+   `buildClaimEfficiencyEvidence` for attempts without a Tenvyr
+   `contextProjection`, which kept those attempts' usage/timing incomplete
+   and hid them from Workbench efficiency projections/aggregates. The
+   parser now round-trips `null` (both `contextBundle` and `context`).
+   Regressions cover the dispatchable FRESH and pre-dispatch blocked/
+   WAITING UNKNOWN paths, including a real-PostgreSQL no-context
+   completion through claim → acceptance → Workbench → Capsule.
+2. **Cache immutability on WRITE.** `ContextProjectionCache.set` now
+   stores deep clones of the caller's envelope and defensive copies of the
+   envelope-derived metrics, so mutating the source after `set` can never
+   corrupt the content-addressed entry (the read-side clone regression is
+   kept).
+3. **`executionStateBytes` recomputed per claim.** The full-state metric is
+   NOT a function of the cached envelope; the cache now stores only
+   envelope-derived metrics (`EnvelopeMetricsV1`) and every claim combines
+   the cached envelope metrics with the CURRENT full-state size on HIT.
+   PostgreSQL regression: two executions with identical selected values but
+   different unselected state sizes share a hash and a HIT, produce
+   identical envelopes, and each attempt records its own
+   `executionStateBytes`.
+4. **SPEC reconciled with implementation truth.** P3 SPEC §2 now states
+   artifact resolution executes on EVERY claim (hit and miss) — resolved
+   authoritative references are load-bearing fingerprint inputs and
+   exposure edges are always built from live resolution; optimizing it away
+   is explicitly out of scope.
+
+## What was built (baseline)
 
 1. **Contracts** — `AgentResultV1.usage` extended with optional
    `cachedInputTokens`/`cacheWriteTokens` (absence = not reported; Python

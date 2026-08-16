@@ -1,5 +1,5 @@
 import type { TenvyrContextEnvelope } from "../domain/context-snapshot";
-import type { ContextMetricsV1 } from "../domain/context-bundle";
+import type { ContextMetricsV1, EnvelopeMetricsV1 } from "../domain/context-bundle";
 
 export const CONTEXT_PROJECTION_CACHE_BOUNDS = {
   /** Maximum distinct immutable bundles kept in memory. */
@@ -10,7 +10,13 @@ export const CONTEXT_PROJECTION_CACHE_BOUNDS = {
 
 export type ContextProjectionCacheEntry = {
   envelope: TenvyrContextEnvelope;
-  metrics: ContextMetricsV1;
+  /** ENVELOPE-DERIVED metrics only. The full-state metric
+   *  `executionStateBytes` is NOT a function of the cached envelope and is
+   *  deliberately excluded — it is recomputed against the CURRENT full
+   *  execution state on every claim (a cache HIT across executions with
+   *  different unselected state must never inherit another execution's
+   *  full-state size). */
+  metrics: EnvelopeMetricsV1;
   bytes: number;
 };
 
@@ -34,10 +40,14 @@ export type ContextProjectionCacheStats = {
  *   content fingerprint; any load-bearing input change yields a different
  *   key (a miss), so no stale envelope can ever be served under the wrong
  *   hash. Wall-clock TTL plays no correctness role.
+ * - Immutable on BOTH sides: `set` stores isolated deep clones of the
+ *   caller's envelope and a defensive copy of the metrics, and `get` hands
+ *   back isolated clones — a caller mutating its source after `set`, or a
+ *   caller mutating a returned value, can never corrupt the stored entry.
  * - Never authority: this cache holds ONLY the immutable envelope + bounded
- *   metrics. Approvals, revocation, budget, deadline, policy, plan
- *   authority, health, and auth readiness NEVER enter it; every authority
- *   gate executes on every claim regardless of hit/miss.
+ *   envelope-derived metrics. Approvals, revocation, budget, deadline,
+ *   policy, plan authority, health, and auth readiness NEVER enter it;
+ *   every authority gate executes on every claim regardless of hit/miss.
  * - Process-local and disposable: correctness never depends on the cache —
  *   PostgreSQL attempts and the Capsule are the durable record; a restart
  *   simply starts an empty cache. LRU-ish eviction keeps memory bounded.
@@ -61,7 +71,7 @@ export class ContextProjectionCache {
     // clone so downstream persistence can never mutate the cached entry.
     return {
       envelope: structuredClone(entry.envelope),
-      metrics: entry.metrics,
+      metrics: { ...entry.metrics },
       bytes: entry.bytes,
     };
   }
@@ -76,7 +86,19 @@ export class ContextProjectionCache {
     // Fail closed on absurd growth: never cache something larger than the
     // whole cache budget.
     if (bytes > CONTEXT_PROJECTION_CACHE_BOUNDS.maxTotalBytes) return;
-    this.entries.set(hash, { envelope, metrics, bytes });
+    // WRITE-side isolation: the caller keeps owning its mutable inputs.
+    // Store a deep clone of the envelope and a defensive copy of the
+    // envelope-derived metrics only (executionStateBytes is never cached).
+    this.entries.set(hash, {
+      envelope: structuredClone(envelope),
+      metrics: {
+        projectedBytes: metrics.projectedBytes,
+        projectedCharacters: metrics.projectedCharacters,
+        selectedContextItemCount: metrics.selectedContextItemCount,
+        selectedArtifactCount: metrics.selectedArtifactCount,
+      },
+      bytes,
+    });
     this.evict();
   }
 

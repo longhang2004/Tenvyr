@@ -79,19 +79,30 @@ inputs with different caller ordering produce identical hashes.
 
 ## §2 Context Projection Cache
 
-- Content-addressed map `hash -> { envelope, metrics }`, in-memory, bounded
-  (entry cap + total envelope-bytes cap), process-local, no TTL-primary
-  invalidation. Correctness never depends on the cache; PostgreSQL attempts
-  and the Capsule are the durable record.
+- Content-addressed map `hash -> { envelope, envelope-derived metrics }`,
+  in-memory, bounded (entry cap + total envelope-bytes cap), process-local,
+  no TTL-primary invalidation. Correctness never depends on the cache;
+  PostgreSQL attempts and the Capsule are the durable record.
 - Invalidation is by content/version identity: any change to the
   deterministic inputs changes the hash and misses. Workspace
   clean↔dirty transitions change the hash (fail-closed). Dirty file content
   is not scanned/hashed (documented tradeoff — no production path projects
   file bytes into the envelope).
-- On HIT the exposure edges for previously resolved artifact references are
-  re-derived from the cached envelope's references (same-execution, same
-  artifact ids by hash equality), so append-only exposure evidence is
-  preserved without re-querying.
+- The cached entry is immutable on BOTH sides: `set` stores deep clones of
+  the caller's envelope and defensive copies of the metrics; `get` returns
+  isolated clones. Mutating a source after `set`, or a returned value, can
+  never corrupt the stored bundle (content-addressed invariant).
+- Only ENVELOPE-DERIVED metrics are cached. `executionStateBytes` measures
+  the FULL current execution state, which is NOT a function of the cached
+  envelope: two executions may share a bundle hash with different unselected
+  state sizes. It is therefore recomputed against the CURRENT full state on
+  every claim and combined with the cached envelope metrics on HIT, so each
+  attempt records its own full-state size.
+- Artifact resolution intentionally executes on EVERY claim (hit and miss):
+  resolved authoritative references are a load-bearing fingerprint input and
+  the append-only exposure edges are always built from live resolution. By
+  hash equality the cached references are identical, but resolution is never
+  skipped; optimizing it away is explicitly out of scope for the baseline.
 - The cache NEVER stores or supplies: approvals, revocation state, budgets,
   deadlines, policy authority, plan authority, health, auth readiness.
 

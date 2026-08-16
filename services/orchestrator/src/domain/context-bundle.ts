@@ -103,9 +103,24 @@ export type ContextMetricsV1 = {
   /** Resolved artifact references placed in the envelope. */
   selectedArtifactCount: number;
   /** Canonical UTF-8 bytes of the FULL bounded execution state at
-   *  projection time (how much evidence the selection drew from). */
+   *  projection time (how much evidence the selection drew from). This is
+   *  NOT a function of the context envelope — it must be measured against
+   *  the CURRENT full state on every claim and must never be served from
+   *  the projection cache. */
   executionStateBytes: number;
 };
+
+/** Envelope-derived metrics only — the subset that IS a function of the
+ *  cached envelope and therefore safe to store under the ContextBundle
+ *  hash. `executionStateBytes` is deliberately excluded (see
+ *  ContextMetricsV1). */
+export type EnvelopeMetricsV1 = Omit<ContextMetricsV1, "executionStateBytes">;
+
+/** Measure the FULL bounded execution state bytes for the CURRENT claim
+ *  (never cacheable under the projected-context identity). */
+export function executionStateBytesOf(state: ExecutionState): number {
+  return jsonValueUtf8Size(state ?? {});
+}
 
 export function measureContextEnvelope(
   envelope: TenvyrContextEnvelope,
@@ -119,7 +134,7 @@ export function measureContextEnvelope(
         ? 0
         : Object.keys(envelope.tenvyr.executionState.values).length,
     selectedArtifactCount: envelope.tenvyr.artifacts.length,
-    executionStateBytes: jsonValueUtf8Size(fullState ?? {}),
+    executionStateBytes: executionStateBytesOf(fullState),
   };
 }
 
@@ -290,7 +305,13 @@ export function parseEfficiencyEvidence(value: unknown): InvocationEfficiencyEvi
     usage: parseUsage(snapshot.usage),
     timing: parseTiming(snapshot.timing),
   };
-  if (snapshot.contextBundle !== undefined) {
+  // `null` is the LEGITIMATE no-context-bundle variant written by
+  // buildClaimEfficiencyEvidence for attempts without a Tenvyr
+  // contextProjection; only an absent or object value is valid here.
+  if (
+    snapshot.contextBundle !== undefined &&
+    snapshot.contextBundle !== null
+  ) {
     const bundle = record(snapshot.contextBundle, "contextBundle");
     assertOnlyKeys(bundle, ["hash", "reused"], "contextBundle");
     const hash = boundedString(bundle.hash, "contextBundle.hash", 64);

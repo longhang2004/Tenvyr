@@ -25,6 +25,7 @@ import { HttpAgentAdapter } from "./agent-adapters/http-agent.adapter";
 import { HttpAgentCallbackController } from "./agent-adapters/http-agent-callback.controller";
 import { WorkbenchProjectionService } from "./services/workbench-projection.service";
 import { sha256Json } from "./domain/canonical-json";
+import { jsonValueUtf8Size } from "./domain/execution-state";
 import { parseEfficiencyEvidence } from "./domain/context-bundle";
 
 /**
@@ -247,6 +248,22 @@ describeWithPostgres("P3 invocation-efficiency dogfood (ContextBundle MISS -> HI
     );
   };
 
+  /** Pipeline WITHOUT a contextProjection: the runtime invocation still
+   *  carries the immutable efficiency evidence, but its ContextBundle is
+   *  the legitimate `null` variant. */
+  const plainPipeline = async () => {
+    const repository = dataSource.getRepository(PipelineEntity);
+    const existing = await repository.findOne({ where: { name: "p3-plain" } });
+    if (existing) return existing;
+    return repository.save(
+      repository.create({
+        name: "p3-plain",
+        version: "1.0",
+        steps: [{ id: "plain", agent: "team-worker" }] as any[],
+      }),
+    );
+  };
+
   /** Seeds a fresh execution with the given projected state. */
   const seedExecution = async (state: Record<string, unknown>) => {
     const definition = await pipeline();
@@ -254,6 +271,13 @@ describeWithPostgres("P3 invocation-efficiency dogfood (ContextBundle MISS -> HI
     await dataSource
       .getRepository(ExecutionEntity)
       .update(execution.id, { executionState: state });
+    return execution.id;
+  };
+
+  /** Seeds a fresh NO-PROJECTION execution (plain pipeline). */
+  const seedPlainExecution = async () => {
+    const definition = await plainPipeline();
+    const execution = await executionService.createExecution(definition, { goal: "plain" });
     return execution.id;
   };
 
@@ -419,5 +443,155 @@ describeWithPostgres("P3 invocation-efficiency dogfood (ContextBundle MISS -> HI
     expect(deniedSummary?.efficiency?.usageReported).toBe(false);
     expect(deniedSummary?.efficiency?.cachedInputTokens).toBeUndefined();
     expect(deniedSummary?.efficiency?.inputTokens).toBeUndefined();
+  }, 240_000);
+
+  it("no-context runtime attempt: null ContextBundle round-trips claim -> acceptance -> Workbench -> Capsule", async () => {
+    // A dispatchable invocation WITHOUT a contextProjection records the
+    // legitimate `contextBundle: null` / `context: null` evidence; result
+    // acceptance must still complete usage + timing, and every projection
+    // surface must parse and render the record (regression: the parser
+    // threw on null, hiding these attempts from efficiency projections).
+    const plain = await seedPlainExecution();
+    await runToTerminal(plain);
+    const attempt = await attemptFor(plain);
+    expect(attempt.status).toBe("SUCCESS");
+
+    const evidence = parseEfficiencyEvidence(attempt.efficiency);
+    expect(evidence.contextBundle).toBeNull();
+    expect(evidence.context).toBeNull();
+    expect(evidence.session.mode).toBe("fresh");
+    expect(evidence.usage).toEqual({
+      reported: true,
+      inputTokens: 28_402,
+      cachedInputTokens: 17_931,
+      outputTokens: 3_124,
+    });
+    expect(evidence.timing.completedAt).not.toBeNull();
+    expect(evidence.timing.durationMs).toBeGreaterThanOrEqual(0);
+
+    // Workbench: the attempt is visible with null bundle semantics and its
+    // real usage; the aggregate counts it as evidence without inventing a
+    // bundle.
+    const projected = await projection.executionProjection(plain);
+    const summary = projected.attempts.find(
+      (entry) => entry.attemptNumber === 1,
+    );
+    expect(summary?.efficiency).toBeDefined();
+    expect(summary?.efficiency?.contextBundleHash).toBeNull();
+    expect(summary?.efficiency?.contextBundleReused).toBeNull();
+    expect(summary?.efficiency?.sessionMode).toBe("fresh");
+    expect(summary?.efficiency?.usageReported).toBe(true);
+    expect(summary?.efficiency?.cachedInputTokens).toBe(17_931);
+    expect(projected.efficiency.attemptCount).toBe(1);
+    expect(projected.efficiency.bundleAttempts).toBe(0);
+    expect(projected.efficiency.bundlesBuilt).toBe(0);
+    expect(projected.efficiency.bundlesReused).toBe(0);
+    expect(projected.efficiency.providerCacheEvidenceAttempts).toBe(1);
+    expect(projected.efficiency.providerCacheHitAttempts).toBe(1);
+
+    // Capsule preserves and parses the null-bundle record.
+    const capsule = await capsules.build(plain);
+    const capsuleEvidence = parseEfficiencyEvidence(capsule.attempts[0].efficiency);
+    expect(capsuleEvidence.contextBundle).toBeNull();
+    expect(capsuleEvidence.usage.inputTokens).toBe(28_402);
+    expect(capsuleEvidence.timing.durationMs).toBeGreaterThanOrEqual(0);
+  }, 240_000);
+
+  it("pre-dispatch blocked attempt without projection records null ContextBundle truthfully", async () => {
+    // A policy-DENIED attempt never establishes a runtime session: session
+    // mode is `unknown`, usage stays not-reported (never zero), and the
+    // null ContextBundle variant parses and renders.
+    const blocked = await seedPlainExecution();
+    process.env.TENVYR_POLICY = DENY_POLICY_V2;
+    await runToTerminal(blocked);
+    process.env.TENVYR_POLICY = ALLOW_POLICY_V1;
+
+    const attempt = await attemptFor(blocked);
+    expect(attempt.status).toBe("FAILED");
+    expect(attempt.error).toContain("Policy DENY");
+    const evidence = parseEfficiencyEvidence(attempt.efficiency);
+    expect(evidence.contextBundle).toBeNull();
+    expect(evidence.context).toBeNull();
+    expect(evidence.session.mode).toBe("unknown");
+    expect(evidence.usage).toEqual({ reported: false });
+    expect(evidence.timing.completedAt).toBeNull();
+    expect(evidence.timing.durationMs).toBeNull();
+
+    const projected = await projection.executionProjection(blocked);
+    const summary = projected.attempts[0];
+    expect(summary?.efficiency?.contextBundleHash).toBeNull();
+    expect(summary?.efficiency?.sessionMode).toBe("unknown");
+    expect(summary?.efficiency?.usageReported).toBe(false);
+    expect(summary?.efficiency?.cachedInputTokens).toBeUndefined();
+  }, 240_000);
+
+  it("cross-execution HIT with different unselected state: same hash, identical envelopes, each attempt records its OWN executionStateBytes", async () => {
+    // The ContextBundle identity covers only the SELECTED projection +
+    // version. Two executions with identical selected values but different
+    // UNSELECTED state sizes legitimately share a hash and a cache HIT —
+    // but `executionStateBytes` measures the FULL current state and must be
+    // recomputed per claim, never inherited from the cached bundle.
+    const selected = { brief: { task: "metric", n: 1 } };
+    const smallTail = { "unselected.small": "tiny" };
+    const largeTail = { "unselected.large": "x".repeat(4000) };
+
+    const runA = await seedExecution({ ...selected, ...smallTail });
+    await runToTerminal(runA);
+    const attemptA = await attemptFor(runA);
+    expect(attemptA.status).toBe("SUCCESS");
+    const evidenceA = parseEfficiencyEvidence(attemptA.efficiency);
+    expect(evidenceA.contextBundle!.reused).toBe(false);
+    const hashA = evidenceA.contextBundle!.hash;
+
+    const runB = await seedExecution({ ...selected, ...largeTail });
+    await runToTerminal(runB);
+    const attemptB = await attemptFor(runB);
+    expect(attemptB.status).toBe("SUCCESS");
+    const evidenceB = parseEfficiencyEvidence(attemptB.efficiency);
+
+    // Same identity, cache HIT, byte-identical envelopes.
+    expect(evidenceB.contextBundle!.hash).toBe(hashA);
+    expect(evidenceB.contextBundle!.reused).toBe(true);
+    expect(attemptB.contextSnapshot).toEqual(attemptA.contextSnapshot);
+    expect(sha256Json(attemptB.contextSnapshot)).toBe(
+      sha256Json(attemptA.contextSnapshot),
+    );
+
+    // Envelope-derived metrics are identical (functions of the envelope).
+    expect(evidenceB.context!.projectedBytes).toBe(
+      evidenceA.context!.projectedBytes,
+    );
+    expect(evidenceB.context!.projectedCharacters).toBe(
+      evidenceA.context!.projectedCharacters,
+    );
+    expect(evidenceB.context!.selectedContextItemCount).toBe(
+      evidenceA.context!.selectedContextItemCount,
+    );
+    expect(evidenceB.context!.selectedArtifactCount).toBe(
+      evidenceA.context!.selectedArtifactCount,
+    );
+
+    // Each attempt records ITS OWN full-state size — the cached bundle
+    // must never leak execution A's unselected-state size into execution B.
+    expect(evidenceA.context!.executionStateBytes).toBe(
+      jsonValueUtf8Size({ ...selected, ...smallTail } as any),
+    );
+    expect(evidenceB.context!.executionStateBytes).toBe(
+      jsonValueUtf8Size({ ...selected, ...largeTail } as any),
+    );
+    expect(evidenceB.context!.executionStateBytes).not.toBe(
+      evidenceA.context!.executionStateBytes,
+    );
+
+    // Workbench aggregates carry each attempt's own metric.
+    const projectedA = await projection.executionProjection(runA);
+    const projectedB = await projection.executionProjection(runB);
+    expect(
+      projectedA.attempts[0].efficiency?.projectedBytes,
+    ).toBeGreaterThan(0);
+    expect(
+      projectedB.attempts[0].efficiency?.projectedBytes,
+    ).toBeGreaterThan(0);
+    expect(projectedB.attempts[0].efficiency?.contextBundleReused).toBe(true);
   }, 240_000);
 });

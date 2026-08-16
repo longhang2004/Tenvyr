@@ -25,6 +25,7 @@ import type { ExecutionState } from "../domain/execution-state";
 import {
   buildClaimEfficiencyEvidence,
   computeContextBundleHash,
+  executionStateBytesOf,
   measureContextEnvelope,
   workspaceIdentityOf,
   type ContextMetricsV1,
@@ -847,11 +848,18 @@ export class ExecutionService {
     if (cached) {
       // HIT: reuse the already-materialized immutable projection (the cache
       // hands out an isolated deep clone; callers persist it without ever
-      // mutating the stored bundle).
+      // mutating the stored bundle). Envelope-derived metrics come from the
+      // cached bundle, but `executionStateBytes` measures the FULL current
+      // execution state — it is NOT a function of the cached envelope and is
+      // recomputed per claim so an attempt never inherits another
+      // execution's full-state size.
       return {
         envelope: cached.envelope,
         artifacts,
-        metrics: cached.metrics,
+        metrics: {
+          ...cached.metrics,
+          executionStateBytes: executionStateBytesOf(state),
+        },
         reused: true,
         hash,
       };

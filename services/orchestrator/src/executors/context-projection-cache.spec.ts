@@ -45,6 +45,41 @@ describe("P3 Context Projection Reuse cache", () => {
     expect(cache.get("b".repeat(64))).toBeUndefined();
   });
 
+  it("isolates mutable input on WRITE: mutating the source after set can never corrupt the entry", () => {
+    const cache = new ContextProjectionCache();
+    const hash = "c".repeat(64);
+    // The caller's source envelope is a mutable object it keeps owning.
+    const source = envelope({ text: "original A" });
+    cache.set(hash, source, metrics(100));
+
+    // Deep mutation of the source AFTER set...
+    (source as any).tenvyr.executionState.values.key = { text: "MUTATED" };
+    (source as any).tenvyr.executionState.values.smuggled = [1, 2, 3];
+
+    // ...must not surface under the same hash (content-addressed invariant).
+    const stored = cache.get(hash)!;
+    expect((stored.envelope as any).tenvyr.executionState.values.key).toEqual({
+      text: "original A",
+    });
+    expect(
+      (stored.envelope as any).tenvyr.executionState.values.smuggled,
+    ).toBeUndefined();
+  });
+
+  it("never caches the full-state metric: executionStateBytes stays out of the entry", () => {
+    const cache = new ContextProjectionCache();
+    const hash = "d".repeat(64);
+    cache.set(hash, envelope(1), metrics(100));
+    const stored = cache.get(hash)!;
+    // The entry carries only envelope-derived metrics; the full-state
+    // metric must be recomputed per claim and is absent from the cache.
+    expect(stored.metrics.projectedBytes).toBe(100);
+    expect(stored.metrics.projectedCharacters).toBe(100);
+    expect(stored.metrics.selectedContextItemCount).toBe(1);
+    expect(stored.metrics.selectedArtifactCount).toBe(0);
+    expect(stored.metrics).not.toHaveProperty("executionStateBytes");
+  });
+
   it("derives the spent total bytes and evicts old entries at the bounds", () => {
     const cache = new ContextProjectionCache();
     for (let index = 0; index < 100; index++) {
