@@ -8,6 +8,7 @@ import {
   RuntimeOnboardingService,
   isOnboardingRuntimeKind,
 } from "./services/runtime-onboarding.service";
+import { AttentionService } from "./services/attention.service";
 
 /**
  * M10-S1: bounded Workbench read projections (loopback/private trusted
@@ -21,7 +22,15 @@ export class WorkbenchController {
     private readonly projection: WorkbenchProjectionService,
     private readonly workspaceService: WorkspaceService,
     private readonly onboarding: RuntimeOnboardingService,
+    private readonly attention: AttentionService,
   ) {}
+
+  /** PP1 Slice B: exception-driven Attention queue (READ projection —
+   *  resolves nothing; action routes use the existing authority surfaces). */
+  @Get("attention")
+  async attentionQueue() {
+    return this.attention.attention();
+  }
 
   /** Product Phase 1: guided onboarding status for a supported runtime
    *  (Installed / Version / Auth — never credentials). */

@@ -30,6 +30,7 @@ import { HttpAgentCallbackController } from "./agent-adapters/http-agent-callbac
 import { WorkbenchCommandService } from "./services/workbench-command.service";
 import { WorkbenchProjectionService } from "./services/workbench-projection.service";
 import { WorkspaceExecutionService } from "./services/workspace-execution.service";
+import { AttentionService } from "./services/attention.service";
 import type { CoordinationConfigV1 } from "./domain/coordination";
 import {
   startHostWorkers,
@@ -118,6 +119,7 @@ describeWithPostgres("PP1 Slice A: workspace execution + git-worktree isolation 
   let commands: WorkbenchCommandService;
   let projection: WorkbenchProjectionService;
   let workspaceExecutions: WorkspaceExecutionService;
+  let attention: AttentionService;
   let hostWorkers: Awaited<ReturnType<typeof startHostWorkers>> = [];
 
   /** Fake children record cwd + write a marker into their cwd (Worker only)
@@ -328,6 +330,7 @@ process.stdin.on("end", () => {
       executionService,
     );
     workspaceExecutions = new WorkspaceExecutionService(dataSource);
+    attention = new AttentionService(dataSource);
     commands = new WorkbenchCommandService(
       dataSource as any,
       executionService,
@@ -508,6 +511,21 @@ process.stdin.on("end", () => {
     expect(projectedWorkspace.path).toBe(B);
     expect(projectedWorkspace.mode).toBe("git-worktree");
     expect(projectedWorkspace.state).toBe("PRESERVED");
+
+    // 8. PP1 Slice B: the preserved dirty worktree surfaces as ONE
+    //    deterministic WORKSPACE_REQUIRES_ATTENTION item (read projection).
+    const attentionView = await attention.attention();
+    const workspaceItems = attentionView.items.filter(
+      (item) => item.kind === "WORKSPACE_REQUIRES_ATTENTION",
+    );
+    expect(workspaceItems).toHaveLength(1);
+    expect(workspaceItems[0].workspaceExecutionId).toBe(lease.id);
+    expect(workspaceItems[0].actionRoute).toBe(`/runs/${executionId}`);
+    // Polling repeatedly does not duplicate items.
+    const again = await attention.attention();
+    expect(
+      again.items.filter((item) => item.kind === "WORKSPACE_REQUIRES_ATTENTION"),
+    ).toHaveLength(1);
   }, 300_000);
 
   it("fails closed: workspace-less invocations and path traversal never spawn", async () => {

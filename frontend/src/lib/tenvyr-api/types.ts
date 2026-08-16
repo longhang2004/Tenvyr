@@ -348,6 +348,10 @@ export type StartTeamRunRequest = {
   config: CoordinationConfigV1;
   workspace?: { workspaceId?: string; path?: string };
   acceptanceEvidence?: AcceptanceEvidenceV1;
+  /** PP1: execution isolation mode for the run's workspace (git-worktree =
+   *  isolated Tenvyr-owned worktree; shared = run against the source tree).
+   *  Only meaningful with a workspace. */
+  executionIsolation?: "shared" | "git-worktree";
 };
 
 export type WorkbenchCommandResultV1<T = unknown> = {
@@ -362,6 +366,33 @@ export type WorkbenchCommandResultV1<T = unknown> = {
     code: string;
     message: string;
   };
+};
+
+/** PP1 Slice B: exception-driven Attention queue (READ projection —
+ *  items exist exactly while their durable source condition exists;
+ *  deterministic ids; resolution goes through existing authority
+ *  commands). */
+export type AttentionItemV1 = {
+  attentionId: string;
+  kind:
+    | "HUMAN_APPROVAL_REQUIRED"
+    | "RUN_FAILED"
+    | "LIMIT_REACHED"
+    | "WORKSPACE_REQUIRES_ATTENTION"
+    | string;
+  severity: "critical" | "warning" | "info";
+  executionId: string | null;
+  runId: string | null;
+  reason: string;
+  createdAt: string;
+  updatedAt: string;
+  actionRoute: string;
+  workspaceExecutionId?: string;
+};
+
+export type AttentionViewV1 = {
+  items: AttentionItemV1[];
+  serverTime: string;
 };
 
 export type WorkbenchExecutionSummaryV1 = {
@@ -444,6 +475,17 @@ export type CoordinationRunViewV1 = {
   waitReason: string | null;
   workspace: WorkspaceSnapshotV1 | null;
   acceptanceEvidence: AcceptanceEvidenceV1 | null;
+  /** PP1: the run's Tenvyr-owned execution workspace lease (where every
+   *  runtime child actually executed); null for runs without one. */
+  executionWorkspace: {
+    workspaceExecutionId: string;
+    mode: "shared" | "git-worktree" | string;
+    path: string;
+    baseBranch: string | null;
+    baseHeadSha: string | null;
+    state: string;
+    hasUncommittedWork: boolean | null;
+  } | null;
 };
 
 export type AttemptSummaryV1 = {

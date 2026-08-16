@@ -9,7 +9,7 @@ import {
   PlayCircle,
   ListOrdered,
   LayoutDashboard,
-  UserCheck,
+  BellRing,
   Layers,
   History,
   CheckCircle2,
@@ -125,7 +125,7 @@ export function AppShell({ children }: AppShellProps) {
           </div>
 
           <div className="nav-section">
-            <span className="nav-section-title">Run</span>
+            <span className="nav-section-title">Work</span>
             <Link
               href="/runs/new"
               className={`nav-link ${isActive("/runs/new") ? "active" : ""}`}
@@ -135,7 +135,7 @@ export function AppShell({ children }: AppShellProps) {
               }}
             >
               <PlayCircle size={16} aria-hidden="true" />
-              <span>New Team Run</span>
+              <span>New Run</span>
             </Link>
             <Link
               href="/runs"
@@ -143,6 +143,35 @@ export function AppShell({ children }: AppShellProps) {
             >
               <ListOrdered size={16} aria-hidden="true" />
               <span>Runs</span>
+            </Link>
+            <Link
+              href="/attention"
+              className={`nav-link ${isActive("/attention") ? "active" : ""}`}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                <BellRing size={16} aria-hidden="true" />
+                <span>Attention</span>
+              </div>
+              {pendingApprovalsCount > 0 && (
+                <span
+                  style={{
+                    backgroundColor: "var(--accent-amber)",
+                    color: "#000",
+                    fontWeight: 700,
+                    fontSize: "0.7rem",
+                    padding: "0.1rem 0.4rem",
+                    borderRadius: "10px",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {pendingApprovalsCount}
+                </span>
+              )}
             </Link>
           </div>
 
@@ -161,39 +190,6 @@ export function AppShell({ children }: AppShellProps) {
             >
               <FolderGit2 size={16} aria-hidden="true" />
               <span>Workspaces</span>
-            </Link>
-          </div>
-
-          <div className="nav-section">
-            <span className="nav-section-title">Supervision</span>
-            <Link
-              href="/approvals"
-              className={`nav-link ${isActive("/approvals") ? "active" : ""}`}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                <UserCheck size={16} aria-hidden="true" />
-                <span>Approvals</span>
-              </div>
-              {pendingApprovalsCount > 0 && (
-                <span
-                  style={{
-                    backgroundColor: "var(--accent-amber)",
-                    color: "#000",
-                    fontWeight: 700,
-                    fontSize: "0.7rem",
-                    padding: "0.1rem 0.4rem",
-                    borderRadius: "10px",
-                    lineHeight: 1.2,
-                  }}
-                >
-                  {pendingApprovalsCount}
-                </span>
-              )}
             </Link>
           </div>
 

@@ -536,7 +536,7 @@ export default function RunDetailPage() {
                   textTransform: "uppercase",
                 }}
               >
-                Workspace
+                {run.executionWorkspace ? "Execution Workspace" : "Workspace"}
               </div>
               <div
                 style={{
@@ -554,6 +554,56 @@ export default function RunDetailPage() {
                   ? `@ ${run.workspace.headSha.slice(0, 7)}`
                   : run.workspace.path}
               </div>
+              {/* PP1: the run's Tenvyr-owned execution workspace (mode /
+                  path / base / lifecycle state) — where every runtime
+                  child actually executed. */}
+              {run.executionWorkspace && (
+                <div
+                  style={{
+                    marginTop: "0.4rem",
+                    fontSize: "0.72rem",
+                    color: "var(--text-muted)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.15rem",
+                  }}
+                >
+                  <div>
+                    <span style={{ textTransform: "uppercase" }}>Mode:</span>{" "}
+                    <code>
+                      {run.executionWorkspace.mode === "git-worktree"
+                        ? "Git worktree"
+                        : "Shared working tree"}
+                    </code>
+                  </div>
+                  <div
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={run.executionWorkspace.path}
+                  >
+                    <span style={{ textTransform: "uppercase" }}>Path:</span>{" "}
+                    {run.executionWorkspace.path}
+                  </div>
+                  <div>
+                    <span style={{ textTransform: "uppercase" }}>Base:</span>{" "}
+                    <code>
+                      {run.executionWorkspace.baseBranch ?? "HEAD"} @{" "}
+                      {run.executionWorkspace.baseHeadSha?.slice(0, 7) ??
+                        "—"}
+                    </code>
+                  </div>
+                  <div>
+                    <span style={{ textTransform: "uppercase" }}>State:</span>{" "}
+                    {run.executionWorkspace.state}
+                    {run.executionWorkspace.hasUncommittedWork === true
+                      ? " · uncommitted work preserved"
+                      : ""}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

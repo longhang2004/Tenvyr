@@ -41,6 +41,8 @@ import { RuntimeCoordinationService } from "./services/runtime-coordination.serv
 import { WorkbenchProjectionService } from "./services/workbench-projection.service";
 import { WorkbenchCommandService } from "./services/workbench-command.service";
 import { WorkspaceService } from "./services/workspace.service";
+import { WorkspaceExecutionService } from "./services/workspace-execution.service";
+import { AttentionService } from "./services/attention.service";
 import { ModelSourceService } from "./services/model-source.service";
 import { ProviderDiscoveryService } from "./services/provider-discovery.service";
 import { ModelDiscoveryService } from "./services/model-discovery.service";
@@ -98,6 +100,8 @@ import { RuntimeOnboardingService } from "./services/runtime-onboarding.service"
     WorkbenchProjectionService,
     WorkbenchCommandService,
     WorkspaceService,
+    WorkspaceExecutionService,
+    AttentionService,
     RuntimeOnboardingService,
     ModelSourceService,
     ProviderDiscoveryService,

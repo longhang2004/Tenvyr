@@ -114,11 +114,19 @@ export default function WorkspacesPage() {
         </div>
       )}
 
-      {/* Product Reality Notice */}
+      {/* Execution Semantics Notice (PP1) */}
       <div className="notice notice-info">
         <ShieldAlert size={18} style={{ flexShrink: 0 }} />
         <div>
-          <strong>Mutable Local Working Tree Semantics:</strong> A bounded git identity snapshot (branch, HEAD SHA, dirty state) is frozen at run launch and injected into worker inputs and the verifier context. Execution runs directly against the mutable local working tree — no snapshot isolation is claimed.
+          <strong>Workspace Execution:</strong> A bounded git identity
+          snapshot (branch, HEAD SHA, dirty state) is frozen at run launch
+          and injected into worker inputs and the verifier context. Each
+          Team Run chooses its execution isolation at launch:{" "}
+          <strong>Git worktree</strong> executes every runtime child inside
+          a Tenvyr-owned isolated worktree (source tree untouched), or{" "}
+          <strong>Shared working tree</strong> executes directly against
+          this mutable working tree. Workspaces are execution boundaries,
+          not just provenance.
         </div>
       </div>
 

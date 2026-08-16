@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { tenvyrApi } from "../../lib/tenvyr-api/client.ts";
 import type {
+  AttentionItemV1,
   WorkbenchExecutionSummaryV1,
   WorkbenchConnectionCardV1,
   WorkbenchWorkspaceV1,
@@ -30,6 +31,7 @@ export default function OverviewPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [executions, setExecutions] = useState<WorkbenchExecutionSummaryV1[]>([]);
+  const [attentionItems, setAttentionItems] = useState<AttentionItemV1[]>([]);
   const [connections, setConnections] = useState<WorkbenchConnectionCardV1[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkbenchWorkspaceV1[]>([]);
   const [onboardingStatuses, setOnboardingStatuses] = useState<Record<string, RuntimeOnboardingStatusV1>>({});
@@ -38,10 +40,11 @@ export default function OverviewPage() {
   const loadData = useCallback(async () => {
     try {
       setErrorMsg(null);
-      const [execsRes, connsRes, wsRes] = await Promise.allSettled([
+      const [execsRes, connsRes, wsRes, attentionRes] = await Promise.allSettled([
         tenvyrApi.getWorkbenchExecutions(1),
         tenvyrApi.getWorkbenchConnections(),
         tenvyrApi.getWorkspaces(),
+        tenvyrApi.getAttention(),
       ]);
 
       if (execsRes.status === "fulfilled") {
@@ -52,6 +55,9 @@ export default function OverviewPage() {
       }
       if (wsRes.status === "fulfilled") {
         setWorkspaces(wsRes.value?.workspaces ?? []);
+      }
+      if (attentionRes.status === "fulfilled") {
+        setAttentionItems(attentionRes.value?.items ?? []);
       }
 
       // Probe onboarding statuses for quick readiness overview
@@ -87,9 +93,7 @@ export default function OverviewPage() {
     loadData();
   };
 
-  const pendingApprovals = executions.filter(
-    (e) => e.coordinationPhase === "WAITING_FOR_HUMAN",
-  );
+
 
   return (
     <div className="page-container">
@@ -126,8 +130,8 @@ export default function OverviewPage() {
         </div>
       )}
 
-      {/* Pending Approvals Attention Banner */}
-      {pendingApprovals.length > 0 && (
+      {/* PP1 Slice B: exception-driven NEEDS YOU banner */}
+      {attentionItems.length > 0 && (
         <div
           className="notice notice-warning"
           style={{
@@ -141,15 +145,18 @@ export default function OverviewPage() {
             <UserCheck size={20} color="var(--accent-amber)" />
             <div>
               <strong style={{ color: "var(--accent-amber)" }}>
-                {pendingApprovals.length} Run{pendingApprovals.length > 1 ? "s" : ""} Waiting for Human Approval
+                NEEDS YOU — {attentionItems.length} item{attentionItems.length > 1 ? "s" : ""}
               </strong>
               <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: "0.15rem" }}>
-                The agent loop cannot proceed until you approve or deny the requested decision.
+                {attentionItems
+                  .slice(0, 3)
+                  .map((item) => item.reason)
+                  .join(" · ")}
               </p>
             </div>
           </div>
-          <Link href="/approvals" className="btn btn-sm btn-primary">
-            Review Approvals <ArrowRight size={14} />
+          <Link href="/attention" className="btn btn-sm btn-primary">
+            Review Attention <ArrowRight size={14} />
           </Link>
         </div>
       )}

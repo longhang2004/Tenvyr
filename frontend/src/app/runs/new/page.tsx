@@ -44,6 +44,12 @@ function NewTeamRunContent() {
   // Available catalogs
   const [templates, setTemplates] = useState<TeamTemplateV1[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkbenchWorkspaceV1[]>([]);
+  /** PP1: execution isolation mode for the run's workspace (git-worktree
+   *  = isolated Tenvyr-owned worktree; shared = execute against the source
+   *  tree). */
+  const [executionIsolation, setExecutionIsolation] = useState<
+    "shared" | "git-worktree"
+  >("shared");
   const [connections, setConnections] = useState<WorkbenchConnectionCardV1[]>(
     [],
   );
@@ -56,6 +62,14 @@ function NewTeamRunContent() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] =
     useState<string>(initialWorkspaceId);
   const [customWorkspacePath, setCustomWorkspacePath] = useState<string>("");
+  /** PP1: a workspace is selected when a registered workspace OR a direct
+   *  path is present (isolation only applies to real workspaces). */
+  const hasWorkspaceSelection = Boolean(
+    selectedWorkspaceId || customWorkspacePath.trim(),
+  );
+  const selectedWorkspaceSnapshot =
+    workspaces.find((ws) => ws.workspaceId === selectedWorkspaceId)
+      ?.snapshot ?? null;
 
   // Step 3: Template & Team Roles
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
@@ -244,6 +258,11 @@ function NewTeamRunContent() {
       payload.workspace = { workspaceId: selectedWorkspaceId };
     } else if (customWorkspacePath.trim()) {
       payload.workspace = { path: customWorkspacePath.trim() };
+    }
+    // PP1: the launch freezes the run's execution isolation mode (only for
+    // runs with a workspace).
+    if (hasWorkspaceSelection) {
+      payload.executionIsolation = executionIsolation;
     }
 
     if (
@@ -474,6 +493,81 @@ function NewTeamRunContent() {
                   placeholder="/Users/username/repos/project"
                 />
               </div>
+            )}
+
+            {hasWorkspaceSelection && (
+              <>
+                <div className="form-group" style={{ marginBottom: "0.5rem" }}>
+                  <label className="form-label">Execution isolation</label>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "1.25rem",
+                      alignItems: "center",
+                    }}
+                  >
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="executionIsolation"
+                        checked={executionIsolation === "git-worktree"}
+                        onChange={() => setExecutionIsolation("git-worktree")}
+                      />
+                      <span>
+                        <strong>Git worktree</strong> — isolated
+                        Tenvyr-owned worktree
+                      </span>
+                    </label>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="executionIsolation"
+                        checked={executionIsolation === "shared"}
+                        onChange={() => setExecutionIsolation("shared")}
+                      />
+                      <span>
+                        <strong>Shared working tree</strong> — run against
+                        the source workspace
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                {selectedWorkspaceSnapshot?.branch ||
+                selectedWorkspaceSnapshot?.headSha ? (
+                  <div
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "var(--text-muted)",
+                      marginTop: "-0.25rem",
+                    }}
+                  >
+                    Base{" "}
+                    <code>
+                      {selectedWorkspaceSnapshot.branch ?? "HEAD"} @{" "}
+                      {selectedWorkspaceSnapshot.headSha?.slice(0, 7) ?? "—"}
+                    </code>
+                    {selectedWorkspaceSnapshot.dirty
+                      ? " · dirty source tree"
+                      : ""}
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
 

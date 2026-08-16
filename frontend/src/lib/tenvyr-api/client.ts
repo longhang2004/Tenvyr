@@ -11,6 +11,7 @@ import type {
   WorkbenchCommandResultV1,
   WorkbenchExecutionSummaryV1,
   WorkbenchExecutionProjectionV1,
+  AttentionViewV1,
   CapsuleSummaryV1,
   AuditItemV1,
   Pipeline,
@@ -384,6 +385,11 @@ export class TenvyrApiClient {
     return this.request(
       `/api/workbench/executions/${encodeURIComponent(executionId)}`,
     );
+  }
+
+  /** PP1 Slice B: exception-driven Attention queue (READ projection). */
+  async getAttention(): Promise<AttentionViewV1> {
+    return this.request(`/api/workbench/attention`);
   }
 
   async resolveWait(
