@@ -188,6 +188,26 @@ export class WorkbenchCommandsController {
     }
   }
 
+  @Post("workspaces/:workspaceExecutionId/release")
+  async releaseWorkspace(
+    @Param("workspaceExecutionId") workspaceExecutionId: string,
+    @Body()
+    body: {
+      idempotencyKey: string;
+      reason?: string;
+    },
+  ) {
+    try {
+      return await this.commands.releaseExecutionWorkspace({
+        idempotencyKey: body.idempotencyKey,
+        workspaceExecutionId,
+        ...(body.reason ? { reason: body.reason } : {}),
+      });
+    } catch (error) {
+      this.mapError(error);
+    }
+  }
+
   @Get("audit")
   async audit(@Query("action") action?: string, @Query("limit") limit?: string) {
     return this.commands.auditTrail(

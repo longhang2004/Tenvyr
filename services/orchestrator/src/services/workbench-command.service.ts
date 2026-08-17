@@ -15,6 +15,7 @@ import { WorkspaceService } from "./workspace.service";
 import { ModelSourceService } from "./model-source.service";
 import { ProviderDiscoveryService } from "./provider-discovery.service";
 import { WorkspaceExecutionService } from "./workspace-execution.service";
+import { WorkspaceExecutionError } from "../domain/workspace-execution";
 import { HandoffService } from "./handoff.service";
 import { handoffBundleHash } from "../domain/handoff";
 import type { ConnectionProfileV1 } from "../executors/runtime-connection";
@@ -309,6 +310,18 @@ export class WorkbenchCommandService {
         workspace = created.snapshot;
       }
     }
+    // Dirty source validation: git-worktree requires a clean source repository
+    if (
+      workspace &&
+      workspace.dirty === true &&
+      executionIsolation === "git-worktree"
+    ) {
+      throw new WorkspaceExecutionError(
+        "DIRTY_SOURCE_NOT_SUPPORTED",
+        `Workspace "${workspace.workspaceId}" has uncommitted changes; git-worktree execution isolation requires a clean source repository (commit or stash changes before starting a run)`,
+      );
+    }
+
     // PP1: allocate the Tenvyr-owned execution workspace BEFORE the
     // authority transaction. External git mutations are not transactional;
     // a crash leaves a durable ALLOCATING/READY row that reconciliation
@@ -322,6 +335,7 @@ export class WorkbenchCommandService {
         await this.workspaceExecutions.allocateExecutionWorkspace(
           workspace,
           executionIsolation,
+          input.idempotencyKey,
         );
     }
     return this.runCommand(
@@ -602,6 +616,33 @@ export class WorkbenchCommandService {
           input.connectionId,
         );
         return { connectionId: input.connectionId, status };
+      },
+    );
+  }
+
+  /** PP1: audited safe workspace release command. */
+  async releaseExecutionWorkspace(input: {
+    idempotencyKey: string;
+    workspaceExecutionId: string;
+    reason?: string;
+  }): Promise<CommandResult> {
+    return this.runCommand(
+      "release-execution-workspace",
+      input.idempotencyKey,
+      input.workspaceExecutionId,
+      {
+        workspaceExecutionId: input.workspaceExecutionId,
+        reason: input.reason ?? null,
+      },
+      async () => {
+        const released =
+          await this.workspaceExecutions.releaseExecutionWorkspace(
+            input.workspaceExecutionId,
+          );
+        return {
+          workspaceExecutionId: released.id,
+          state: released.state,
+        };
       },
     );
   }

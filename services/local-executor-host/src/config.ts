@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /**
@@ -92,27 +93,73 @@ export type HostConfig = {
   callbackAllowedOrigins: string[];
   callbackKeys: Record<string, string>;
   callbackAllowInsecure: boolean;
+  port?: number;
+  bearerTokenEnv?: string;
+  dynamicBridge?: boolean;
 };
 
 export function parseHostConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): HostConfig {
-  const configuredRoot = requiredEnv(environment, "EXECUTOR_HOST_ALLOWED_ROOT");
+  const configuredRoot =
+    environment.EXECUTOR_HOST_ALLOWED_ROOT ||
+    environment.TENVYR_WORKSPACE_ROOT ||
+    os.tmpdir();
   const allowedRoot = realDirectory(
     configuredRoot,
     "EXECUTOR_HOST_ALLOWED_ROOT",
   );
-  const stateDir = requiredEnv(environment, "EXECUTOR_HOST_STATE_DIR");
-  const allowedOriginsEnv = requiredEnv(
-    environment,
-    "EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS",
-  );
-  const keysEnv = requiredEnv(environment, "EXECUTOR_HOST_CALLBACK_KEYS");
-  const callbackKeys = parseCallbackKeys(keysEnv);
-  const callbackAllowInsecure =
-    environment.EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE === "true";
+  const rawStateDir =
+    environment.EXECUTOR_HOST_STATE_DIR ||
+    path.join(os.tmpdir(), "tenvyr-host-state");
+  const stateDir = path.resolve(rawStateDir);
+  try {
+    fs.mkdirSync(stateDir, { recursive: true });
+  } catch {
+    // Ignore if already exists
+  }
 
-  const raw = requiredEnv(environment, "EXECUTOR_HOST_AGENTS");
+  const allowedOriginsEnv =
+    environment.EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS ||
+    "http://127.0.0.1:3001,http://localhost:3001,http://127.0.0.1:3000,http://localhost:3000";
+  const callbackKeys = environment.EXECUTOR_HOST_CALLBACK_KEYS
+    ? parseCallbackKeys(environment.EXECUTOR_HOST_CALLBACK_KEYS)
+    : {
+        "host-callback-v1":
+          environment.HTTP_AGENT_CALLBACK_SECRET ||
+          "tenvyr-dev-callback-secret",
+        "host-loopback-v1":
+          environment.LOOPBACK_CALLBACK_SECRET || "loopback-callback-secret",
+      };
+  const callbackAllowInsecure =
+    environment.EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE !== "false";
+
+  const port = Number(environment.EXECUTOR_HOST_PORT || 3002);
+  const bearerTokenEnv =
+    environment.EXECUTOR_HOST_BEARER_TOKEN_ENV || "EXECUTOR_HOST_BEARER_TOKEN";
+  if (!environment[bearerTokenEnv]) {
+    environment[bearerTokenEnv] =
+      environment.HTTP_AGENT_BEARER_TOKEN || "tenvyr-dev-host-token";
+  }
+
+  const raw = environment.EXECUTOR_HOST_AGENTS;
+  if (!raw || !raw.trim()) {
+    return {
+      agents: [],
+      allowedRoot,
+      stateDir,
+      callbackAllowedOrigins: allowedOriginsEnv
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+      callbackKeys,
+      callbackAllowInsecure,
+      port,
+      bearerTokenEnv,
+      dynamicBridge: true,
+    };
+  }
+
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -158,13 +205,15 @@ export function parseHostConfig(
   return {
     agents,
     allowedRoot,
-    stateDir: path.resolve(stateDir),
+    stateDir,
     callbackAllowedOrigins: allowedOriginsEnv
       .split(",")
       .map((origin) => origin.trim())
       .filter(Boolean),
     callbackKeys,
     callbackAllowInsecure,
+    port,
+    bearerTokenEnv,
   };
 }
 

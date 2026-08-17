@@ -929,6 +929,21 @@ export function validateTaskBatchProposal(
  * claim then freezes THAT connection's revision — never the static
  * transport configuration.
  */
+/**
+ * Maps a connection identity (e.g. "conn:codex") into a transport-safe agent
+ * routing identifier (e.g. "conn__codex") matching /^[A-Za-z0-9_.-]+$/.
+ */
+export function toTransportAgent(connectionIdOrName: string): string {
+  if (!connectionIdOrName) return "default";
+  if (connectionIdOrName.startsWith("conn__")) {
+    return connectionIdOrName;
+  }
+  if (connectionIdOrName.startsWith("conn:")) {
+    return `conn__${connectionIdOrName.slice(5).replace(/[^A-Za-z0-9_.-]/g, "_")}`;
+  }
+  return connectionIdOrName.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
 export function compileIterationPlanPatch(
   config: CoordinationConfigV1,
   proposal: TaskBatchProposalV1,
@@ -963,9 +978,14 @@ export function compileIterationPlanPatch(
               : { value: task.input }),
             workspace,
           };
+    const workerAgent =
+      task.agent ||
+      (task.connectionId !== undefined
+        ? toTransportAgent(task.connectionId)
+        : "default");
     const step: Record<string, unknown> = {
       id: task.taskId,
-      agent: task.agent,
+      agent: workerAgent,
       input: stepInput,
       dependsOn: task.dependsOn,
       onFailure: task.required
@@ -1007,12 +1027,16 @@ export function compileIterationPlanPatch(
     baseRevision: proposal.baseRevision,
     operations,
   };
+  const verifierAgent =
+    config.verifier.kind === "connection"
+      ? toTransportAgent(config.verifier.agent ?? config.verifier.name)
+      : (config.verifier.agent ?? config.verifier.name);
   const verifierStep: Record<string, unknown> = {
     id: verifierStepId,
     // M8-S6: connection-kind Verifier routes through its declared routing
     // agent (the executor host's transport key) while the typed connection
     // stays authoritative for the claim.
-    agent: config.verifier.agent ?? config.verifier.name,
+    agent: verifierAgent,
     input: {},
     dependsOn: proposal.tasks.map((task) => task.taskId),
     onFailure: "stop",

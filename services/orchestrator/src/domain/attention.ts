@@ -121,7 +121,8 @@ export function deriveAttentionItems(
   }
   for (const request of input.approvalRequests) {
     if (request.status !== "PENDING") continue;
-    push({
+    items.push({
+      attentionId: attentionId("HUMAN_APPROVAL_REQUIRED", request.proposalId),
       kind: "HUMAN_APPROVAL_REQUIRED",
       severity: "warning",
       executionId: null,

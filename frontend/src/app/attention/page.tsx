@@ -75,6 +75,27 @@ export default function AttentionPage() {
     }
   };
 
+  const handleReleaseWorkspace = async (item: AttentionItemV1) => {
+    if (!item.workspaceExecutionId) return;
+    setActing(item.attentionId);
+    try {
+      const res = await tenvyrApi.releaseExecutionWorkspace(
+        item.workspaceExecutionId,
+      );
+      parseWorkbenchCommandResult(res.data);
+      setNotice({
+        type: "success",
+        message: "Execution workspace released safely.",
+      });
+      await load();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setNotice({ type: "error", message });
+    } finally {
+      setActing(null);
+    }
+  };
+
   const items = view?.items ?? [];
   const critical = items.filter((item) => item.severity === "critical");
   const warnings = items.filter((item) => item.severity === "warning");
@@ -155,6 +176,23 @@ export default function AttentionPage() {
             >
               <XCircle size={14} aria-hidden="true" /> Deny
             </button>
+          </>
+        ) : item.kind === "WORKSPACE_REQUIRES_ATTENTION" && item.workspaceExecutionId ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-danger"
+              disabled={acting === item.attentionId}
+              onClick={() => void handleReleaseWorkspace(item)}
+            >
+              Safe Release
+            </button>
+            <Link
+              href={item.actionRoute}
+              className="btn btn-sm btn-secondary"
+            >
+              <ExternalLink size={14} aria-hidden="true" /> Inspect
+            </Link>
           </>
         ) : (
           <Link

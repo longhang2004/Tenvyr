@@ -218,6 +218,27 @@ export class TenvyrApiClient {
     });
   }
 
+  async releaseExecutionWorkspace(
+    workspaceExecutionId: string,
+    idempotencyKey: string = crypto.randomUUID(),
+    reason?: string,
+  ): Promise<
+    ApiResponse<
+      WorkbenchCommandResultV1<{
+        workspaceExecutionId: string;
+        state: string;
+      }>
+    >
+  > {
+    return this.request(
+      `/api/workbench/commands/workspaces/${encodeURIComponent(workspaceExecutionId)}/release`,
+      {
+        method: "POST",
+        body: { idempotencyKey, ...(reason ? { reason } : {}) },
+      },
+    );
+  }
+
   // Model Sources
   async getModelSources(): Promise<ApiResponse<ModelSourceV1[]>> {
     return this.request("/api/model-sources");

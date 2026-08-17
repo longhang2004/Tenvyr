@@ -8,6 +8,8 @@
   "scripts": {
     "prebuild": "pnpm --filter @tenvyr/worker build",
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "start:dev": "node dist/main.js",
     "pretest": "pnpm run build",
     "test": "jest",
     "pretest:integration": "pnpm run build",
@@ -16,11 +18,13 @@
   },
   "dependencies": {
     "@tenvyr/contracts": "workspace:*",
-    "@tenvyr/worker": "workspace:*"
+    "@tenvyr/worker": "workspace:*",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
     "@types/jest": "29.5.14",
     "@types/node": "20.19.41",
+    "@types/pg": "^8.11.0",
     "jest": "29.7.0",
     "ts-jest": "29.4.11",
     "typescript": "5.9.3"

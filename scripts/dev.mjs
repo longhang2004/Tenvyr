@@ -40,6 +40,7 @@ const SHUTDOWN_GRACE_MS = 15_000;
 const DEFAULT_SERVICES = [
   { name: "orchestrator", dir: "services/orchestrator", script: "start:dev", portEnv: "ORCHESTRATOR_PORT", defaultPort: 3001, health: "/health" },
   { name: "gateway", dir: "services/gateway", script: "start:dev", portEnv: "GATEWAY_PORT", defaultPort: 3000, health: "/health" },
+  { name: "host", dir: "services/local-executor-host", script: "start:dev", portEnv: "EXECUTOR_HOST_PORT", defaultPort: 3002, health: "/health/live" },
   { name: "workbench", dir: "frontend", script: "dev", portEnv: "PORT", defaultPort: 4000, health: "/" },
 ];
 

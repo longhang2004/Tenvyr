@@ -59,6 +59,11 @@ export class WorkspaceExecutionEntity {
   @Column({ type: "uuid", nullable: true })
   ownerRunId: string | null;
 
+  /** Optional command idempotency key used during allocation. */
+  @Column({ type: "varchar", length: 255, nullable: true })
+  @Index("IDX_workspace_execution_allocation_key")
+  allocationKey: string | null;
+
   @Column({ type: "varchar", length: 32, default: "ALLOCATING" })
   state: WorkspaceExecutionStateV1;
 

@@ -208,6 +208,22 @@ export function parseAgentTransportConfiguration(
   };
 }
 
+/**
+ * Maps a connection identity (e.g. "conn:codex") into a transport-safe agent
+ * routing identifier (e.g. "conn__codex") matching /^[A-Za-z0-9_.-]+$/.
+ */
+export function toTransportAgent(connectionIdOrName: string): string {
+  if (!connectionIdOrName) return "default";
+  if (connectionIdOrName.startsWith("conn__")) {
+    return connectionIdOrName;
+  }
+  const sanitized = connectionIdOrName.replace(/[^A-Za-z0-9_.-]/g, "_");
+  if (!sanitized.startsWith("conn__")) {
+    return `conn__${sanitized}`;
+  }
+  return sanitized;
+}
+
 export class AgentTransportConfigService {
   private readonly configuration: ParsedAgentTransportConfiguration;
 
@@ -216,12 +232,34 @@ export class AgentTransportConfigService {
   }
 
   forAgent(agent: string): AgentTransportConfiguration {
-    return (
-      this.configuration.agents.get(agent) ?? {
-        kind: "kafka",
+    const configured = this.configuration.agents.get(agent);
+    if (configured) return configured;
+    if (agent.startsWith("conn__") || agent.startsWith("conn:")) {
+      const submitUrl =
+        process.env.LOCAL_EXECUTOR_HOST_URL ||
+        process.env.EXECUTOR_HOST_URL ||
+        "http://127.0.0.1:3002/v1/runs";
+      const token =
+        process.env.EXECUTOR_HOST_BEARER_TOKEN ||
+        process.env.HTTP_AGENT_BEARER_TOKEN ||
+        "tenvyr-dev-host-token";
+      const secret =
+        process.env.HTTP_AGENT_CALLBACK_SECRET ||
+        "tenvyr-dev-callback-secret";
+      return {
+        kind: "http",
+        submitUrl,
+        outboundAuthentication: { type: "bearer", token },
+        callbackAuthentication: { keyId: "host-callback-v1", secret },
+        requestTimeoutMs: 300_000,
+        maxResponseBytes: 16 * 1024 * 1024,
         delegationModes: ["opaque", "observed"],
-      }
-    );
+      };
+    }
+    return {
+      kind: "kafka",
+      delegationModes: ["opaque", "observed"],
+    };
   }
 
   /**

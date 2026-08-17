@@ -112,16 +112,10 @@ export class HandoffService {
         HANDOFF_BOUNDS.maxWorkers,
       )) {
         const attempt = byStep.get(entry.logicalStepId);
-        const rawSummary = attempt?.result
-          ? JSON.stringify(attempt.result)
-          : null;
         workerOutcomes.push({
           taskId: entry.taskId,
           status: attempt?.status ?? "UNKNOWN",
-          summary:
-            rawSummary !== null
-              ? rawSummary.slice(0, HANDOFF_BOUNDS.workerSummaryBytes)
-              : null,
+          summary: null,
         });
       }
     }
@@ -240,7 +234,7 @@ export class HandoffService {
         0,
         HANDOFF_BOUNDS.maxProvenanceEntries,
       ),
-      createdAt: new Date().toISOString(),
+      createdAt: coordinationRun.updatedAt.toISOString(),
     };
     if (handoffBundleBytes(bundle) > HANDOFF_BOUNDS.bundleBytes) {
       throw new HandoffError(
@@ -279,6 +273,25 @@ export class HandoffService {
         "SOURCE_NOT_TERMINAL",
         `Source execution "${sourceExecutionId}" is ${sourceRun?.phase ?? "not a coordinated run"}; handoffs require a terminal source run`,
       );
+    }
+
+    // Idempotency: check if this handoff bundle was already executed
+    const handoffRepository = manager.getRepository(HandoffEntity);
+    const existing = await handoffRepository.findOne({
+      where: { sourceExecutionId, bundleHash },
+    });
+    if (existing && existing.destinationExecutionId) {
+      const existingRun = await manager
+        .getRepository(CoordinationRunEntity)
+        .findOne({ where: { executionId: existing.destinationExecutionId } });
+      if (existingRun) {
+        return {
+          executionId: existing.destinationExecutionId,
+          runId: existingRun.id,
+          handoffId: existing.id,
+          bundleHash,
+        };
+      }
     }
 
     const pipeline = await manager.getRepository(PipelineEntity).save(
@@ -327,10 +340,6 @@ export class HandoffService {
       );
     }
 
-    const handoffRepository = manager.getRepository(HandoffEntity);
-    const existing = await handoffRepository.findOne({
-      where: { sourceExecutionId, bundleHash },
-    });
     const handoff = existing
       ? existing
       : await handoffRepository.save(

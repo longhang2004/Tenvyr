@@ -54,6 +54,7 @@ import { ModelSources1722270019000 } from "./migrations/1722270019000-ModelSourc
 import { P3ContextBundle1722270020000 } from "./migrations/1722270020000-P3ContextBundle";
 import { WorkspaceExecutionIsolation1722270021000 } from "./migrations/1722270021000-WorkspaceExecutionIsolation";
 import { Handoff1722270022000 } from "./migrations/1722270022000-Handoff";
+import { WorkspaceExecutionAllocationKey1722270023000 } from "./migrations/1722270023000-WorkspaceExecutionAllocationKey";
 import { ModelSourceEntity } from "../entities/model-source.entity";
 import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { HandoffEntity } from "../entities/handoff.entity";
@@ -134,6 +135,7 @@ export function databaseOptions(
       P3ContextBundle1722270020000,
       WorkspaceExecutionIsolation1722270021000,
       Handoff1722270022000,
+      WorkspaceExecutionAllocationKey1722270023000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

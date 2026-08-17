@@ -1,3 +1,5 @@
+import * as path from "node:path";
+import { Pool } from "pg";
 import { createTenvyrWorker, defineAgent } from "@tenvyr/worker";
 import {
   parseHostConfig,
@@ -11,48 +13,47 @@ import { superviseProcess, type ProcessOutcome } from "./supervisor";
 import { MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from "./supervisor";
 import { clearRunState, terminateOrphan, writeRunState } from "./state";
 
-/**
- * M3-S3: trusted-code-only local process executor host.
- *
- * One TenvyrWorker instance per configured agent (each on its own port),
- * so the canonical HTTP Worker protocol, bearer auth, callback signing,
- * idempotency, and scheduling come from the reviewed worker SDK. The agent's
- * `execute` resolves the FIXED operator-configured command for the
- * invocation's agent target, supervises it with bounded IO and process-group
- * deadline/cancel, and materializes the canonical result.
- *
- * The host is trusted-code-only: it runs exactly the configured command in
- * an explicit allowlisted environment, with no sandbox. It never accepts
- * executable paths, commands, arguments, or environment from the pipeline.
- *
- * M8-S6: a connection-bound agent (connectionId + configHash declared)
- * validates every invocation's frozen connection reference against its own
- * fixed configuration and FAILS CLOSED before spawn on any mismatch — the
- * immutable connection revision is authoritative for what the host runs.
- *
- * PP1 (Pivot Invariant 1): the WORKING DIRECTORY of every runtime child is
- * Tenvyr authority too. When the invocation carries the reserved
- * `metadata.tenvyr.executionWorkspace` member, `resolveExecutionCwd`
- * validates the path (absolute, existing directory, realpath inside
- * EXECUTOR_HOST_ALLOWED_ROOT — no traversal, no symlink escape) and the
- * child spawns there; agents declaring `requireExecutionWorkspace` refuse
- * workspace-less invocations. Planner/worker task input can never choose or
- * override cwd.
- */
+let pool: Pool | null = null;
+function getDbPool(): Pool {
+  if (!pool) {
+    const connectionString =
+      process.env.DATABASE_URL ||
+      process.env.TEST_DATABASE_URL ||
+      `postgres://${process.env.POSTGRES_USER || "postgres"}:${process.env.POSTGRES_PASSWORD || "postgres"}@${process.env.POSTGRES_HOST || "127.0.0.1"}:${process.env.POSTGRES_PORT || process.env.TENVYR_POSTGRES_PORT || 5432}/${process.env.POSTGRES_DB || "tenvyr"}`;
+    pool = new Pool({ connectionString });
+  }
+  return pool;
+}
+
+export async function resolveConnectionRevisionFromDb(
+  connectionId: string,
+  revisionNumber: number,
+): Promise<{ profile: any; configHash: string } | null> {
+  const p = getDbPool();
+  const res = await p.query(
+    'SELECT "profile", "configHash" FROM "connection_revisions" WHERE "connectionId" = $1 AND "revisionNumber" = $2',
+    [connectionId, revisionNumber],
+  );
+  if (res.rows.length === 0) return null;
+  return {
+    profile: res.rows[0].profile,
+    configHash: res.rows[0].configHash,
+  };
+}
 
 export function main(): Promise<void> {
   const config = parseHostConfig();
   return startHostWorkers(config).then(() => {
     console.log("Local executor host started", {
       agents: config.agents.map((profile) => profile.agent),
+      dynamicBridge: config.dynamicBridge ?? false,
     });
   });
 }
 
 /**
- * Starts one worker per configured agent on its own loopback port.
- * Exported so integration tests exercise the REAL host wiring (config ->
- * worker -> supervisor -> canonical result) in-process.
+ * Starts one worker per configured agent on its own loopback port,
+ * or a unified dynamic bridge worker if no static agents are declared.
  */
 export async function startHostWorkers(config: HostConfig): Promise<
   Array<{
@@ -67,6 +68,204 @@ export async function startHostWorkers(config: HostConfig): Promise<
     address: { host: string; port: number };
     stop: () => Promise<void>;
   }> = [];
+
+  if (config.agents.length === 0) {
+    const bearerToken =
+      process.env[config.bearerTokenEnv ?? "EXECUTOR_HOST_BEARER_TOKEN"] ??
+      process.env.HTTP_AGENT_BEARER_TOKEN ??
+      "tenvyr-dev-host-token";
+    const port = config.port ?? 3002;
+
+    const worker = createTenvyrWorker({
+      agent: defineAgent({
+        name: "*",
+        execute: async (context) => {
+          const invocation = context.invocation;
+          let profile: HostAgentConfig;
+
+          if (invocation.connection) {
+            const { connectionId, revisionNumber, configHash } =
+              invocation.connection;
+            let rev: { profile: any; configHash: string } | null = null;
+            try {
+              rev = await resolveConnectionRevisionFromDb(
+                connectionId,
+                revisionNumber,
+              );
+            } catch (err: any) {
+              return context.fail({
+                code: "EXECUTOR_HOST_DATABASE_ERROR",
+                message: `Failed to query connection revision: ${err.message}`,
+                retryable: true,
+              });
+            }
+            if (!rev) {
+              return context.fail({
+                code: "EXECUTOR_HOST_CONNECTION_NOT_FOUND",
+                message: `Connection "${connectionId}" revision ${revisionNumber} not found`,
+                retryable: false,
+              });
+            }
+            if (rev.configHash !== configHash) {
+              return context.fail({
+                code: "EXECUTOR_HOST_CONNECTION_MISMATCH",
+                message: `Invocation selects revision hash "${configHash}" but revision ${revisionNumber} has hash "${rev.configHash}"`,
+                retryable: false,
+              });
+            }
+            const cli = rev.profile?.cli;
+            if (!cli || !cli.command) {
+              return context.fail({
+                code: "EXECUTOR_HOST_CLI_NOT_CONFIGURED",
+                message: `Connection "${connectionId}" does not declare a CLI profile`,
+                retryable: false,
+              });
+            }
+            profile = {
+              agent: invocation.target?.agent || connectionId,
+              command: cli.command,
+              args: cli.args || [],
+              modelArgvPrefix: cli.modelArgvPrefix,
+              cwd: cli.cwd
+                ? path.resolve(config.allowedRoot, cli.cwd)
+                : config.allowedRoot,
+              env: cli.envAllowlist || {},
+              secrets: cli.secrets || {},
+              wallTimeMs: 300_000,
+              maxStdoutBytes: 16 * 1024 * 1024,
+              maxStderrBytes: 16 * 1024 * 1024,
+              port,
+              bearerTokenEnv:
+                config.bearerTokenEnv ?? "EXECUTOR_HOST_BEARER_TOKEN",
+              connectionId,
+              configHash,
+              structuredResult:
+                rev.profile?.declaredCapabilities?.structuredResult
+                  ?.supported ?? true,
+              requireExecutionWorkspace: true,
+            };
+          } else {
+            return context.fail({
+              code: "EXECUTOR_HOST_CONNECTION_REQUIRED",
+              message: `Dynamic local executor bridge requires an immutable connection reference`,
+              retryable: false,
+            });
+          }
+
+          const bindingError = validateInvocationBinding(profile, invocation);
+          if (bindingError) {
+            return context.fail({
+              code: "EXECUTOR_HOST_CONNECTION_MISMATCH",
+              message: bindingError,
+              retryable: false,
+            });
+          }
+          let spawnCwd: string;
+          try {
+            spawnCwd = resolveExecutionCwd(
+              profile,
+              invocation,
+              config.allowedRoot,
+            );
+          } catch (error) {
+            if (error instanceof ExecutionWorkspacePathError) {
+              return context.fail({
+                code: "EXECUTOR_HOST_WORKSPACE_PATH_INVALID",
+                message: error.message,
+                retryable: false,
+              });
+            }
+            throw error;
+          }
+          const startedAt = new Date().toISOString();
+          try {
+            const outcome = await superviseProcess({
+              profile,
+              env: resolvedEnvironment(profile),
+              input: invocation,
+              requestedModelId:
+                typeof invocation.requestedModelId === "string"
+                  ? invocation.requestedModelId
+                  : undefined,
+              signal: context.signal,
+              invocationDeadlineAt: invocation.deadlineAt,
+              cwdOverride: spawnCwd,
+              onSpawn: (pid) => {
+                try {
+                  writeRunState(config.stateDir, profile.agent, {
+                    invocationId: invocation.invocationId,
+                    pid,
+                    startedAt,
+                    killAt: new Date(
+                      Date.now() + profile.wallTimeMs,
+                    ).toISOString(),
+                  });
+                } catch (error) {
+                  console.error(
+                    "Run state write failed; orphan protection degraded",
+                    {
+                      agent: profile.agent,
+                      invocationId: invocation.invocationId,
+                      reason:
+                        error instanceof Error ? error.message : String(error),
+                    },
+                  );
+                }
+              },
+            });
+            return materializeResult(context, outcome, profile);
+          } finally {
+            clearRunState(config.stateDir, profile.agent);
+          }
+        },
+      }),
+      authentication: { bearerToken },
+      callbackAuthentication: { keys: config.callbackKeys },
+      callbackPolicy: {
+        allowedOrigins: config.callbackAllowedOrigins,
+        allowInsecureHttp: config.callbackAllowInsecure,
+      },
+      execution: {
+        timeoutMs: 310_000,
+        concurrency: 4,
+        maxQueuedRuns: 16,
+      },
+      events: {
+        enabled: true,
+        heartbeatIntervalMs: 15_000,
+      },
+      logger: {
+        debug: () => undefined,
+        info: (message, contextData) =>
+          console.log(message, safeLog(contextData)),
+        warn: (message, contextData) =>
+          console.warn(message, safeLog(contextData)),
+        error: (message, contextData) =>
+          console.error(message, safeLog(contextData)),
+      },
+    });
+
+    const address = await worker.start({
+      host: "127.0.0.1",
+      port,
+    });
+    started.push({
+      agent: "*",
+      address,
+      stop: async () => {
+        await worker.stop();
+        if (pool) {
+          await pool.end().catch(() => undefined);
+          pool = null;
+        }
+      },
+    });
+    console.log("Local executor host bridge listening", {
+      host: address.host,
+      port: address.port,
+    });
+    return started;
+  }
 
   for (const profile of config.agents) {
     // Restart/orphan policy: never adopt, never re-spawn — terminate any

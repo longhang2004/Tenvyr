@@ -335,6 +335,17 @@ export class AppController {
     );
   }
 
+  @Post("api/workbench/commands/workspaces/:workspaceExecutionId/release")
+  async workbenchReleaseWorkspace(
+    @Param("workspaceExecutionId") workspaceExecutionId: string,
+    @Body() body: any,
+  ) {
+    return this.forwardToOrchestrator(
+      `/workbench/commands/workspaces/${encodeURIComponent(workspaceExecutionId)}/release`,
+      { method: "POST", body },
+    );
+  }
+
   @Get("api/workbench/commands/audit")
   async workbenchAudit(@Query("action") action?: string) {
     return this.forwardToOrchestrator(

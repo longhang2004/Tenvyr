@@ -258,7 +258,7 @@ export class TenvyrWorkerRuntime<TInput, TOutput> implements TenvyrWorker {
       );
       return;
     }
-    if (runRequest.invocation.target.agent !== this.agentName) {
+    if (this.agentName !== "*" && runRequest.invocation.target.agent !== this.agentName) {
       errorResponse(
         response,
         404,

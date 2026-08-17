@@ -1065,6 +1065,7 @@
     "services/orchestrator/src/services/workspace-execution.service.ts",
     "services/orchestrator/src/entities/workspace-execution.entity.ts",
     "services/orchestrator/src/database/migrations/1722270021000-WorkspaceExecutionIsolation.ts",
+    "services/orchestrator/src/database/migrations/1722270023000-WorkspaceExecutionAllocationKey.ts",
     "services/orchestrator/src/services/execution.service.ts",
     "services/orchestrator/src/services/approval.service.ts",
     "services/orchestrator/src/services/workbench-command.service.ts",
@@ -1077,6 +1078,7 @@
    "tests": [
     "services/orchestrator/src/services/workspace-execution.service.spec.ts",
     "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
+    "services/orchestrator/src/workspace-execution-recovery.spec.ts",
     "services/local-executor-host/test/config.spec.ts"
    ],
    "docs": [
@@ -1102,13 +1104,14 @@
    ],
    "tests": [
     "services/orchestrator/src/domain/attention.spec.ts",
-    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts"
+    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
+    "services/orchestrator/src/workspace-execution-recovery.spec.ts"
    ],
    "docs": [
     "docs/architecture/attention.md"
    ],
    "limitations": [
-    "Read projection only \u2014 items exist exactly while their durable source condition exists; resolution always uses the existing authority commands",
+    "Read projection only — items exist exactly while their durable source condition exists; resolution always uses the existing authority commands",
     "Classes are limited to what durable rows prove today (approval/FAILED/LIMIT_REACHED/preserved uncommitted workspace)",
     "Workspace attention requires the lazy lease reconciliation to have run (run start or attention read)"
    ]
@@ -1129,13 +1132,14 @@
    ],
    "tests": [
     "services/orchestrator/src/domain/handoff.spec.ts",
-    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts"
+    "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
+    "services/orchestrator/src/workspace-execution-recovery.spec.ts"
    ],
    "docs": [
     "docs/architecture/handoff.md"
    ],
    "limitations": [
-    "Source run must be TERMINAL; preserved git-worktree transfer is exclusive (source lease TRANSFERRED, destination gets a NEW lease \u2014 concurrent continuation fails closed)",
+    "Source run must be TERMINAL; preserved git-worktree transfer is exclusive (source lease TRANSFERRED, destination gets a NEW lease — concurrent continuation fails closed)",
     "Bundle is a bounded projection of durable truth (references only); it is not session migration, chat-history copying, or deterministic replay",
     "No automatic merge-to-main/push/branch deletion; no task-collision guard"
    ]

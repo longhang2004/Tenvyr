@@ -1,5 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -94,18 +95,34 @@ export function addGitWorktree(
   sourceRepoRoot: string,
   executionPath: string,
   branch: string,
+  frozenHeadSha?: string | null,
 ): string | null {
-  const added = runBoundedGit(sourceRepoRoot, [
-    "worktree",
-    "add",
-    executionPath,
-    "-b",
-    branch,
-  ]);
-  if (added.status === 0) return null;
+  const args = ["worktree", "add", "-b", branch, executionPath];
+  if (frozenHeadSha) {
+    args.push(frozenHeadSha);
+  }
+  const added = runBoundedGit(sourceRepoRoot, args);
+  if (added.status === 0) {
+    if (frozenHeadSha) {
+      const headCheck = runBoundedGit(executionPath, ["rev-parse", "HEAD"]);
+      if (headCheck.status !== 0 || headCheck.stdout.trim() !== frozenHeadSha) {
+        return `Worktree HEAD mismatch: expected ${frozenHeadSha}, got ${headCheck.stdout.trim()}`;
+      }
+    }
+    return null;
+  }
   // Retry idempotency: an interrupted previous attempt may have created the
   // worktree before the DB update. Verify registration before success.
-  if (worktreeIsRegistered(sourceRepoRoot, executionPath)) return null;
+  if (worktreeIsRegistered(sourceRepoRoot, executionPath)) {
+    if (frozenHeadSha) {
+      const headCheck = runBoundedGit(executionPath, ["rev-parse", "HEAD"]);
+      if (headCheck.status === 0 && headCheck.stdout.trim() === frozenHeadSha) {
+        return null;
+      }
+    } else {
+      return null;
+    }
+  }
   return (added.stderr || "git worktree add failed").slice(0, 512);
 }
 
@@ -141,7 +158,10 @@ export class WorkspaceExecutionService {
   private readonly executions: Repository<WorkspaceExecutionEntity>;
 
   constructor(@Inject("DATA_SOURCE") private readonly dataSource: DataSource) {
-    this.executions = dataSource.getRepository(WorkspaceExecutionEntity);
+    this.executions =
+      typeof dataSource?.getRepository === "function"
+        ? dataSource.getRepository(WorkspaceExecutionEntity)
+        : ({} as any);
   }
 
   /**
@@ -155,35 +175,72 @@ export class WorkspaceExecutionService {
   async allocateExecutionWorkspace(
     workspace: WorkspaceSnapshotV1,
     mode: WorkspaceExecutionModeV1,
+    allocationKey?: string | null,
   ): Promise<WorkspaceExecutionEntity> {
     await this.reconcileWorkspaceExecutions();
-    const entity = await this.executions.save(
-      this.executions.create({
-        sourceWorkspaceId: workspace.workspaceId,
-        sourcePath: workspace.path,
-        mode,
-        baseBranch: workspace.branch ?? null,
-        baseHeadSha: workspace.headSha ?? null,
-        ownerRunId: null,
-        state: "ALLOCATING",
-      }),
-    );
-    if (mode === "shared") {
-      // Shared mode executes against the source workspace itself; the path
-      // was canonicalized by resolveWorkspacePath at freeze time.
-      return this.transition(entity.id, "READY", {
-        executionPath: workspace.path,
+
+    // Idempotency: check if an existing allocation exists for this allocationKey
+    if (allocationKey) {
+      const existing = await this.executions.findOne({
+        where: { allocationKey },
       });
+      if (existing) {
+        if (
+          existing.sourceWorkspaceId !== workspace.workspaceId ||
+          existing.mode !== mode ||
+          (existing.baseHeadSha &&
+            workspace.headSha &&
+            existing.baseHeadSha !== workspace.headSha)
+        ) {
+          throw new WorkspaceExecutionError(
+            "ALLOCATION_CONFLICT",
+            `Allocation key "${allocationKey}" already used with conflicting parameters`,
+          );
+        }
+        if (existing.state === "READY" || existing.state === "IN_USE") {
+          return existing;
+        }
+        if (existing.state === "ALLOCATING" && existing.executionPath) {
+          if (
+            workspace.repoRoot &&
+            worktreeIsRegistered(workspace.repoRoot, existing.executionPath)
+          ) {
+            const headCheck = runBoundedGit(existing.executionPath, [
+              "rev-parse",
+              "HEAD",
+            ]);
+            if (
+              !existing.baseHeadSha ||
+              headCheck.stdout.trim() === existing.baseHeadSha
+            ) {
+              return this.transition(existing.id, "READY");
+            }
+          }
+        }
+      }
     }
+
+    if (mode === "shared") {
+      const entity = await this.executions.save(
+        this.executions.create({
+          sourceWorkspaceId: workspace.workspaceId,
+          sourcePath: workspace.path,
+          mode,
+          executionPath: workspace.path,
+          baseBranch: workspace.branch ?? null,
+          baseHeadSha: workspace.headSha ?? null,
+          ownerRunId: null,
+          allocationKey: allocationKey ?? null,
+          state: "READY",
+        }),
+      );
+      return entity;
+    }
+
     // git-worktree mode: the source must be a detectable git repository
     // with a HEAD — otherwise fail closed with a precise reason (never
     // silently fall back to shared).
     if (!workspace.repoRoot || !workspace.headSha) {
-      await this.transition(
-        entity.id,
-        "FAILED",
-        { failureCode: "NOT_A_GIT_REPOSITORY" },
-      );
       throw new WorkspaceExecutionError(
         "NOT_A_GIT_REPOSITORY",
         `Workspace "${workspace.workspaceId}" is not a detectable git repository with a HEAD; git-worktree isolation cannot be created (no silent fallback)`,
@@ -193,21 +250,36 @@ export class WorkspaceExecutionService {
     try {
       mkdirSync(root, { recursive: true });
     } catch {
-      await this.transition(entity.id, "FAILED", {
-        failureCode: "EXECUTION_ROOT_UNWRITABLE",
-      });
       throw new WorkspaceExecutionError(
         "EXECUTION_ROOT_UNWRITABLE",
         `Execution workspace root "${root}" is not writable`,
       );
     }
-    const executionPath = path.join(root, `run-${entity.id.slice(0, 12)}`);
-    const shortId = entity.id.slice(0, 12);
+
+    const shortId = randomUUID().slice(0, 12);
+    const executionPath = path.join(root, `run-${shortId}`);
     const branch = `tenvyr/run-${shortId}`;
+
+    // Persist ALLOCATING row with intended executionPath, baseBranch, baseHeadSha BEFORE git add
+    const entity = await this.executions.save(
+      this.executions.create({
+        sourceWorkspaceId: workspace.workspaceId,
+        sourcePath: workspace.path,
+        mode,
+        executionPath,
+        baseBranch: workspace.branch ?? null,
+        baseHeadSha: workspace.headSha,
+        ownerRunId: null,
+        allocationKey: allocationKey ?? null,
+        state: "ALLOCATING",
+      }),
+    );
+
     const addedError = addGitWorktree(
       workspace.repoRoot,
       executionPath,
       branch,
+      workspace.headSha,
     );
     if (addedError !== null) {
       await this.transition(entity.id, "FAILED", {
@@ -400,18 +472,40 @@ export class WorkspaceExecutionService {
     );
     const repository = this.dataSource.getRepository(WorkspaceExecutionEntity);
     let transitions = 0;
-    // ALLOCATING rows older than the bound were interrupted before any git
-    // mutation could complete deterministically.
+    // ALLOCATING rows: check if worktree was created and valid before failing
     const interrupted = await repository
       .createQueryBuilder("lease")
       .where("lease.state = 'ALLOCATING'")
-      .andWhere("lease.createdAt < :boundary", { boundary: interruptedBoundary })
       .getMany();
     for (const row of interrupted) {
-      await this.transition(row.id, "FAILED", {
-        failureCode: "ALLOCATION_INTERRUPTED",
-      });
-      transitions++;
+      if (row.mode === "git-worktree" && row.executionPath && row.sourcePath) {
+        if (worktreeIsRegistered(row.sourcePath, row.executionPath)) {
+          const headCheck = runBoundedGit(row.executionPath, [
+            "rev-parse",
+            "HEAD",
+          ]);
+          if (
+            !row.baseHeadSha ||
+            headCheck.stdout.trim() === row.baseHeadSha
+          ) {
+            await this.transition(row.id, "READY");
+            transitions++;
+            continue;
+          } else {
+            await this.transition(row.id, "FAILED", {
+              failureCode: "ALLOCATION_MISMATCH",
+            });
+            transitions++;
+            continue;
+          }
+        }
+      }
+      if (row.createdAt < interruptedBoundary) {
+        await this.transition(row.id, "FAILED", {
+          failureCode: "ALLOCATION_INTERRUPTED",
+        });
+        transitions++;
+      }
     }
     // READY rows never bound to a run (crash between allocation and the
     // authority transaction).
@@ -458,13 +552,41 @@ export class WorkspaceExecutionService {
             "status",
             "--porcelain",
           ]);
-          hasUncommittedWork = porcelain.status === 0 && porcelain.stdout.length > 0;
+          hasUncommittedWork = porcelain.status === 0 && porcelain.stdout.trim().length > 0;
         }
         await this.transition(row.id, "PRESERVED", { hasUncommittedWork });
         transitions++;
       }
     }
     return transitions;
+  }
+
+  /**
+   * Authoritatively transitions an IN_USE lease to PRESERVED upon run terminal completion.
+   * Measures uncommitted work once for git-worktree mode.
+   */
+  async preserveExecutionWorkspaceForRun(
+    manager: EntityManager,
+    runId: string,
+  ): Promise<WorkspaceExecutionEntity | null> {
+    const repository = manager.getRepository(WorkspaceExecutionEntity);
+    const row = await repository.findOne({
+      where: { ownerRunId: runId, state: "IN_USE" },
+    });
+    if (!row) return null;
+    let hasUncommittedWork: boolean | null = null;
+    if (row.mode === "git-worktree" && row.executionPath) {
+      const porcelain = runBoundedGit(row.executionPath, [
+        "status",
+        "--porcelain",
+      ]);
+      hasUncommittedWork =
+        porcelain.status === 0 && porcelain.stdout.trim().length > 0;
+    }
+    row.state = "PRESERVED";
+    row.hasUncommittedWork = hasUncommittedWork;
+    row.updatedAt = new Date();
+    return repository.save(row);
   }
 
   /**
@@ -524,7 +646,7 @@ export class WorkspaceExecutionService {
   private async transition(
     id: string,
     state: WorkspaceExecutionEntity["state"],
-    fields: Partial<WorkspaceExecutionEntity>,
+    fields: Partial<WorkspaceExecutionEntity> = {},
   ): Promise<WorkspaceExecutionEntity> {
     await this.executions.update(id, { state, ...fields });
     const updated = await this.executions.findOneOrFail({ where: { id } });

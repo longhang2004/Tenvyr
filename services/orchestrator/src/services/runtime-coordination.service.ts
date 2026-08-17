@@ -13,6 +13,7 @@ import { ConditionEvaluatorService } from "./condition-evaluator.service";
 import { BudgetLedgerService } from "./budget-ledger.service";
 import { BUDGET_DIMENSION_IDS } from "../domain/budget";
 import { RuntimeConnectionService } from "./runtime-connection.service";
+import { WorkspaceExecutionService } from "./workspace-execution.service";
 import {
   applyPhaseTransition,
   buildVerifierContext,
@@ -24,6 +25,7 @@ import {
   parseTaskBatchProposal,
   parseVerifierDecision,
   TERMINAL_COORDINATION_PHASES,
+  toTransportAgent,
   validateTaskBatchProposal,
   type CoordinationConfigV1,
   type CoordinationPhase,
@@ -136,6 +138,7 @@ export class RuntimeCoordinationService {
     planProposals?: PlanProposalService,
     budgets?: BudgetLedgerService,
     connections?: RuntimeConnectionService,
+    workspaceExecutions?: WorkspaceExecutionService,
   ) {
     this.planProposals =
       planProposals ??
@@ -146,11 +149,14 @@ export class RuntimeCoordinationService {
     this.budgets = budgets ?? new BudgetLedgerService(this.dataSource);
     this.connections =
       connections ?? new RuntimeConnectionService(this.dataSource);
+    this.workspaceExecutions =
+      workspaceExecutions ?? new WorkspaceExecutionService(this.dataSource);
   }
 
   private readonly planProposals: PlanProposalService;
   private readonly budgets: BudgetLedgerService;
   private readonly connections: RuntimeConnectionService;
+  private readonly workspaceExecutions: WorkspaceExecutionService;
 
   /** Creates the one-to-one run. Idempotent: an existing run for the same
    *  execution is returned unchanged (at-least-once start), and concurrent
@@ -495,11 +501,17 @@ export class RuntimeCoordinationService {
           )?.revisionNumber ?? 1)
         : 1;
       const plannerFrozenRevision = activeRevisionNumber + 1;
+      const plannerAgent =
+        run.config.planner.kind === "connection"
+          ? toTransportAgent(
+              run.config.planner.agent ?? run.config.planner.name,
+            )
+          : (run.config.planner.agent ?? run.config.planner.name);
       const step: Record<string, unknown> = {
         id: plannerStepId,
         // M8-S6: connection-kind Planner routes through its declared
         // routing agent (the executor host's transport key).
-        agent: run.config.planner.agent ?? run.config.planner.name,
+        agent: plannerAgent,
         input: { iterationNumber, planRevision: plannerFrozenRevision },
         onFailure: "stop",
       };
@@ -1112,6 +1124,12 @@ export class RuntimeCoordinationService {
     run.waitReason = null;
     run.version += 1;
     await runs.save(run);
+    if (TERMINAL_COORDINATION_PHASES.includes(next)) {
+      await this.workspaceExecutions.preserveExecutionWorkspaceForRun(
+        manager,
+        run.id,
+      );
+    }
     return next;
   }
 
@@ -1198,6 +1216,12 @@ export class RuntimeCoordinationService {
       run.version += 1;
       if (event !== "wait") run.waitReason = null;
       await runs.save(run);
+      if (TERMINAL_COORDINATION_PHASES.includes(next)) {
+        await this.workspaceExecutions.preserveExecutionWorkspaceForRun(
+          manager,
+          run.id,
+        );
+      }
       return next;
     });
   }
@@ -1217,6 +1241,10 @@ export class RuntimeCoordinationService {
       run.version += 1;
       run.activeIterationId = null;
       await manager.getRepository(CoordinationRunEntity).save(run);
+      await this.workspaceExecutions.preserveExecutionWorkspaceForRun(
+        manager,
+        run.id,
+      );
       const execution = await manager
         .getRepository(ExecutionEntity)
         .createQueryBuilder("execution")
@@ -1356,6 +1384,12 @@ export class RuntimeCoordinationService {
       run.phase = nextPhase;
       run.version += 1;
       await runs.save(run);
+      if (TERMINAL_COORDINATION_PHASES.includes(nextPhase)) {
+        await this.workspaceExecutions.preserveExecutionWorkspaceForRun(
+          manager,
+          run.id,
+        );
+      }
       return { outcome: "consumed", phase: nextPhase };
     });
   }
@@ -1497,6 +1531,10 @@ export class RuntimeCoordinationService {
     run.phase = applyPhaseTransition(run.phase, "fail");
     run.version += 1;
     await manager.getRepository(CoordinationRunEntity).save(run);
+    await this.workspaceExecutions.preserveExecutionWorkspaceForRun(
+      manager,
+      run.id,
+    );
     const executionRepository = manager.getRepository(ExecutionEntity);
     const execution = await executionRepository
       .createQueryBuilder("execution")
