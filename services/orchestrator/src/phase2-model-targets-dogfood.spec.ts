@@ -70,14 +70,21 @@ const assertDisposableTarget = (url: string | undefined): void => {
 
 const configuredDatabaseName = String(databaseOptions().database);
 
-const availablePort = (): Promise<number> =>
-  new Promise((resolve) => {
-    const server = require("node:net").createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as AddressInfo).port;
-      server.close(() => resolve(port));
+let portOffset = 46000 + Math.floor(Math.random() * 5000);
+const availablePort = async (): Promise<number> => {
+  for (let i = 0; i < 100; i++) {
+    const candidate = portOffset++;
+    const ok = await new Promise<boolean>((resolve) => {
+      const server = require("node:net").createServer();
+      server.once("error", () => resolve(false));
+      server.listen(candidate, "127.0.0.1", () => {
+        server.close(() => resolve(true));
+      });
     });
-  });
+    if (ok) return candidate;
+  }
+  return 0;
+};
 
 const NODE = process.execPath;
 
