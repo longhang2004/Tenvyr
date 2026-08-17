@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { DataSource, In, type EntityManager, Repository } from "typeorm";
 import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { CoordinationRunEntity } from "../entities/coordination-run.entity";
+import { OperatorActionEntity } from "../entities/operator-action.entity";
 import type { WorkspaceSnapshotV1 } from "../domain/workspace";
 import {
   WORKSPACE_EXECUTION_BOUNDS,
@@ -662,6 +663,54 @@ export class WorkspaceExecutionService {
         }
       }
     }
+
+    // Reconcile any pending release-execution-workspace OperatorActions
+    try {
+      const actionsRepo = this.dataSource.getRepository(OperatorActionEntity);
+      const pendingActions = await actionsRepo
+        .createQueryBuilder("action")
+        .where("action.action = 'release-execution-workspace'")
+        .getMany();
+
+      for (const act of pendingActions) {
+        const outcome = act.outcome as Record<string, unknown> | undefined;
+        if (outcome?.pending === true && act.targetId) {
+          const lease = await repository.findOne({ where: { id: act.targetId } });
+          if (lease) {
+            if (lease.state === "REMOVED") {
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: lease.state,
+                  },
+                },
+              );
+            } else if (
+              lease.state === "PRESERVED" &&
+              lease.failureCode === "WORKTREE_DIRTY"
+            ) {
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: lease.state,
+                    failureCode: "WORKTREE_DIRTY",
+                    error: "Worktree contains uncommitted changes",
+                    refusal: true,
+                  },
+                },
+              );
+            }
+          }
+        }
+      }
+    } catch {
+      // Best-effort audit reconciliation if tables or connections are unavailable
+    }
+
     return transitions;
   }
 

@@ -275,6 +275,12 @@ function startChild(child, io) {
 /** Build the child manifest from repo truth. */
 export function buildManifest(env = process.env) {
   const portOf = (service) => Number(env[service.portEnv] ?? service.defaultPort);
+  const orchestratorService = DEFAULT_SERVICES.find((s) => s.name === "orchestrator");
+  const hostService = DEFAULT_SERVICES.find((s) => s.name === "host");
+
+  const orchestratorPort = orchestratorService ? portOf(orchestratorService) : 3001;
+  const hostPort = hostService ? portOf(hostService) : 3002;
+
   const bearerToken =
     env.HTTP_AGENT_BEARER_TOKEN ??
     env.EXECUTOR_HOST_BEARER_TOKEN ??
@@ -283,6 +289,18 @@ export function buildManifest(env = process.env) {
     env.HTTP_AGENT_CALLBACK_SECRET ??
     env.LOOPBACK_CALLBACK_SECRET ??
     randomBytes(32).toString("hex");
+
+  const callbackBaseUrl =
+    env.HTTP_AGENT_CALLBACK_BASE_URL ?? `http://127.0.0.1:${orchestratorPort}`;
+  const allowInsecure =
+    env.HTTP_AGENT_ALLOW_INSECURE ?? "true";
+  const localExecutorHostUrl =
+    env.LOCAL_EXECUTOR_HOST_URL ??
+    env.EXECUTOR_HOST_URL ??
+    `http://127.0.0.1:${hostPort}/v1/runs`;
+  const callbackAllowedOrigins =
+    env.EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS ??
+    `http://127.0.0.1:${orchestratorPort},http://localhost:${orchestratorPort}`;
 
   const sharedDevEnv = {
     ...env,
@@ -297,7 +315,13 @@ export function buildManifest(env = process.env) {
         "host-callback-v1": callbackSecret,
         "host-loopback-v1": callbackSecret,
       }),
-    EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE: "true",
+    EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE:
+      env.EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE ?? "true",
+    HTTP_AGENT_CALLBACK_BASE_URL: callbackBaseUrl,
+    HTTP_AGENT_ALLOW_INSECURE: allowInsecure,
+    LOCAL_EXECUTOR_HOST_URL: localExecutorHostUrl,
+    EXECUTOR_HOST_URL: localExecutorHostUrl,
+    EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS: callbackAllowedOrigins,
   };
 
   const services = DEFAULT_SERVICES.map((service) => {

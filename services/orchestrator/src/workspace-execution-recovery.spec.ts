@@ -644,7 +644,7 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
     expect(dupRes.outcome).toBe("duplicate");
     expect(dupRes.result.state).toBe("REMOVED");
 
-    // 4. Dirty worktree release is refused and preserves uncommitted work
+    // 4. Dirty worktree release is refused and preserves uncommitted work + records durable audit refusal
     const dirtyPath = path.join(executionRoot, "wt-audited-dirty");
     addGitWorktree(repoRoot, dirtyPath, "tenvyr/wt-audited-dirty", headSha);
     fs.writeFileSync(path.join(dirtyPath, "dirty.txt"), "uncommitted dirty content");
@@ -676,5 +676,211 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
     expect(reloadedDirty?.state).toBe("PRESERVED");
     expect(reloadedDirty?.hasUncommittedWork).toBe(true);
     expect(fs.existsSync(dirtyPath)).toBe(true);
+
+    // Verify durable audit evidence recorded refusal
+    const dirtyAction = await dataSource
+      .getRepository(OperatorActionEntity)
+      .findOne({ where: { idempotencyKey: dirtyKey } });
+    expect(dirtyAction).not.toBeNull();
+    expect((dirtyAction?.outcome as any)?.refusal).toBe(true);
+    expect((dirtyAction?.outcome as any)?.failureCode).toBe("WORKTREE_DIRTY");
+
+    // Duplicate call on dirty worktree re-throws from audit evidence without running git again
+    await expect(
+      workbenchService.releaseExecutionWorkspace({
+        idempotencyKey: dirtyKey,
+        workspaceExecutionId: dirtyLease.id,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("CASE 1: operator intent COMMITTED -> crash BEFORE RELEASE_REQUESTED / Git -> retry completes release", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+
+    const wtPath = path.join(executionRoot, "wt-case1");
+    addGitWorktree(repoRoot, wtPath, "tenvyr/wt-case1", headSha);
+
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-case1",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wtPath,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+
+    const idempotencyKey = "cmd-release-case1";
+    // Simulate crash after operator intent commit
+    await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey,
+        actor: "local-operator",
+        targetId: lease.id,
+        payload: { workspaceExecutionId: lease.id, reason: null },
+        outcome: { pending: true, phase: "REQUESTED" },
+      }),
+    );
+
+    // Caller retries: saga picks up pending intent and completes release
+    const res = await workbenchService.releaseExecutionWorkspace({
+      idempotencyKey,
+      workspaceExecutionId: lease.id,
+    });
+    expect(res.result.state).toBe("REMOVED");
+
+    const reloaded = await dataSource
+      .getRepository(WorkspaceExecutionEntity)
+      .findOne({ where: { id: lease.id } });
+    expect(reloaded?.state).toBe("REMOVED");
+    expect(fs.existsSync(wtPath)).toBe(false);
+  });
+
+  it("CASE 2: RELEASE_REQUESTED committed -> Git worktree removed -> crash BEFORE WorkspaceExecution REMOVED -> retry converges", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+
+    const wtPath = path.join(executionRoot, "wt-case2");
+    addGitWorktree(repoRoot, wtPath, "tenvyr/wt-case2", headSha);
+    removeGitWorktree(repoRoot, wtPath); // physical removal happened before crash
+
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-case2",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wtPath,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "RELEASE_REQUESTED", // crashed before REMOVED
+      }),
+    );
+
+    const idempotencyKey = "cmd-release-case2";
+    await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey,
+        actor: "local-operator",
+        targetId: lease.id,
+        payload: { workspaceExecutionId: lease.id, reason: null },
+        outcome: { pending: true, phase: "REQUESTED" },
+      }),
+    );
+
+    const res = await workbenchService.releaseExecutionWorkspace({
+      idempotencyKey,
+      workspaceExecutionId: lease.id,
+    });
+    expect(res.result.state).toBe("REMOVED");
+
+    const reloaded = await dataSource
+      .getRepository(WorkspaceExecutionEntity)
+      .findOne({ where: { id: lease.id } });
+    expect(reloaded?.state).toBe("REMOVED");
+  });
+
+  it("CASE 3: WorkspaceExecution REMOVED -> crash BEFORE final OperatorAction outcome -> retry finalizes audit without running Git again", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-case3",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: path.join(executionRoot, "wt-case3-already-gone"),
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "REMOVED", // workspace execution finalized before crash
+      }),
+    );
+
+    const idempotencyKey = "cmd-release-case3";
+    await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey,
+        actor: "local-operator",
+        targetId: lease.id,
+        payload: { workspaceExecutionId: lease.id, reason: null },
+        outcome: { pending: true, phase: "REQUESTED" }, // operator action unfinalized
+      }),
+    );
+
+    const res = await workbenchService.releaseExecutionWorkspace({
+      idempotencyKey,
+      workspaceExecutionId: lease.id,
+    });
+    expect(res.result.state).toBe("REMOVED");
+
+    const action = await dataSource
+      .getRepository(OperatorActionEntity)
+      .findOne({ where: { idempotencyKey } });
+    expect((action?.outcome as any)?.state).toBe("REMOVED");
+  });
+
+  it("conflicting idempotency payload fails closed", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+
+    const idempotencyKey = "cmd-release-conflict";
+    await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey,
+        actor: "local-operator",
+        targetId: "lease-a",
+        payload: { workspaceExecutionId: "lease-a", reason: "initial reason" },
+        outcome: { workspaceExecutionId: "lease-a", state: "REMOVED" },
+      }),
+    );
+
+    await expect(
+      workbenchService.releaseExecutionWorkspace({
+        idempotencyKey,
+        workspaceExecutionId: "lease-b", // conflicting payload
+      }),
+    ).rejects.toThrow(/different request payload|IDEMPOTENCY_CONFLICT/);
   });
 });

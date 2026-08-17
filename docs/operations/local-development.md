@@ -70,22 +70,30 @@ startup or smoke command.
 ### General development stack
 
 The one-command dev stack starts the infrastructure (Postgres, Redis,
-Zookeeper, Kafka, Kafka UI) plus the operational services — orchestrator,
-gateway, and frontend — in parallel watch mode:
+Zookeeper, Kafka, Kafka UI) plus the operational services — orchestrator (`:3001`),
+gateway (`:3000`), local executor host (`:3002`), and frontend/workbench (`:4000`) — in
+parallel watch mode:
 
 ```bash
 pnpm dev
 ```
+
+`pnpm dev` composes the automatic development Local Runtime Bridge:
+- Ephemeral cryptographically random bearer and callback secrets.
+- Automatic loopback callback URL (`http://127.0.0.1:3001` or derived from `ORCHESTRATOR_PORT`).
+- Automatic loopback host URL (`http://127.0.0.1:3002/v1/runs` or derived from `EXECUTOR_HOST_PORT`).
+- `HTTP_AGENT_ALLOW_INSECURE=true` (only for this local development launcher).
+- No manual `AGENT_TRANSPORT_CONFIG` or `EXECUTOR_HOST_AGENTS` required for normal local development.
 
 Stop everything with `Ctrl-C` — the watch services **and** the Compose
 stack are shut down (named volumes are kept, so dev data survives). Run
 `pnpm dev:infra:down` only after a hard kill (SIGKILL), which bypasses the
 cleanup. If you previously started the full Compose stack
 (`pnpm dev:infra`), stop it first (`pnpm dev:infra:down`) — its app containers
-hold the host ports the watch services need. `pnpm dev` runs the HTTP Worker
-path (orchestrator + gateway + dashboard); the Kafka-path agents
-(`pnpm dev:reviewer`, `pnpm dev:observability`) are not included because a
-host-run Kafka client cannot reach the Compose broker (it advertises its
+hold the host ports the watch services need. `pnpm dev` runs the local coding-agent
+and HTTP Worker path (orchestrator + gateway + local executor host + dashboard);
+the Kafka-path agents (`pnpm dev:reviewer`, `pnpm dev:observability`) are not included
+because a host-run Kafka client cannot reach the Compose broker (it advertises its
 docker-internal hostname). Run those agents inside the full Compose stack
 (`pnpm dev:infra`).
 
@@ -166,9 +174,10 @@ Both examples require callback authentication values. Their checked-in `.env.exa
 | ------------------------------ | ----------------: |
 | Gateway                        |              3000 |
 | Orchestrator                   |              3001 |
-| Code reviewer                  |              3002 |
-| Observability agent            |              3003 |
-| Frontend                       |              4000 |
+| Local Executor Host            |              3002 |
+| Observability agent (Kafka)    |              3003 |
+| Code reviewer (Kafka)          |              3004 |
+| Frontend / Workbench           |              4000 |
 | Java Agent Runner              |              8085 |
 | Worker examples                |              8080 |
 | Postgres / Redis               |       5432 / 6379 |
@@ -202,8 +211,8 @@ Use the same `-f` arguments on `docker compose down` when the stack was started 
   every framework/debug line is emitted for diagnosis.
 
 Service URLs: Gateway `http://localhost:3000`, Orchestrator
-`http://localhost:3001`, Workbench `http://localhost:4000` (ports follow
-`GATEWAY_PORT` / `ORCHESTRATOR_PORT` / the frontend dev port).
+`http://localhost:3001`, Local Executor Host `http://localhost:3002`, Workbench `http://localhost:4000` (ports follow
+`GATEWAY_PORT` / `ORCHESTRATOR_PORT` / `EXECUTOR_HOST_PORT` / the frontend dev port).
 
 READY means the service's own health endpoint answered `UP` — a running
 process is not readiness. A required service that fails to become ready

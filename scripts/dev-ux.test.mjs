@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   bannerText,
+  buildManifest,
   DEV_LINE_PATTERN,
   formatServiceLine,
   isDevLine,
@@ -595,5 +596,87 @@ describe("final closure: env file semantics", () => {
     const env = { A: "1" };
     loadDotEnv(dir, env);
     assert.equal(env.A, "1");
+  });
+});
+
+describe("dev launcher dynamic bridge composition (buildManifest)", () => {
+  test("DEFAULT PORTS: composes loopback bridge environment for orchestrator and host", () => {
+    const manifest = buildManifest({});
+    const orch = manifest.services.find((s) => s.name === "orchestrator");
+    const host = manifest.services.find((s) => s.name === "host");
+    assert.ok(orch);
+    assert.ok(host);
+
+    assert.equal(orch.env.HTTP_AGENT_CALLBACK_BASE_URL, "http://127.0.0.1:3001");
+    assert.equal(orch.env.HTTP_AGENT_ALLOW_INSECURE, "true");
+    assert.equal(orch.env.LOCAL_EXECUTOR_HOST_URL, "http://127.0.0.1:3002/v1/runs");
+    assert.equal(orch.env.EXECUTOR_HOST_URL, "http://127.0.0.1:3002/v1/runs");
+    assert.equal(
+      host.env.EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS,
+      "http://127.0.0.1:3001,http://localhost:3001",
+    );
+  });
+
+  test("CUSTOM PORTS: custom ORCHESTRATOR_PORT and EXECUTOR_HOST_PORT propagate to all URLs", () => {
+    const manifest = buildManifest({
+      ORCHESTRATOR_PORT: "4101",
+      EXECUTOR_HOST_PORT: "4102",
+    });
+    const orch = manifest.services.find((s) => s.name === "orchestrator");
+    const host = manifest.services.find((s) => s.name === "host");
+
+    assert.equal(orch.env.HTTP_AGENT_CALLBACK_BASE_URL, "http://127.0.0.1:4101");
+    assert.equal(orch.env.LOCAL_EXECUTOR_HOST_URL, "http://127.0.0.1:4102/v1/runs");
+    assert.equal(orch.env.EXECUTOR_HOST_URL, "http://127.0.0.1:4102/v1/runs");
+    assert.equal(
+      host.env.EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS,
+      "http://127.0.0.1:4101,http://localhost:4101",
+    );
+  });
+
+  test("EXPLICIT OVERRIDES: preserves operator provided URLs and origins", () => {
+    const manifest = buildManifest({
+      HTTP_AGENT_CALLBACK_BASE_URL: "https://orchestrator.internal:8443",
+      LOCAL_EXECUTOR_HOST_URL: "http://host.internal:9000/v1/runs",
+      EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS: "https://orchestrator.internal:8443",
+      HTTP_AGENT_ALLOW_INSECURE: "false",
+    });
+    const orch = manifest.services.find((s) => s.name === "orchestrator");
+    const host = manifest.services.find((s) => s.name === "host");
+
+    assert.equal(
+      orch.env.HTTP_AGENT_CALLBACK_BASE_URL,
+      "https://orchestrator.internal:8443",
+    );
+    assert.equal(orch.env.HTTP_AGENT_ALLOW_INSECURE, "false");
+    assert.equal(orch.env.LOCAL_EXECUTOR_HOST_URL, "http://host.internal:9000/v1/runs");
+    assert.equal(
+      host.env.EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS,
+      "https://orchestrator.internal:8443",
+    );
+  });
+
+  test("SECRETS: independent runs generate distinct tokens; never appear in normal formatter output", () => {
+    const manifest1 = buildManifest({});
+    const manifest2 = buildManifest({});
+
+    const token1 = manifest1.services[0].env.HTTP_AGENT_BEARER_TOKEN;
+    const token2 = manifest2.services[0].env.HTTP_AGENT_BEARER_TOKEN;
+    const secret1 = manifest1.services[0].env.HTTP_AGENT_CALLBACK_SECRET;
+    const secret2 = manifest2.services[0].env.HTTP_AGENT_CALLBACK_SECRET;
+
+    assert.ok(token1 && token1.length >= 32);
+    assert.ok(secret1 && secret1.length >= 32);
+    assert.notEqual(token1, token2);
+    assert.notEqual(secret1, secret2);
+
+    const formatted = formatServiceLine({
+      service: "dev",
+      level: "INFO",
+      message: "Ready on port 3001",
+      color: false,
+    });
+    assert.ok(!formatted.includes(token1));
+    assert.ok(!formatted.includes(secret1));
   });
 });

@@ -629,31 +629,111 @@ export class WorkbenchCommandService {
     );
   }
 
-  /** PP1: audited safe workspace release command. */
+  /**
+   * PP1 Final Closure: audited safe workspace release command saga.
+   *
+   * 1. Commits operator intent in PostgreSQL first with outcome = { pending: true, phase: "REQUESTED" }.
+   * 2. Reconciles/observes existing execution lease state:
+   *    - If lease is already REMOVED: finalizes audit outcome with state: "REMOVED" (no git execution).
+   *    - If lease is RELEASE_REQUESTED / PRESERVED: executes safe git worktree removal.
+   * 3. On success (clean worktree removal): lease -> REMOVED, audit outcome -> { workspaceExecutionId, state: "REMOVED" }.
+   * 4. On refusal (dirty worktree / removal failed): lease stays PRESERVED with failureCode: "WORKTREE_DIRTY",
+   *    audit outcome -> { workspaceExecutionId, state: "PRESERVED", failureCode: "WORKTREE_DIRTY", error: "...", refusal: true },
+   *    and throws WorkspaceExecutionError("WORKTREE_DIRTY").
+   */
   async releaseExecutionWorkspace(input: {
     idempotencyKey: string;
     workspaceExecutionId: string;
     reason?: string;
   }): Promise<CommandResult> {
-    return this.runCommand(
-      "release-execution-workspace",
-      input.idempotencyKey,
-      input.workspaceExecutionId,
-      {
-        workspaceExecutionId: input.workspaceExecutionId,
-        reason: input.reason ?? null,
-      },
-      async () => {
-        const released =
-          await this.workspaceExecutions.releaseExecutionWorkspace(
-            input.workspaceExecutionId,
-          );
-        return {
-          workspaceExecutionId: released.id,
-          state: released.state,
+    const key = this.boundedKey(input.idempotencyKey);
+    const action = "release-execution-workspace";
+    const targetId = input.workspaceExecutionId;
+    const actor = "local-operator";
+    const payload = {
+      workspaceExecutionId: input.workspaceExecutionId,
+      reason: input.reason ?? null,
+    };
+    const payloadHash = sha256Json(payload);
+
+    // Step 1: Commit operator intent in PostgreSQL BEFORE any external Git removal
+    const auditRow = await this.dataSource.transaction(async (manager) => {
+      const actions = manager.getRepository(OperatorActionEntity);
+      await actions
+        .createQueryBuilder()
+        .insert()
+        .into(OperatorActionEntity)
+        .values({
+          action,
+          idempotencyKey: key,
+          actor,
+          targetId,
+          payload,
+          outcome: { pending: true, phase: "REQUESTED" },
+        })
+        .orIgnore()
+        .execute();
+
+      const existing = await actions.findOne({
+        where: { action, idempotencyKey: key },
+      });
+      if (!existing) throw new Error("Audit row disappeared");
+      assertSameRequestPayload(existing.payload, payloadHash, action, key);
+      return existing;
+    });
+
+    const outcome = auditRow.outcome as Record<string, unknown> | undefined;
+    if (outcome && outcome.pending !== true) {
+      if (outcome.refusal === true || outcome.failureCode === "WORKTREE_DIRTY") {
+        throw new WorkspaceExecutionError(
+          (outcome.failureCode as string) ?? "WORKTREE_DIRTY",
+          (outcome.error as string) ??
+            `Execution workspace "${input.workspaceExecutionId}" contains uncommitted work and release was refused`,
+        );
+      }
+      return {
+        action,
+        idempotencyKey: key,
+        outcome: "duplicate",
+        result: outcome,
+      };
+    }
+
+    // Step 2: Execute safe release saga
+    try {
+      const released =
+        await this.workspaceExecutions.releaseExecutionWorkspace(
+          input.workspaceExecutionId,
+        );
+      const result = {
+        workspaceExecutionId: released.id,
+        state: released.state,
+      };
+      await this.dataSource
+        .getRepository(OperatorActionEntity)
+        .update({ id: auditRow.id }, { outcome: result });
+      return {
+        action,
+        idempotencyKey: key,
+        outcome: "executed",
+        result,
+      };
+    } catch (error) {
+      if (error instanceof WorkspaceExecutionError) {
+        const failureResult = {
+          workspaceExecutionId: input.workspaceExecutionId,
+          state: "PRESERVED",
+          failureCode: error.code,
+          error: error.message,
+          refusal: true,
         };
-      },
-    );
+        await this.dataSource
+          .getRepository(OperatorActionEntity)
+          .update({ id: auditRow.id }, { outcome: failureResult });
+        throw error;
+      }
+      throw error;
+    }
   }
 
   /**
