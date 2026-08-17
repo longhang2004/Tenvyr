@@ -172,9 +172,9 @@ export function deriveAttentionItems(
   }
 
   // 4. WORKSPACE_REQUIRES_ATTENTION — preserved execution workspace with
-  //    uncommitted work (operator should inspect / release it).
+  //    uncommitted work or unknown status (operator should inspect / release it).
   for (const lease of input.workspaceExecutions) {
-    if (lease.state !== "PRESERVED" || lease.hasUncommittedWork !== true) {
+    if (lease.state !== "PRESERVED" || lease.hasUncommittedWork === false) {
       continue;
     }
     const ownerRun = lease.ownerRunId
@@ -186,7 +186,9 @@ export function deriveAttentionItems(
       executionId: ownerRun?.executionId ?? null,
       runId: lease.ownerRunId ?? null,
       reason:
-        "Run finished with uncommitted work in its preserved execution workspace",
+        lease.hasUncommittedWork === null
+          ? "Run finished with unknown status in its preserved execution workspace"
+          : "Run finished with uncommitted work in its preserved execution workspace",
       createdAt: lease.createdAt.toISOString(),
       updatedAt: lease.updatedAt.toISOString(),
       actionRoute: ownerRun

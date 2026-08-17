@@ -4,6 +4,7 @@ import { createTenvyrWorker, defineAgent } from "@tenvyr/worker";
 import {
   parseHostConfig,
   resolveExecutionCwd,
+  executionWorkspaceFromInvocation,
   ExecutionWorkspacePathError,
   type HostAgentConfig,
   type HostConfig,
@@ -12,6 +13,7 @@ export type { HostAgentConfig, HostConfig } from "./config";
 import { superviseProcess, type ProcessOutcome } from "./supervisor";
 import { MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from "./supervisor";
 import { clearRunState, terminateOrphan, writeRunState } from "./state";
+import { adaptNativeRuntimeOutput } from "./adapters/native-output-adapter";
 
 let pool: Pool | null = null;
 function getDbPool(): Pool {
@@ -39,6 +41,22 @@ export async function resolveConnectionRevisionFromDb(
     profile: res.rows[0].profile,
     configHash: res.rows[0].configHash,
   };
+}
+
+export async function resolveAuthorizedWorkspaceFromDb(
+  sourceWorkspaceId: string,
+): Promise<string | null> {
+  try {
+    const p = getDbPool();
+    const res = await p.query(
+      'SELECT "path" FROM "workspaces" WHERE "id" = $1 LIMIT 1',
+      [sourceWorkspaceId],
+    );
+    if (res.rows.length === 0) return null;
+    return res.rows[0].path;
+  } catch {
+    return null;
+  }
 }
 
 export function main(): Promise<void> {
@@ -125,7 +143,10 @@ export async function startHostWorkers(config: HostConfig): Promise<
               agent: invocation.target?.agent || connectionId,
               command: cli.command,
               args: cli.args || [],
-              modelArgvPrefix: cli.modelArgvPrefix,
+              modelArgvPrefix: Array.isArray(cli.modelArgvPrefix)
+                ? cli.modelArgvPrefix
+                : undefined,
+              runtimeKind: rev.profile?.runtimeKind,
               cwd: cli.cwd
                 ? path.resolve(config.allowedRoot, cli.cwd)
                 : config.allowedRoot,
@@ -162,10 +183,19 @@ export async function startHostWorkers(config: HostConfig): Promise<
           }
           let spawnCwd: string;
           try {
+            const member = executionWorkspaceFromInvocation(invocation);
+            let authorizedRoots: string[] = [];
+            if (member?.mode === "shared" && member.sourceWorkspaceId) {
+              const wsPath = await resolveAuthorizedWorkspaceFromDb(
+                member.sourceWorkspaceId,
+              );
+              if (wsPath) authorizedRoots.push(wsPath);
+            }
             spawnCwd = resolveExecutionCwd(
               profile,
               invocation,
               config.allowedRoot,
+              authorizedRoots,
             );
           } catch (error) {
             if (error instanceof ExecutionWorkspacePathError) {
@@ -296,10 +326,19 @@ export async function startHostWorkers(config: HostConfig): Promise<
           // determines the child cwd; validation fails closed BEFORE spawn.
           let spawnCwd: string;
           try {
+            const member = executionWorkspaceFromInvocation(invocation);
+            let authorizedRoots: string[] = [];
+            if (member?.mode === "shared" && member.sourceWorkspaceId) {
+              const wsPath = await resolveAuthorizedWorkspaceFromDb(
+                member.sourceWorkspaceId,
+              );
+              if (wsPath) authorizedRoots.push(wsPath);
+            }
             spawnCwd = resolveExecutionCwd(
               profile,
               invocation,
               config.allowedRoot,
+              authorizedRoots,
             );
           } catch (error) {
             if (error instanceof ExecutionWorkspacePathError) {
@@ -482,65 +521,15 @@ function materializeResult(
   outcome: ProcessOutcome,
   profile: HostAgentConfig,
 ): unknown {
-  switch (outcome.kind) {
-    case "succeeded": {
-      if (profile.structuredResult) {
-        // M8-S6: the child's stdout IS the structured result — one JSON
-        // document. A parse failure is a deterministic failure: garbage
-        // output must never be stored as a successful result.
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(outcome.stdout);
-        } catch (error) {
-          return context.fail({
-            code: "EXECUTOR_HOST_INVALID_STRUCTURED_RESULT",
-            message: `Structured result from "${profile.agent}" is not valid JSON: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            retryable: false,
-          });
-        }
-        return context.success({ output: parsed });
-      }
-      return context.success({
-        output: {
-          exitCode: outcome.exitCode,
-          stdout: outcome.stdout,
-          // stderr is omitted from the success payload; it stays in host
-          // logs only if the operator's command writes there.
-        },
-      });
-    }
-    case "failed":
-      return context.fail({
-        code: "EXECUTOR_HOST_PROCESS_FAILED",
-        message:
-          boundedTail(outcome.stderr, 1024) ||
-          `Process exited with code ${outcome.exitCode}`,
-        retryable: false,
-      });
-    case "spawn_failed":
-      return context.fail({
-        code: "EXECUTOR_HOST_SPAWN_FAILED",
-        message: outcome.message,
-        retryable: false,
-      });
-    case "killed":
-      return context.fail({
-        code:
-          outcome.trigger === "shutdown"
-            ? "EXECUTOR_HOST_SHUTDOWN"
-            : "EXECUTOR_HOST_DEADLINE",
-        message: `Process group ${outcome.finalSignal} after ${outcome.trigger}`,
-        retryable: true,
-      });
-    case "output_limit":
-      return context.fail({
-        code: "EXECUTOR_HOST_OUTPUT_LIMIT",
-        message: `${outcome.stream} exceeded the configured byte bound for agent "${profile.agent}"`,
-        retryable: false,
-      });
+  const adapted = adaptNativeRuntimeOutput(outcome, profile);
+  if (adapted.success === true) {
+    return context.success({ output: adapted.output });
   }
+  return context.fail({
+    code: adapted.code,
+    message: adapted.message,
+    retryable: adapted.retryable,
+  });
 }
 
 function boundedTail(value: string, maxLength: number): string {

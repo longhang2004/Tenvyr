@@ -1066,9 +1066,11 @@
     "services/orchestrator/src/entities/workspace-execution.entity.ts",
     "services/orchestrator/src/database/migrations/1722270021000-WorkspaceExecutionIsolation.ts",
     "services/orchestrator/src/database/migrations/1722270023000-WorkspaceExecutionAllocationKey.ts",
+    "services/orchestrator/src/database/migrations/1722270024000-WorkspaceExecutionUniqueAllocationKey.ts",
     "services/orchestrator/src/services/execution.service.ts",
     "services/orchestrator/src/services/approval.service.ts",
     "services/orchestrator/src/services/workbench-command.service.ts",
+    "services/local-executor-host/src/adapters/native-output-adapter.ts",
     "services/local-executor-host/src/config.ts",
     "services/local-executor-host/src/main.ts",
     "services/local-executor-host/src/supervisor.ts",
@@ -1079,7 +1081,8 @@
     "services/orchestrator/src/services/workspace-execution.service.spec.ts",
     "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
     "services/orchestrator/src/workspace-execution-recovery.spec.ts",
-    "services/local-executor-host/test/config.spec.ts"
+    "services/local-executor-host/test/config.spec.ts",
+    "services/local-executor-host/test/native-output-adapter.spec.ts"
    ],
    "docs": [
     "docs/architecture/workspace-execution.md"

@@ -261,19 +261,65 @@ export class WorkspaceExecutionService {
     const branch = `tenvyr/run-${shortId}`;
 
     // Persist ALLOCATING row with intended executionPath, baseBranch, baseHeadSha BEFORE git add
-    const entity = await this.executions.save(
-      this.executions.create({
-        sourceWorkspaceId: workspace.workspaceId,
-        sourcePath: workspace.path,
-        mode,
-        executionPath,
-        baseBranch: workspace.branch ?? null,
-        baseHeadSha: workspace.headSha,
-        ownerRunId: null,
-        allocationKey: allocationKey ?? null,
-        state: "ALLOCATING",
-      }),
-    );
+    let entity: WorkspaceExecutionEntity;
+    try {
+      entity = await this.executions.save(
+        this.executions.create({
+          sourceWorkspaceId: workspace.workspaceId,
+          sourcePath: workspace.path,
+          mode,
+          executionPath,
+          baseBranch: workspace.branch ?? null,
+          baseHeadSha: workspace.headSha,
+          ownerRunId: null,
+          allocationKey: allocationKey ?? null,
+          state: "ALLOCATING",
+        }),
+      );
+    } catch (err: any) {
+      if (
+        allocationKey &&
+        (err?.code === "23505" ||
+          String(err?.message).toLowerCase().includes("unique") ||
+          String(err?.message).toLowerCase().includes("duplicate key"))
+      ) {
+        const existing = await this.executions.findOne({
+          where: { allocationKey },
+        });
+        if (existing) {
+          if (
+            existing.sourceWorkspaceId !== workspace.workspaceId ||
+            existing.mode !== mode
+          ) {
+            throw new WorkspaceExecutionError(
+              "ALLOCATION_CONFLICT",
+              `Allocation key "${allocationKey}" already used with conflicting parameters`,
+            );
+          }
+          if (existing.state === "READY" || existing.state === "IN_USE") {
+            return existing;
+          }
+          for (let attempt = 0; attempt < 50; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            const reloaded = await this.executions.findOne({
+              where: { id: existing.id },
+            });
+            if (reloaded) {
+              if (reloaded.state === "READY" || reloaded.state === "IN_USE") {
+                return reloaded;
+              }
+              if (reloaded.state === "FAILED") {
+                throw new WorkspaceExecutionError(
+                  reloaded.failureCode ?? "WORKTREE_CREATE_FAILED",
+                  `Concurrent allocation failed with code ${reloaded.failureCode}`,
+                );
+              }
+            }
+          }
+        }
+      }
+      throw err;
+    }
 
     const addedError = addGitWorktree(
       workspace.repoRoot,
@@ -552,10 +598,42 @@ export class WorkspaceExecutionService {
             "status",
             "--porcelain",
           ]);
-          hasUncommittedWork = porcelain.status === 0 && porcelain.stdout.trim().length > 0;
+          hasUncommittedWork =
+            porcelain.status === 0
+              ? porcelain.stdout.trim().length > 0
+              : null;
         }
         await this.transition(row.id, "PRESERVED", { hasUncommittedWork });
         transitions++;
+      }
+    }
+    // RELEASE_REQUESTED rows: crash occurred during release
+    const releasing = await repository
+      .createQueryBuilder("lease")
+      .where("lease.state = 'RELEASE_REQUESTED'")
+      .getMany();
+    for (const row of releasing) {
+      if (!row.executionPath) {
+        await this.transition(row.id, "REMOVED");
+        transitions++;
+        continue;
+      }
+      const isRegistered = worktreeIsRegistered(row.sourcePath, row.executionPath);
+      if (!isRegistered) {
+        await this.transition(row.id, "REMOVED");
+        transitions++;
+      } else {
+        const outcome = removeGitWorktree(row.sourcePath, row.executionPath);
+        if (outcome === "removed" || outcome === "already-removed") {
+          await this.transition(row.id, "REMOVED");
+          transitions++;
+        } else {
+          await this.transition(row.id, "PRESERVED", {
+            failureCode: "WORKTREE_DIRTY",
+            hasUncommittedWork: true,
+          });
+          transitions++;
+        }
       }
     }
     return transitions;
@@ -563,7 +641,7 @@ export class WorkspaceExecutionService {
 
   /**
    * Authoritatively transitions an IN_USE lease to PRESERVED upon run terminal completion.
-   * Measures uncommitted work once for git-worktree mode.
+   * Measures uncommitted work once for git-worktree mode (tri-state: clean/dirty/unknown).
    */
   async preserveExecutionWorkspaceForRun(
     manager: EntityManager,
@@ -581,7 +659,9 @@ export class WorkspaceExecutionService {
         "--porcelain",
       ]);
       hasUncommittedWork =
-        porcelain.status === 0 && porcelain.stdout.trim().length > 0;
+        porcelain.status === 0
+          ? porcelain.stdout.trim().length > 0
+          : null;
     }
     row.state = "PRESERVED";
     row.hasUncommittedWork = hasUncommittedWork;
@@ -609,7 +689,11 @@ export class WorkspaceExecutionService {
       );
     }
     if (row.state === "REMOVED") return row; // idempotent
-    if (row.state !== "PRESERVED" && row.state !== "FAILED") {
+    if (
+      row.state !== "PRESERVED" &&
+      row.state !== "FAILED" &&
+      row.state !== "RELEASE_REQUESTED"
+    ) {
       throw new WorkspaceExecutionError(
         "LEASE_NOT_RELEASABLE",
         `Execution workspace "${workspaceExecutionId}" is ${row.state}; release requires PRESERVED (or FAILED for an interrupted allocation)`,
@@ -627,6 +711,8 @@ export class WorkspaceExecutionService {
         `Execution workspace "${workspaceExecutionId}" has no execution path`,
       );
     }
+    // 1. Mark durable intent RELEASE_REQUESTED before external Git mutation
+    await this.transition(row.id, "RELEASE_REQUESTED", {});
     const sourcePath = row.sourcePath;
     const outcome = removeGitWorktree(sourcePath, row.executionPath);
     if (outcome === "removed" || outcome === "already-removed") {
@@ -636,6 +722,7 @@ export class WorkspaceExecutionService {
     const reason = outcome.refused;
     await this.transition(row.id, "PRESERVED", {
       failureCode: "WORKTREE_DIRTY",
+      hasUncommittedWork: true,
     });
     throw new WorkspaceExecutionError(
       "WORKTREE_DIRTY",

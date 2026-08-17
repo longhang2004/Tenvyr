@@ -25,6 +25,7 @@
  * State model: starting -> ready | failed -> shutting_down -> stopped.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -274,9 +275,32 @@ function startChild(child, io) {
 /** Build the child manifest from repo truth. */
 export function buildManifest(env = process.env) {
   const portOf = (service) => Number(env[service.portEnv] ?? service.defaultPort);
+  const bearerToken =
+    env.HTTP_AGENT_BEARER_TOKEN ??
+    env.EXECUTOR_HOST_BEARER_TOKEN ??
+    randomBytes(32).toString("hex");
+  const callbackSecret =
+    env.HTTP_AGENT_CALLBACK_SECRET ??
+    env.LOOPBACK_CALLBACK_SECRET ??
+    randomBytes(32).toString("hex");
+
+  const sharedDevEnv = {
+    ...env,
+    TENVYR_LOG_LEVEL: env.TENVYR_LOG_LEVEL ?? "normal",
+    HTTP_AGENT_BEARER_TOKEN: bearerToken,
+    EXECUTOR_HOST_BEARER_TOKEN: bearerToken,
+    HTTP_AGENT_CALLBACK_SECRET: callbackSecret,
+    LOOPBACK_CALLBACK_SECRET: callbackSecret,
+    EXECUTOR_HOST_CALLBACK_KEYS:
+      env.EXECUTOR_HOST_CALLBACK_KEYS ??
+      JSON.stringify({
+        "host-callback-v1": callbackSecret,
+        "host-loopback-v1": callbackSecret,
+      }),
+  };
+
   const services = DEFAULT_SERVICES.map((service) => {
     const port = portOf(service);
-    const processEnv = envWith(env, { TENVYR_LOG_LEVEL: env.TENVYR_LOG_LEVEL ?? "normal" });
     return {
       ...service,
       port,
@@ -285,7 +309,7 @@ export function buildManifest(env = process.env) {
       command: "pnpm",
       args: ["run", service.script],
       cwd: join(ROOT, service.dir),
-      env: processEnv,
+      env: sharedDevEnv,
     };
   });
   return { services, infraServices: INFRA_SERVICES, root: ROOT };

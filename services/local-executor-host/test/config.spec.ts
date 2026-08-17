@@ -313,9 +313,35 @@ describe("parseHostConfig", () => {
       ),
     ).toThrow(/structuredResult must be a boolean/);
   });
+  it("dynamic bridge: parses dynamic bridge config when auth tokens are provided", () => {
+    const config = parseHostConfig({
+      EXECUTOR_HOST_ALLOWED_ROOT: configuredRoot,
+      EXECUTOR_HOST_BEARER_TOKEN: "dynamic-token",
+      HTTP_AGENT_CALLBACK_SECRET: "dynamic-callback-secret",
+    });
+    expect(config.dynamicBridge).toBe(true);
+    expect(config.agents).toEqual([]);
+    expect(config.callbackKeys["host-callback-v1"]).toBe("dynamic-callback-secret");
+  });
+
+  it("dynamic bridge: fails closed when bearer token or callback keys are missing", () => {
+    expect(() =>
+      parseHostConfig({
+        EXECUTOR_HOST_ALLOWED_ROOT: configuredRoot,
+        HTTP_AGENT_CALLBACK_SECRET: "dynamic-callback-secret",
+      }),
+    ).toThrow(/Bearer token environment value is missing/);
+
+    expect(() =>
+      parseHostConfig({
+        EXECUTOR_HOST_ALLOWED_ROOT: configuredRoot,
+        EXECUTOR_HOST_BEARER_TOKEN: "dynamic-token",
+      }),
+    ).toThrow(/Callback authentication keys are required/);
+  });
 });
 
-describe("validateInvocationBinding", () => {
+describe("validateInvocationBinding (M8-S6 fail-closed connection binding)", () => {
   const bound: HostConfig["agents"][number] = {
     agent: "bound-agent",
     command: "/bin/true",
@@ -576,6 +602,28 @@ describe("resolveExecutionCwd (PP1 — workspace execution authority)", () => {
       );
     } finally {
       fs.rmSync(link, { force: true });
+    }
+  });
+
+  it("authorizes a shared workspace path outside allowedRoot when explicitly in authorizedRoots", () => {
+    const externalProject = fs.mkdtempSync(
+      path.join(os.tmpdir(), "operator-project-"),
+    );
+    try {
+      const realExternal = fs.realpathSync(externalProject);
+      // Without authorizedRoots -> rejected as outside allowedRoot
+      expect(() =>
+        resolveExecutionCwd(profile, member(externalProject), root),
+      ).toThrow(/outside the allowlisted root/);
+
+      // With authorizedRoots containing the external project -> accepted
+      expect(
+        resolveExecutionCwd(profile, member(externalProject), root, [
+          externalProject,
+        ]),
+      ).toBe(realExternal);
+    } finally {
+      fs.rmSync(externalProject, { recursive: true, force: true });
     }
   });
 });

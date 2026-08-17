@@ -102,6 +102,8 @@ export type CliProfileV1 = {
   command: string;
   /** Fixed run argv; no shell, no interpolation, no evaluation. */
   args: string[];
+  /** Fixed argv prefix inserted before a requested model id (e.g. ["--model"]). */
+  modelArgvPrefix?: string[];
   /** Optional working directory (absolute). */
   cwd?: string;
   /** Probe environment allowlist: child var name -> host env var name. */
@@ -213,7 +215,7 @@ export const CLI_BOUNDS = {
   probeAuthExitCodeMaxCount: 8,
 } as const;
 
-const CLI_KEYS = ["command", "args", "cwd", "envAllowlist", "secrets", "probe", "authProbe"];
+const CLI_KEYS = ["command", "args", "modelArgvPrefix", "cwd", "envAllowlist", "secrets", "probe", "authProbe"];
 const CLI_PROBE_KEYS = [
   "args",
   "wallTimeMs",
@@ -484,6 +486,9 @@ function parseCliProfile(value: unknown, runtimeKind: RuntimeKind): CliProfileV1
     );
   }
   const cli: CliProfileV1 = { command, args, probe: parseCliProbe(snapshot.probe) };
+  if (snapshot.modelArgvPrefix !== undefined) {
+    cli.modelArgvPrefix = parseFixedArgs(snapshot.modelArgvPrefix, "cli modelArgvPrefix");
+  }
   if (snapshot.cwd !== undefined) {
     const cwd = boundedString(snapshot.cwd, "cli cwd", CLI_BOUNDS.commandMaxLength);
     if (!pathIsAbsolute(cwd)) {

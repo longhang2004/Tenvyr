@@ -165,4 +165,50 @@ describe("Workspace Execution Recovery, Idempotency & Handoff Safety Matrix", ()
     expect(hash1).toMatch(/^[a-f0-9]{64}$/);
     expect(bundle.workerOutcomes[0].summary).toBeNull();
   });
+
+  it("derives WORKSPACE_REQUIRES_ATTENTION for dirty and unknown status workspaces, but not clean ones", () => {
+    const items = deriveAttentionItems({
+      runs: [],
+      approvalRequests: [],
+      executions: [],
+      workspaceExecutions: [
+        {
+          id: "lease-clean",
+          ownerRunId: "run-1",
+          state: "PRESERVED",
+          hasUncommittedWork: false,
+          createdAt: new Date("2026-08-17T00:00:00Z"),
+          updatedAt: new Date("2026-08-17T00:00:00Z"),
+        },
+        {
+          id: "lease-dirty",
+          ownerRunId: "run-2",
+          state: "PRESERVED",
+          hasUncommittedWork: true,
+          createdAt: new Date("2026-08-17T00:00:00Z"),
+          updatedAt: new Date("2026-08-17T00:00:00Z"),
+        },
+        {
+          id: "lease-unknown",
+          ownerRunId: "run-3",
+          state: "PRESERVED",
+          hasUncommittedWork: null,
+          createdAt: new Date("2026-08-17T00:00:00Z"),
+          updatedAt: new Date("2026-08-17T00:00:00Z"),
+        },
+      ],
+      runByExecution: new Map(),
+      executionByRun: new Map(),
+    });
+
+    // clean lease is omitted; dirty and unknown leases produce attention items
+    expect(items).toHaveLength(2);
+    const dirtyItem = items.find((i) => i.workspaceExecutionId === "lease-dirty");
+    expect(dirtyItem).toBeDefined();
+    expect(dirtyItem?.reason).toContain("uncommitted work");
+
+    const unknownItem = items.find((i) => i.workspaceExecutionId === "lease-unknown");
+    expect(unknownItem).toBeDefined();
+    expect(unknownItem?.reason).toContain("unknown status");
+  });
 });

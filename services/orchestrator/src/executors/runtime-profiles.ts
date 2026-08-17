@@ -194,6 +194,7 @@ export function buildRuntimeConnectionProfile(input: {
   const cli: CliProfileV1 = {
     command: input.executable,
     args: template.runArgs,
+    modelArgvPrefix: template.modelArgvPrefix,
     probe: template.probe,
   };
   if (template.authProbe) cli.authProbe = template.authProbe;

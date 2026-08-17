@@ -57,6 +57,7 @@ export type HostAgentConfig = {
    */
   connectionId?: string;
   configHash?: string;
+  runtimeKind?: string;
   /**
    * M8-S6: when true and the child exits 0, stdout is parsed as one JSON
    * document and becomes the structured result output. A parse failure is a
@@ -124,26 +125,40 @@ export function parseHostConfig(
     "http://127.0.0.1:3001,http://localhost:3001,http://127.0.0.1:3000,http://localhost:3000";
   const callbackKeys = environment.EXECUTOR_HOST_CALLBACK_KEYS
     ? parseCallbackKeys(environment.EXECUTOR_HOST_CALLBACK_KEYS)
-    : {
-        "host-callback-v1":
-          environment.HTTP_AGENT_CALLBACK_SECRET ||
-          "tenvyr-dev-callback-secret",
-        "host-loopback-v1":
-          environment.LOOPBACK_CALLBACK_SECRET || "loopback-callback-secret",
-      };
+    : environment.HTTP_AGENT_CALLBACK_SECRET || environment.LOOPBACK_CALLBACK_SECRET
+      ? {
+          "host-callback-v1":
+            environment.HTTP_AGENT_CALLBACK_SECRET ??
+            environment.LOOPBACK_CALLBACK_SECRET ??
+            "",
+          "host-loopback-v1":
+            environment.LOOPBACK_CALLBACK_SECRET ??
+            environment.HTTP_AGENT_CALLBACK_SECRET ??
+            "",
+        }
+      : {};
   const callbackAllowInsecure =
     environment.EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE !== "false";
 
   const port = Number(environment.EXECUTOR_HOST_PORT || 3002);
   const bearerTokenEnv =
     environment.EXECUTOR_HOST_BEARER_TOKEN_ENV || "EXECUTOR_HOST_BEARER_TOKEN";
-  if (!environment[bearerTokenEnv]) {
-    environment[bearerTokenEnv] =
-      environment.HTTP_AGENT_BEARER_TOKEN || "tenvyr-dev-host-token";
+  if (!environment[bearerTokenEnv] && environment.HTTP_AGENT_BEARER_TOKEN) {
+    environment[bearerTokenEnv] = environment.HTTP_AGENT_BEARER_TOKEN;
   }
 
   const raw = environment.EXECUTOR_HOST_AGENTS;
   if (!raw || !raw.trim()) {
+    if (!environment[bearerTokenEnv]) {
+      throw configurationError(
+        `Bearer token environment value is missing (${bearerTokenEnv} or HTTP_AGENT_BEARER_TOKEN)`,
+      );
+    }
+    if (Object.keys(callbackKeys).length === 0) {
+      throw configurationError(
+        "Callback authentication keys are required (EXECUTOR_HOST_CALLBACK_KEYS or HTTP_AGENT_CALLBACK_SECRET)",
+      );
+    }
     return {
       agents: [],
       allowedRoot,
@@ -531,6 +546,7 @@ export function resolveExecutionCwd(
   profile: HostAgentConfig,
   invocation: { metadata?: unknown; invocationId?: unknown },
   allowedRoot: string,
+  authorizedRoots: string[] = [],
 ): string {
   const member = executionWorkspaceFromInvocation(invocation);
   const label = `Invocation ${String(invocation.invocationId ?? "<unknown>")}`;
@@ -556,9 +572,15 @@ export function resolveExecutionCwd(
   }
   // parseHostConfig already realpaths the allowed root, but canonicalize it
   // here too so containment can never be fooled by a symlinked root.
-  const canonicalRoot = realDirectoryOrNull(allowedRoot) ?? allowedRoot;
-  const root = `${canonicalRoot}${path.sep}`;
-  if (real !== canonicalRoot && !real.startsWith(root)) {
+  const rootsToCheck = [allowedRoot, ...authorizedRoots];
+  const isAuthorized = rootsToCheck.some((candidateRoot) => {
+    const canonical = realDirectoryOrNull(candidateRoot) ?? candidateRoot;
+    const root = `${canonical}${path.sep}`;
+    return real === canonical || real.startsWith(root);
+  });
+
+  if (!isAuthorized) {
+    const canonicalRoot = realDirectoryOrNull(allowedRoot) ?? allowedRoot;
     throw new ExecutionWorkspacePathError(
       `${label} execution workspace path "${real}" resolves outside the allowlisted root "${canonicalRoot}" — refusing to run (fail closed)`,
     );
