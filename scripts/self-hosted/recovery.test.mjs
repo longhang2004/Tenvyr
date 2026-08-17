@@ -86,8 +86,13 @@ const run = (cmd, args, opts = {}) =>
 const runOk = (cmd, args, opts = {}) => {
   const result = run(cmd, args, opts);
   if (result.status !== 0) {
+    let extraLogs = "";
+    if (args.includes("compose") || args.includes("up")) {
+      const logs = run("docker", [...COMPOSE.slice(1), "logs", "--no-color", "--tail", "100"], { timeout: 30_000 });
+      extraLogs = `\n--- COMPOSE LOGS ---\n${logs.stdout || ""}\n${logs.stderr || ""}`;
+    }
     throw new Error(
-      `${cmd} ${args.join(" ")} exited ${result.status}: ${(result.stderr ?? result.stdout ?? "").slice(0, 2000)}`,
+      `${cmd} ${args.join(" ")} exited ${result.status}: ${(result.stderr ?? result.stdout ?? "").slice(0, 2000)}${extraLogs}`,
     );
   }
   return result;

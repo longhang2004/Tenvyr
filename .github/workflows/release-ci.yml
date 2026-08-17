@@ -281,6 +281,17 @@ jobs:
       - name: Disposable self-hosted recovery E2E (required)
         run: pnpm self-hosted:recovery-test
 
+      - name: Show leftover containers and logs on failure
+        if: failure()
+        run: |
+          docker ps -a
+          for dir in backups/recovery-e2e-*; do
+            if [ -d "$dir" ] && [ -f "$dir/project-name" ] && [ -f "$dir/deploy.env" ]; then
+              project="$(cat "$dir/project-name")"
+              docker compose -p "$project" -f docker-compose.self-hosted.yml --env-file "$dir/deploy.env" logs --tail 200 || true
+            fi
+          done
+
       - name: Tear down disposable recovery-E2E stacks (always)
         # ONLY the E2E-owned directories (backups/recovery-e2e-*/) and
         # their per-run projects are ever targeted — never the production
@@ -301,10 +312,6 @@ jobs:
               rm -rf "$dir"
             fi
           done
-
-      - name: Show leftover containers on failure
-        if: failure()
-        run: docker ps -a
 
   docker-showcase:
     runs-on: ubuntu-latest

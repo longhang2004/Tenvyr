@@ -1,5 +1,6 @@
 # Base node image
 FROM node:22-alpine AS base
+RUN apk add --no-cache git
 RUN npm install -g pnpm@9.0.0
 WORKDIR /usr/src/app
 
@@ -28,6 +29,7 @@ RUN pnpm --filter orchestrator run build
 
 # Production stage
 FROM node:22-alpine AS production
+RUN apk add --no-cache git
 ENV NODE_ENV=production
 # M11 closure: immutable source provenance baked at build time. The
 # self-hosted upgrade passes the PROVEN release commit SHA as a build arg

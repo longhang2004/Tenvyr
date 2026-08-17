@@ -15523,7 +15523,7 @@ describeWithPostgres("PostgreSQL M9-S5 authority integration", () => {
     verifier: { kind: "agent", name: "verifier" },
     allowedWorkers: [
       { kind: "agent", name: "implementation" },
-      { kind: "connection", name: "conn:worker" },
+      { kind: "connection", name: "conn:worker", agent: "worker" },
     ],
     maxIterations: 3,
     maxWorkersPerIteration: 4,
