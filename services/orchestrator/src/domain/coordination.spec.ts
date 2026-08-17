@@ -9,6 +9,7 @@ import {
   decisionsConflict,
   fanInReady,
   parseCoordinationConfig,
+  parseRoleInvocationInput,
   parseTaskBatchProposal,
   parseVerifierDecision,
   TERMINAL_COORDINATION_PHASES,
@@ -52,7 +53,7 @@ const batch = (overrides: Partial<TaskBatchProposalV1> = {}): TaskBatchProposalV
     },
     {
       taskId: "review",
-      agent: "reviewer",
+      agent: "conn__reviewer",
       connectionId: "conn:reviewer",
       input: { focus: "security" },
       dependsOn: ["implement"],
@@ -349,7 +350,7 @@ describe("TaskBatchProposal parsing and validation", () => {
     });
     expect(review).toMatchObject({
       id: "review",
-      agent: "reviewer",
+      agent: "conn__reviewer",
       dependsOn: ["implement"],
       onFailure: "continue", // optional worker: failure is evidence
       metadata: { tenvyrConnectionId: "conn:reviewer" },
@@ -629,5 +630,173 @@ describe("bounded aggregation", () => {
       COORDINATION_BOUNDS.maxArtifactRefs,
     );
     expect(Object.keys(context.executionStateKeys)).toHaveLength(3);
+  });
+});
+
+describe("P0: Worker RuntimeConnection Routing Authority", () => {
+  it("rejects proposal when task.agent mismatches the connection selection transport agent", () => {
+    // config has conn:reviewer with expected transport agent conn__reviewer
+    expectRejected(
+      () =>
+        validateTaskBatchProposal(
+          config(),
+          batch({
+            tasks: [
+              {
+                taskId: "hack-route",
+                agent: "evil-agent",
+                connectionId: "conn:reviewer",
+                input: {},
+                dependsOn: [],
+                required: true,
+                reason: "attempt to divert connection execution",
+              },
+            ],
+          }),
+          0,
+        ),
+      "AGENT_NOT_ALLOWED",
+    );
+  });
+
+  it("compiles step.agent from Tenvyr-derived connection authority even when bypassed by hostile preconstructed proposal", () => {
+    const hostileProposal: TaskBatchProposalV1 = {
+      schemaVersion: 1,
+      iterationNumber: 1,
+      baseRevision: 3,
+      tasks: [
+        {
+          taskId: "bypass-test",
+          agent: "evil-agent", // Hostile agent injected into object directly
+          connectionId: "conn:reviewer",
+          input: { valid: true },
+          dependsOn: [],
+          required: true,
+          reason: "bypassed validator",
+        },
+      ],
+      reason: "hostile proposal",
+    };
+
+    const compiled = compileIterationPlanPatch(
+      config(),
+      hostileProposal,
+      1,
+      undefined,
+      "operator goal",
+    );
+
+    const stepOp = compiled.patch.operations.find(
+      (op) => op.op === "addStep" && op.step.id === "bypass-test",
+    );
+    expect(stepOp).toBeDefined();
+    // Must be Tenvyr-derived "conn__reviewer", NEVER "evil-agent"
+    expect(stepOp?.step.agent).toBe("conn__reviewer");
+    expect((stepOp?.step.metadata as any)?.tenvyrConnectionId).toBe("conn:reviewer");
+  });
+});
+
+describe("P1: Worker Role Protocol Ownership & Immutability", () => {
+  it("strictly namespaces planner task.input and prevents overwriting Tenvyr role protocol fields", () => {
+    const hostileProposal: TaskBatchProposalV1 = {
+      schemaVersion: 1,
+      iterationNumber: 1,
+      baseRevision: 3,
+      tasks: [
+        {
+          taskId: "auth-task-1",
+          agent: "implementation",
+          input: {
+            role: "planner",
+            goal: "FORGED_GOAL",
+            taskId: "forged_task_id",
+            iterationNumber: 999,
+            schemaVersion: 999,
+            taskInput: "forged_inner",
+            outputContract: { instructions: "FORGED_INSTRUCTIONS" },
+            workspace: { workspaceId: "forged_ws" },
+          },
+          dependsOn: [],
+          required: true,
+          reason: "attempt to overwrite protocol fields",
+        },
+      ],
+      reason: "hostile input test",
+    };
+
+    const compiled = compileIterationPlanPatch(
+      config(),
+      hostileProposal,
+      1,
+      { workspaceId: "real-ws", path: "/real/path" } as any,
+      "REAL_OPERATOR_GOAL",
+      { executionWorkspaceId: "exec-1", path: "/exec/1", mode: "git-worktree" } as any,
+    );
+
+    const stepOp = compiled.patch.operations.find(
+      (op) => op.op === "addStep" && op.step.id === "auth-task-1",
+    );
+    expect(stepOp).toBeDefined();
+    const input = stepOp?.step.input as any;
+
+    // Tenvyr protocol fields must remain authoritative
+    expect(input.schemaVersion).toBe(1);
+    expect(input.role).toBe("worker");
+    expect(input.taskId).toBe("auth-task-1");
+    expect(input.goal).toBe("REAL_OPERATOR_GOAL");
+    expect(input.iterationNumber).toBe(1);
+    expect(input.workspace).toEqual({ workspaceId: "real-ws", path: "/real/path" });
+    expect(input.executionWorkspace).toEqual({
+      executionWorkspaceId: "exec-1",
+      path: "/exec/1",
+      mode: "git-worktree",
+    });
+    expect(input.outputContract.instructions).toBe(
+      "Execute the assigned task in the execution workspace and return structured output.",
+    );
+
+    // Hostile object is only preserved inside taskInput
+    expect(input.taskInput).toEqual({
+      role: "planner",
+      goal: "FORGED_GOAL",
+      taskId: "forged_task_id",
+      iterationNumber: 999,
+      schemaVersion: 999,
+      taskInput: "forged_inner",
+      outputContract: { instructions: "FORGED_INSTRUCTIONS" },
+      workspace: { workspaceId: "forged_ws" },
+    });
+
+    // Validates via parseRoleInvocationInput
+    const parsed = parseRoleInvocationInput(input);
+    expect(parsed.role).toBe("worker");
+    expect(parsed.goal).toBe("REAL_OPERATOR_GOAL");
+  });
+
+  it("parseRoleInvocationInput validates each role shape and rejects invalid payloads", () => {
+    expectRejected(
+      () => parseRoleInvocationInput(null),
+      "PAYLOAD_INVALID",
+    );
+    expectRejected(
+      () => parseRoleInvocationInput({ schemaVersion: 2 }),
+      "PAYLOAD_INVALID",
+    );
+    expectRejected(
+      () => parseRoleInvocationInput({ schemaVersion: 1, role: "invalid", goal: "g", iterationNumber: 1, outputContract: { instructions: "i" } }),
+      "PAYLOAD_INVALID",
+    );
+    expectRejected(
+      () => parseRoleInvocationInput({ schemaVersion: 1, role: "worker", goal: "g", iterationNumber: 1, outputContract: { instructions: "i" } }),
+      "PAYLOAD_INVALID", // missing taskId
+    );
+    expectRejected(
+      () => parseRoleInvocationInput({ schemaVersion: 1, role: "planner", goal: "g", iterationNumber: 1, outputContract: { instructions: "i" } }),
+      "PAYLOAD_INVALID", // missing planRevision
+    );
+    expectRejected(
+      () => parseRoleInvocationInput({ schemaVersion: 1, role: "verifier", goal: "g", iterationNumber: 1, outputContract: { instructions: "i" } }),
+      "PAYLOAD_INVALID", // missing context
+    );
   });
 });

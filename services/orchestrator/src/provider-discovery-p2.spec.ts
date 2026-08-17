@@ -635,12 +635,17 @@ describe("P2 final closure: OpenCode auth flow — one live session, method inde
       const pid = Number(readFileSync(pidPath, "utf8"));
       // NO further auth calls — wait beyond the TTL and prove the timer
       // alone closed the management session.
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       let alive = true;
-      try {
-        process.kill(pid, 0);
-      } catch {
-        alive = false;
+      for (let i = 0; i < 20; i++) {
+        try {
+          process.kill(pid, 0);
+          alive = true;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        } catch {
+          alive = false;
+          break;
+        }
       }
       expect(alive).toBe(false);
       await expect(svc.completeAuthFlow(begun.authFlowId)).rejects.toMatchObject({

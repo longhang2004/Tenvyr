@@ -7,6 +7,7 @@ import { StepAttemptEntity } from "../entities/step-attempt.entity";
 import type { StepAttemptStatus } from "../entities/step-attempt.entity";
 import { ExecutionPlanRevisionEntity } from "../entities/execution-plan-revision.entity";
 import { ExecutionEntity } from "../entities/execution.entity";
+import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { PlanProposalService } from "./plan-proposal.service";
 import { PipelineValidationService } from "./pipeline-validation.service";
 import { ConditionEvaluatorService } from "./condition-evaluator.service";
@@ -29,11 +30,14 @@ import {
   validateTaskBatchProposal,
   type CoordinationConfigV1,
   type CoordinationPhase,
+  type PlannerInvocationInputV1,
   type TaskBatchProposalV1,
   type VerifierContextV1,
   type VerifierDecisionV1,
   type WorkerOutcomeSummaryV1,
 } from "../domain/coordination";
+import { parseHandoffBundle } from "../domain/handoff";
+import { executionWorkspaceIdentityFromRow } from "../domain/workspace-execution";
 import type { WorkerManifestEntryV1 } from "../entities/coordination-iteration.entity";
 import type {
   AcceptanceEvidenceV1,
@@ -501,18 +505,48 @@ export class RuntimeCoordinationService {
           )?.revisionNumber ?? 1)
         : 1;
       const plannerFrozenRevision = activeRevisionNumber + 1;
+      const executionInput = (executionRow?.input ?? {}) as Record<
+        string,
+        unknown
+      >;
       const plannerAgent =
         run.config.planner.kind === "connection"
-          ? toTransportAgent(
-              run.config.planner.agent ?? run.config.planner.name,
-            )
-          : (run.config.planner.agent ?? run.config.planner.name);
+          ? (run.config.planner.agent || run.config.planner.name)
+          : run.config.planner.name;
+      const goal =
+        typeof executionInput.goal === "string" ? executionInput.goal : "";
+      const handoff = executionInput.handoff
+        ? parseHandoffBundle(executionInput.handoff)
+        : null;
+      const workspaceExecution = await manager
+        .getRepository(WorkspaceExecutionEntity)
+        .findOne({ where: { ownerRunId: run.id } });
+      const executionWorkspace = workspaceExecution
+        ? executionWorkspaceIdentityFromRow(workspaceExecution)
+        : null;
+
+      const plannerInput: PlannerInvocationInputV1 = {
+        schemaVersion: 1,
+        role: "planner",
+        goal,
+        iterationNumber,
+        planRevision: plannerFrozenRevision,
+        ...(run.workspace ? { workspace: run.workspace } : {}),
+        ...(executionWorkspace ? { executionWorkspace } : {}),
+        ...(handoff ? { handoff } : {}),
+        outputContract: {
+          schema: "TaskBatchProposalV1",
+          instructions:
+            "Propose a TaskBatchProposalV1 JSON object with schemaVersion: 1, iterationNumber, baseRevision matching planRevision, tasks array, and reason. Do not modify authority fields.",
+        },
+      };
+
       const step: Record<string, unknown> = {
         id: plannerStepId,
         // M8-S6: connection-kind Planner routes through its declared
         // routing agent (the executor host's transport key).
         agent: plannerAgent,
-        input: { iterationNumber, planRevision: plannerFrozenRevision },
+        input: plannerInput,
         onFailure: "stop",
       };
       if (run.config.planner.kind === "connection") {
@@ -724,11 +758,27 @@ export class RuntimeCoordinationService {
         });
       }
 
+      const workspaceExecution = await manager
+        .getRepository(WorkspaceExecutionEntity)
+        .findOne({ where: { ownerRunId: run.id } });
+      const executionWorkspace = workspaceExecution
+        ? executionWorkspaceIdentityFromRow(workspaceExecution)
+        : null;
+
+      const executionInput = (executionRow?.input ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const goal =
+        typeof executionInput.goal === "string" ? executionInput.goal : "";
+
       const { patch, verifierStepId } = compileIterationPlanPatch(
         run.config,
         parsed,
         input.iterationNumber,
         run.workspace ?? undefined,
+        goal,
+        executionWorkspace,
       );
       // M9-S7: EXACT pending proposal identity. When a previous activation
       // was intercepted (policy REQUIRE_APPROVAL), its durable proposal id

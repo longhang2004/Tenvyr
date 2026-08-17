@@ -297,6 +297,7 @@ export function buildManifest(env = process.env) {
         "host-callback-v1": callbackSecret,
         "host-loopback-v1": callbackSecret,
       }),
+    EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE: "true",
   };
 
   const services = DEFAULT_SERVICES.map((service) => {

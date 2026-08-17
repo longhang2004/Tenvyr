@@ -88,6 +88,26 @@ export function worktreeIsRegistered(
   });
 }
 
+export function assertAllocationCompatible(
+  existing: WorkspaceExecutionEntity,
+  workspace: WorkspaceSnapshotV1,
+  mode: WorkspaceExecutionModeV1,
+): void {
+  if (
+    existing.sourceWorkspaceId !== workspace.workspaceId ||
+    existing.mode !== mode ||
+    (existing.baseHeadSha &&
+      workspace.headSha &&
+      existing.baseHeadSha !== workspace.headSha) ||
+    (mode === "shared" && existing.sourcePath !== workspace.path)
+  ) {
+    throw new WorkspaceExecutionError(
+      "ALLOCATION_CONFLICT",
+      `Allocation key "${existing.allocationKey}" already used with conflicting parameters`,
+    );
+  }
+}
+
 /** Create one isolated git worktree (no network, no clone, no shell).
  *  Returns null on success; a bounded error message when creation failed
  *  and the path is not already registered (retry idempotency). */
@@ -185,18 +205,7 @@ export class WorkspaceExecutionService {
         where: { allocationKey },
       });
       if (existing) {
-        if (
-          existing.sourceWorkspaceId !== workspace.workspaceId ||
-          existing.mode !== mode ||
-          (existing.baseHeadSha &&
-            workspace.headSha &&
-            existing.baseHeadSha !== workspace.headSha)
-        ) {
-          throw new WorkspaceExecutionError(
-            "ALLOCATION_CONFLICT",
-            `Allocation key "${allocationKey}" already used with conflicting parameters`,
-          );
-        }
+        assertAllocationCompatible(existing, workspace, mode);
         if (existing.state === "READY" || existing.state === "IN_USE") {
           return existing;
         }
@@ -221,20 +230,38 @@ export class WorkspaceExecutionService {
     }
 
     if (mode === "shared") {
-      const entity = await this.executions.save(
-        this.executions.create({
-          sourceWorkspaceId: workspace.workspaceId,
-          sourcePath: workspace.path,
-          mode,
-          executionPath: workspace.path,
-          baseBranch: workspace.branch ?? null,
-          baseHeadSha: workspace.headSha ?? null,
-          ownerRunId: null,
-          allocationKey: allocationKey ?? null,
-          state: "READY",
-        }),
-      );
-      return entity;
+      try {
+        const entity = await this.executions.save(
+          this.executions.create({
+            sourceWorkspaceId: workspace.workspaceId,
+            sourcePath: workspace.path,
+            mode,
+            executionPath: workspace.path,
+            baseBranch: workspace.branch ?? null,
+            baseHeadSha: workspace.headSha ?? null,
+            ownerRunId: null,
+            allocationKey: allocationKey ?? null,
+            state: "READY",
+          }),
+        );
+        return entity;
+      } catch (err: any) {
+        if (
+          allocationKey &&
+          (err?.code === "23505" ||
+            String(err?.message).toLowerCase().includes("unique") ||
+            String(err?.message).toLowerCase().includes("duplicate key"))
+        ) {
+          const existing = await this.executions.findOne({
+            where: { allocationKey },
+          });
+          if (existing) {
+            assertAllocationCompatible(existing, workspace, mode);
+            return existing;
+          }
+        }
+        throw err;
+      }
     }
 
     // git-worktree mode: the source must be a detectable git repository
@@ -287,15 +314,7 @@ export class WorkspaceExecutionService {
           where: { allocationKey },
         });
         if (existing) {
-          if (
-            existing.sourceWorkspaceId !== workspace.workspaceId ||
-            existing.mode !== mode
-          ) {
-            throw new WorkspaceExecutionError(
-              "ALLOCATION_CONFLICT",
-              `Allocation key "${allocationKey}" already used with conflicting parameters`,
-            );
-          }
+          assertAllocationCompatible(existing, workspace, mode);
           if (existing.state === "READY" || existing.state === "IN_USE") {
             return existing;
           }
@@ -546,7 +565,10 @@ export class WorkspaceExecutionService {
           }
         }
       }
-      if (row.createdAt < interruptedBoundary) {
+      if (
+        now.getTime() - new Date(row.createdAt).getTime() >
+        WORKSPACE_EXECUTION_BOUNDS.allocationInterruptMs
+      ) {
         await this.transition(row.id, "FAILED", {
           failureCode: "ALLOCATION_INTERRUPTED",
         });
@@ -555,17 +577,21 @@ export class WorkspaceExecutionService {
     }
     // READY rows never bound to a run (crash between allocation and the
     // authority transaction).
-    const unbound = await repository
+    const unboundCandidates = await repository
       .createQueryBuilder("lease")
       .where("lease.state = 'READY'")
       .andWhere("lease.ownerRunId IS NULL")
-      .andWhere("lease.createdAt < :boundary", { boundary: interruptedBoundary })
       .getMany();
-    for (const row of unbound) {
-      await this.transition(row.id, "FAILED", {
-        failureCode: "RUN_NOT_BOUND",
-      });
-      transitions++;
+    for (const row of unboundCandidates) {
+      if (
+        now.getTime() - new Date(row.createdAt).getTime() >
+        WORKSPACE_EXECUTION_BOUNDS.allocationInterruptMs
+      ) {
+        await this.transition(row.id, "FAILED", {
+          failureCode: "RUN_NOT_BOUND",
+        });
+        transitions++;
+      }
     }
     // IN_USE leases whose owner run reached a terminal phase → PRESERVED.
     const inUse = await repository

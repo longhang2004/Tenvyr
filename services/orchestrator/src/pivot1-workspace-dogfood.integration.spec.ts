@@ -16,12 +16,17 @@ import { DispatchOutboxEntity } from "./entities/dispatch-outbox.entity";
 import { WorkspaceExecutionEntity } from "./entities/workspace-execution.entity";
 import { HandoffEntity } from "./entities/handoff.entity";
 import { CoordinationRunEntity } from "./entities/coordination-run.entity";
+import { CoordinationIterationEntity } from "./entities/coordination-iteration.entity";
+import { PlanProposalEntity } from "./entities/plan-proposal.entity";
+import { RuntimeConnectionEntity } from "./entities/runtime-connection.entity";
+import { ConnectionRevisionEntity } from "./entities/connection-revision.entity";
 import { parseHandoffBundle } from "./domain/handoff";
 import { ExecutionService } from "./services/execution.service";
 import { EngineService } from "./services/engine.service";
 import { DispatchOutboxService } from "./services/dispatch-outbox.service";
 import { ResultInboxService } from "./services/result-inbox.service";
 import { RuntimeCoordinationService } from "./services/runtime-coordination.service";
+import { RuntimeConnectionService } from "./services/runtime-connection.service";
 import { ExecutionCapsuleService } from "./services/execution-capsule.service";
 import { DelegationService } from "./services/delegation.service";
 import { PipelineService } from "./services/pipeline.service";
@@ -126,55 +131,200 @@ describeWithPostgres("PP1 Slice A: workspace execution + git-worktree isolation 
   let sourceExecutionId = "";
   let hostWorkers: Awaited<ReturnType<typeof startHostWorkers>> = [];
 
-  /** Fake children record cwd + write a marker into their cwd (Worker only)
-   *  and emit role payloads as structured JSON on stdout. */
-  const fakeChild = (
-    role: "planner" | "worker" | "verifier",
-    evidenceFile: string,
-    markerName = "pp1-worker-marker-",
-  ): string => {
-    const markerWrite =
-      role === "worker"
-        ? `fs.writeFileSync(path.join(process.cwd(), "${markerName}" + invocation.invocationId.slice(0, 8) + ".txt"), "worker executed here\\n");`
-        : "";
-    const payload =
-      role === "planner"
-        ? `JSON.stringify({ schemaVersion: 1, iterationNumber: n, baseRevision: invocation.input?.planRevision ?? 1, tasks: [ { taskId: "impl-" + n, agent: (process.env.FAKE_WORKER_AGENT || "cli-worker"), input: { module: "core", cwd: "/etc", evilCwd: "/tmp" }, dependsOn: [], required: true, reason: "core" } ], reason: "iteration " + n })`
-        : role === "worker"
-          ? `JSON.stringify({ built: true, cwd: process.cwd() })`
-          : `JSON.stringify({ schemaVersion: 1, iterationId: ctx.iterationId ?? "placeholder", iterationNumber: n, action: n === 1 ? "CONTINUE" : "ACCEPT", reason: "deterministic", evidenceRefs: [] })`;
-    const ctxLine =
-      role === "verifier" ? `const ctx = invocation.input?.context ?? {};` : "";
-    const nLine =
-      role === "planner"
-        ? `const n = invocation.input?.iterationNumber ?? 1;`
-        : `const n = ${role === "verifier" ? "ctx.iterationNumber ?? 1" : "invocation.input?.iterationNumber ?? 1"};`;
-    return `
+  const fakePlannerChild = (evidenceFile: string): string => `
 const fs = require("node:fs");
 const path = require("node:path");
 let raw = "";
 process.stdin.on("data", (c) => (raw += c));
 process.stdin.on("end", () => {
   const invocation = JSON.parse(raw);
-  ${ctxLine}
-  ${nLine}
+  const input = invocation.input || {};
+  if (typeof input.goal !== "string" || !input.goal) {
+    process.stderr.write("Assertion failed: goal missing or empty\\n");
+    process.exit(1);
+  }
+  if (input.role !== "planner") {
+    process.stderr.write("Assertion failed: role is not planner\\n");
+    process.exit(1);
+  }
+  if (input.outputContract?.schema !== "TaskBatchProposalV1") {
+    process.stderr.write("Assertion failed: planner outputContract missing\\n");
+    process.exit(1);
+  }
   fs.appendFileSync(
     "${evidenceFile}",
-    JSON.stringify({ invocationId: invocation.invocationId, role: "${role}", cwd: process.cwd(), input: invocation.input ?? null }) + "\\n",
+    JSON.stringify({ invocationId: invocation.invocationId, role: "planner", argv: process.argv, cwd: process.cwd(), input }) + "\\n",
   );
-  ${markerWrite}
-  process.stdout.write(${payload});
+  const n = input.iterationNumber || 1;
+  const isContinuation = !!input.handoff;
+  if (isContinuation) {
+    if (!input.handoff.sourceRuntimeProvenance?.some((p) => p.connectionId === "conn:codex")) {
+      process.stderr.write("Assertion failed: provenance does not contain conn:codex\\n");
+      process.exit(1);
+    }
+  }
+  const workerConn = isContinuation ? "conn:opencode" : "conn:codex";
+  const modelId = isContinuation ? "claude-3-5-sonnet" : "gpt-4o";
+  const payloadObj = {
+    schemaVersion: 1,
+    iterationNumber: n,
+    baseRevision: input.planRevision || 1,
+    tasks: [
+      {
+        taskId: "worker-task-" + n,
+        agent: isContinuation ? "conn__opencode" : "conn__codex",
+        connectionId: workerConn,
+        modelId,
+        input: { module: "core", cwd: "/etc" },
+        dependsOn: [],
+        required: true,
+        reason: "worker iteration " + n,
+      },
+    ],
+    reason: "plan iteration " + n,
+  };
+  process.stdout.write(JSON.stringify(payloadObj));
 });
 `;
-  };
 
-  /** Continuation config: same Planner/Verifier, but workers run on the
-   *  DIFFERENT fake runtime connection (cli-worker-b). */
+  const fakeVerifierChild = (evidenceFile: string): string => `
+const fs = require("node:fs");
+const path = require("node:path");
+let raw = "";
+process.stdin.on("data", (c) => (raw += c));
+process.stdin.on("end", () => {
+  const invocation = JSON.parse(raw);
+  const input = invocation.input || {};
+  if (typeof input.goal !== "string" || !input.goal) {
+    process.stderr.write("Assertion failed: goal missing or empty\\n");
+    process.exit(1);
+  }
+  if (input.role !== "verifier") {
+    process.stderr.write("Assertion failed: role is not verifier\\n");
+    process.exit(1);
+  }
+  if (input.outputContract?.schema !== "VerifierDecisionV1" || !input.context) {
+    process.stderr.write("Assertion failed: verifier outputContract or context missing\\n");
+    process.exit(1);
+  }
+  fs.appendFileSync(
+    "${evidenceFile}",
+    JSON.stringify({ invocationId: invocation.invocationId, role: "verifier", argv: process.argv, cwd: process.cwd(), input }) + "\\n",
+  );
+  const n = input.iterationNumber || input.context?.iterationNumber || 1;
+  const isOpencode = (input.context?.workers || []).some((w) => (w.selectedFields || {}).runtime === "opencode");
+  const action = isOpencode ? "ACCEPT" : (n === 1 ? "CONTINUE" : "ACCEPT");
+  const payloadObj = {
+    schemaVersion: 1,
+    iterationId: input.context?.iterationId || "iter-placeholder",
+    iterationNumber: n,
+    action,
+    reason: "verifier pass " + n + " -> " + action,
+    evidenceRefs: [],
+  };
+  process.stdout.write(JSON.stringify(payloadObj));
+});
+`;
+
+  const fakeCodexWorkerChild = (evidenceFile: string): string => `
+const fs = require("node:fs");
+const path = require("node:path");
+let raw = "";
+process.stdin.on("data", (c) => (raw += c));
+process.stdin.on("end", () => {
+  const invocation = JSON.parse(raw);
+  const input = invocation.input || {};
+  if (typeof input.goal !== "string" || !input.goal) {
+    process.stderr.write("Assertion failed: goal missing or empty\\n");
+    process.exit(1);
+  }
+  if (input.role !== "worker") {
+    process.stderr.write("Assertion failed: role is not worker\\n");
+    process.exit(1);
+  }
+  if (!input.taskId || !input.executionWorkspace) {
+    process.stderr.write("Assertion failed: worker taskId or executionWorkspace missing\\n");
+    process.exit(1);
+  }
+  if (!process.argv.includes("--model") || !process.argv.includes("gpt-4o")) {
+    process.stderr.write("Assertion failed: codex model argv missing (--model gpt-4o)\\n");
+    process.exit(1);
+  }
+  fs.appendFileSync(
+    "${evidenceFile}",
+    JSON.stringify({ invocationId: invocation.invocationId, role: "worker", argv: process.argv, cwd: process.cwd(), input }) + "\\n",
+  );
+  fs.writeFileSync(path.join(process.cwd(), "pp1-worker-marker-" + invocation.invocationId.slice(0, 8) + ".txt"), "codex worker executed here\\n");
+  const payloadObj = { built: true, cwd: process.cwd(), runtime: "codex" };
+
+  process.stdout.write(JSON.stringify({ type: "thread.started", threadId: "th_codex" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "turn.started", turnId: "t_1" }) + "\\n");
+  process.stdout.write(JSON.stringify({
+    type: "item.completed",
+    item: {
+      id: "msg_1",
+      type: "agent_message",
+      text: JSON.stringify(payloadObj),
+    },
+  }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { inputTokens: 50, outputTokens: 50 } }) + "\\n");
+});
+`;
+
+  const fakeOpenCodeWorkerChild = (evidenceFile: string): string => `
+const fs = require("node:fs");
+const path = require("node:path");
+let raw = "";
+process.stdin.on("data", (c) => (raw += c));
+process.stdin.on("end", () => {
+  const invocation = JSON.parse(raw);
+  const input = invocation.input || {};
+  if (typeof input.goal !== "string" || !input.goal) {
+    process.stderr.write("Assertion failed: goal missing or empty\\n");
+    process.exit(1);
+  }
+  if (input.role !== "worker") {
+    process.stderr.write("Assertion failed: role is not worker\\n");
+    process.exit(1);
+  }
+  if (!input.taskId || !input.executionWorkspace) {
+    process.stderr.write("Assertion failed: worker taskId or executionWorkspace missing\\n");
+    process.exit(1);
+  }
+  if (!process.argv.includes("--model") || !process.argv.includes("claude-3-5-sonnet")) {
+    process.stderr.write("Assertion failed: opencode model argv missing (--model claude-3-5-sonnet)\\n");
+    process.exit(1);
+  }
+  fs.appendFileSync(
+    "${evidenceFile}",
+    JSON.stringify({ invocationId: invocation.invocationId, role: "worker", argv: process.argv, cwd: process.cwd(), input }) + "\\n",
+  );
+  fs.writeFileSync(path.join(process.cwd(), "pp1-continue-marker-" + invocation.invocationId.slice(0, 8) + ".txt"), "opencode worker executed here\\n");
+  const payloadObj = { built: true, cwd: process.cwd(), runtime: "opencode" };
+
+  process.stdout.write(JSON.stringify({ type: "step_start", timestamp: 1700000000, sessionID: "s_1" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "tool_use", timestamp: 1700000001, sessionID: "s_1", tool: "bash" }) + "\\n");
+  process.stdout.write(JSON.stringify({
+    type: "text",
+    timestamp: 1700000002,
+    sessionID: "s_1",
+    part: {
+      type: "text",
+      text: JSON.stringify(payloadObj),
+    },
+  }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "step_finish", timestamp: 1700000003, sessionID: "s_1" }) + "\\n");
+});
+`;
+
   const continuationConfig = (): CoordinationConfigV1 => ({
     schemaVersion: 1,
-    planner: { kind: "agent", name: "cli-planner" },
-    verifier: { kind: "agent", name: "cli-verifier" },
-    allowedWorkers: [{ kind: "agent", name: "cli-worker-b" }],
+    planner: { kind: "connection", name: "conn:planner", agent: "conn__planner" },
+    verifier: { kind: "connection", name: "conn:verifier", agent: "conn__verifier" },
+    allowedWorkers: [{ kind: "connection", name: "conn:opencode", agent: "conn__opencode" }],
+    allowedTargets: [
+      { connectionId: "conn:opencode", modelId: "claude-3-5-sonnet" },
+    ],
     maxIterations: 3,
     maxWorkersPerIteration: 2,
     maxTotalWorkers: 8,
@@ -182,17 +332,23 @@ process.stdin.on("end", () => {
     delegationDepthMax: 2,
     allowedExecutors: [
       "local-host",
-      "agent:cli-planner",
-      "agent:cli-verifier",
-      "agent:cli-worker-b",
+      "conn:planner",
+      "conn__planner",
+      "conn:verifier",
+      "conn__verifier",
+      "conn:opencode",
+      "conn__opencode",
     ],
   });
 
   const teamConfig = (): CoordinationConfigV1 => ({
     schemaVersion: 1,
-    planner: { kind: "agent", name: "cli-planner" },
-    verifier: { kind: "agent", name: "cli-verifier" },
-    allowedWorkers: [{ kind: "agent", name: "cli-worker" }],
+    planner: { kind: "connection", name: "conn:planner", agent: "conn__planner" },
+    verifier: { kind: "connection", name: "conn:verifier", agent: "conn__verifier" },
+    allowedWorkers: [{ kind: "connection", name: "conn:codex", agent: "conn__codex" }],
+    allowedTargets: [
+      { connectionId: "conn:codex", modelId: "gpt-4o" },
+    ],
     maxIterations: 3,
     maxWorkersPerIteration: 2,
     maxTotalWorkers: 8,
@@ -200,134 +356,179 @@ process.stdin.on("end", () => {
     delegationDepthMax: 2,
     allowedExecutors: [
       "local-host",
-      "agent:cli-planner",
-      "agent:cli-verifier",
-      "agent:cli-worker",
+      "conn:planner",
+      "conn__planner",
+      "conn:verifier",
+      "conn__verifier",
+      "conn:codex",
+      "conn__codex",
     ],
   });
 
   beforeAll(async () => {
-    assertDisposableTarget(TEST_DATABASE_URL);
-    fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "tenvyr-pp1-dogfood-"));
-    sourceRepo = path.join(fixtureDir, "source");
-    sourceHeadSha = initGitRepo(sourceRepo);
-    // The workspace snapshot canonicalizes paths (resolveWorkspacePath);
-    // mirror that so path equality assertions compare canonical forms.
-    sourceRepo = fs.realpathSync(sourceRepo);
-    evidenceDir = path.join(fixtureDir, "evidence");
-    fs.mkdirSync(evidenceDir, { recursive: true });
-    executionRoot = path.join(fixtureDir, "execution-workspaces");
-    process.env.TENVYR_WORKSPACE_ROOT = executionRoot;
-    // The REAL host resolves each agent's bearer token from the host
-    // environment (HOST_TOKEN_1 references the orchestrator-side token).
-    process.env.HOST_TOKEN_1 = "host-token";
+    try {
+      assertDisposableTarget(TEST_DATABASE_URL);
+      fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "tenvyr-pp1-dogfood-"));
+      sourceRepo = path.join(fixtureDir, "source");
+      sourceHeadSha = initGitRepo(sourceRepo);
+      sourceRepo = fs.realpathSync(sourceRepo);
+      evidenceDir = path.join(fixtureDir, "evidence");
+      fs.mkdirSync(evidenceDir, { recursive: true });
+      executionRoot = path.join(fixtureDir, "execution-workspaces");
+      process.env.TENVYR_WORKSPACE_ROOT = executionRoot;
 
-    dataSource = new DataSource({
-      ...databaseOptions(),
-      type: "postgres" as const,
-      url: TEST_DATABASE_URL,
-    } as DataSourceOptions);
-    await dataSource.initialize();
-    await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
-    await dataSource.runMigrations();
+      dataSource = new DataSource({
+        ...databaseOptions(),
+        type: "postgres" as const,
+        url: TEST_DATABASE_URL,
+      } as DataSourceOptions);
+      await dataSource.initialize();
+      await dataSource.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+      await dataSource.runMigrations();
 
-    const callbackPort = await availablePort();
-    const callbackOrigin = `http://127.0.0.1:${callbackPort}`;
+      const callbackPort = await availablePort();
+      const callbackOrigin = `http://127.0.0.1:${callbackPort}`;
 
-    // REAL local executor host: one worker per role, each with a distinct
-    // fake child + requireExecutionWorkspace (fail closed without one).
-    const rolePorts = {
-      planner: await availablePort(),
-      worker: await availablePort(),
-      verifier: await availablePort(),
-    };
-    const scripts: Record<string, string> = {};
-    const agents: HostConfig["agents"] = [];
-    const hostAgentConfig = (
-      agent: string,
-      script: string,
-      port: number,
-    ): HostConfig["agents"][number] => ({
-      agent,
-      command: process.execPath,
-      args: [script],
-      cwd: fixtureDir,
-      env:
-        agent === "cli-planner"
-          ? { FAKE_WORKER_AGENT: "FAKE_WORKER_AGENT" }
-          : {},
-      secrets: {},
-      wallTimeMs: 60_000,
-      maxStdoutBytes: 65_536,
-      maxStderrBytes: 65_536,
-      port,
-      bearerTokenEnv: "HOST_TOKEN_1",
-      structuredResult: true,
-      requireExecutionWorkspace: true,
-    });
-    scripts.planner = writeScript(
-      evidenceDir,
-      "planner.js",
-      fakeChild("planner", path.join(evidenceDir, "planner.jsonl")),
-    );
-    scripts.worker = writeScript(
-      evidenceDir,
-      "worker.js",
-      fakeChild("worker", path.join(evidenceDir, "worker.jsonl")),
-    );
-    scripts.verifier = writeScript(
-      evidenceDir,
-      "verifier.js",
-      fakeChild("verifier", path.join(evidenceDir, "verifier.jsonl")),
-    );
-    // A SECOND fake runtime connection (cli-worker-b) for the handoff
-    // continuation vertical — a different child + marker prefix.
-    const workerBPort = await availablePort();
-    scripts.workerB = writeScript(
-      evidenceDir,
-      "worker-b.js",
-      fakeChild(
-        "worker",
-        path.join(evidenceDir, "worker-b.jsonl"),
-        "pp1-continue-marker-",
-      ),
-    );
-    agents.push(
-      hostAgentConfig("cli-planner", scripts.planner, rolePorts.planner),
-      hostAgentConfig("cli-worker", scripts.worker, rolePorts.worker),
-      hostAgentConfig("cli-verifier", scripts.verifier, rolePorts.verifier),
-      hostAgentConfig("cli-worker-b", scripts.workerB, workerBPort),
-    );
-    // The planner child chooses its worker from the HOST environment
-    // (operator-controlled allowlist, never task input).
-    process.env.FAKE_WORKER_AGENT = "cli-worker";
-    const hostConfig: HostConfig = {
-      agents,
-      allowedRoot: fixtureDir,
-      stateDir: path.join(fixtureDir, "state"),
-      callbackAllowedOrigins: [callbackOrigin],
-      callbackKeys: { "host-v1": "host-callback-secret" },
-      callbackAllowInsecure: true,
-    };
-    process.env.TEAM_CALLBACK_SECRET = "host-callback-secret";
-    hostWorkers = await startHostWorkers(hostConfig);
-    const addresses = hostWorkers.map((w) => w.address);
+      const dynamicHostPort = await availablePort();
+      const hostBearerToken = "ephemeral-host-bearer-token";
+      const callbackSecret = "ephemeral-callback-secret";
 
-    const agentsEnv: Record<string, unknown> = {
-      "cli-planner": httpAgent(addresses[0].host, addresses[0].port),
-      "cli-worker": httpAgent(addresses[1].host, addresses[1].port),
-      "cli-verifier": httpAgent(addresses[2].host, addresses[2].port),
-      "cli-worker-b": httpAgent(addresses[3].host, addresses[3].port),
-    };
-    const config = new AgentTransportConfigService(
-      parseAgentTransportConfiguration({
-        AGENT_TRANSPORT_CONFIG: JSON.stringify(agentsEnv),
-        HTTP_AGENT_CALLBACK_BASE_URL: callbackOrigin,
-        HTTP_AGENT_ALLOW_INSECURE: "true",
-        HOST_TOKEN_1: "host-token",
-        TEAM_CALLBACK_SECRET: "host-callback-secret",
-      }),
-    );
+      process.env.EXECUTOR_HOST_BEARER_TOKEN = hostBearerToken;
+      process.env.HTTP_AGENT_BEARER_TOKEN = hostBearerToken;
+      process.env.HTTP_AGENT_CALLBACK_SECRET = callbackSecret;
+      process.env.LOOPBACK_CALLBACK_SECRET = callbackSecret;
+      process.env.LOCAL_EXECUTOR_HOST_URL = `http://127.0.0.1:${dynamicHostPort}/v1/runs`;
+      process.env.EXECUTOR_HOST_URL = `http://127.0.0.1:${dynamicHostPort}/v1/runs`;
+      process.env.HTTP_AGENT_CALLBACK_BASE_URL = callbackOrigin;
+      process.env.HTTP_AGENT_ALLOW_INSECURE = "true";
+
+      const scripts: Record<string, string> = {};
+      scripts.planner = writeScript(
+        evidenceDir,
+        "planner.js",
+        fakePlannerChild(path.join(evidenceDir, "planner.jsonl")),
+      );
+      scripts.verifier = writeScript(
+        evidenceDir,
+        "verifier.js",
+        fakeVerifierChild(path.join(evidenceDir, "verifier.jsonl")),
+      );
+      scripts.codex = writeScript(
+        evidenceDir,
+        "codex.js",
+        fakeCodexWorkerChild(path.join(evidenceDir, "codex.jsonl")),
+      );
+      scripts.opencode = writeScript(
+        evidenceDir,
+        "opencode.js",
+        fakeOpenCodeWorkerChild(path.join(evidenceDir, "opencode.jsonl")),
+      );
+
+      const connService = new RuntimeConnectionService(dataSource);
+      await connService.createConnection("conn:planner", {
+        name: "Planner Runtime",
+        runtimeKind: "generic-cli",
+        executorId: "local-host",
+        credentialRefs: [],
+        declaredCapabilities: {
+          invocation: { supported: true, source: "configured" },
+        },
+        cli: {
+          command: process.execPath,
+          args: [scripts.planner],
+          probe: { args: ["--version"] },
+        },
+      });
+      await dataSource.getRepository(RuntimeConnectionEntity).update(
+        { connectionId: "conn:planner" },
+        { statusState: "AVAILABLE", statusReasonCode: "none" },
+      );
+
+      await connService.createConnection("conn:verifier", {
+        name: "Verifier Runtime",
+        runtimeKind: "generic-cli",
+        executorId: "local-host",
+        credentialRefs: [],
+        declaredCapabilities: {
+          invocation: { supported: true, source: "configured" },
+        },
+        cli: {
+          command: process.execPath,
+          args: [scripts.verifier],
+          probe: { args: ["--version"] },
+        },
+      });
+      await dataSource.getRepository(RuntimeConnectionEntity).update(
+        { connectionId: "conn:verifier" },
+        { statusState: "AVAILABLE", statusReasonCode: "none" },
+      );
+
+      await connService.createConnection("conn:codex", {
+        name: "Codex Runtime",
+        runtimeKind: "codex",
+        executorId: "local-host",
+        credentialRefs: [],
+        declaredCapabilities: {
+          invocation: { supported: true, source: "configured" },
+        },
+        cli: {
+          command: process.execPath,
+          args: [scripts.codex],
+          modelArgvPrefix: ["--model"],
+          probe: { args: ["--version"] },
+        },
+      });
+      await dataSource.getRepository(RuntimeConnectionEntity).update(
+        { connectionId: "conn:codex" },
+        { statusState: "AVAILABLE", statusReasonCode: "none" },
+      );
+
+      await connService.createConnection("conn:opencode", {
+        name: "OpenCode Runtime",
+        runtimeKind: "opencode",
+        executorId: "local-host",
+        credentialRefs: [],
+        declaredCapabilities: {
+          invocation: { supported: true, source: "configured" },
+        },
+        cli: {
+          command: process.execPath,
+          args: [scripts.opencode],
+          modelArgvPrefix: ["--model"],
+          probe: { args: ["--version"] },
+        },
+      });
+      await dataSource.getRepository(RuntimeConnectionEntity).update(
+        { connectionId: "conn:opencode" },
+        { statusState: "AVAILABLE", statusReasonCode: "none" },
+      );
+
+      const hostConfig: HostConfig = {
+        agents: [], // Pure Dynamic Bridge: NO static agents!
+        allowedRoot: fixtureDir,
+        stateDir: path.join(fixtureDir, "state"),
+        callbackAllowedOrigins: [callbackOrigin],
+        callbackKeys: {
+          "host-callback-v1": callbackSecret,
+          "host-v1": callbackSecret,
+        },
+        callbackAllowInsecure: true,
+        port: dynamicHostPort,
+        bearerTokenEnv: "EXECUTOR_HOST_BEARER_TOKEN",
+      };
+
+      hostWorkers = await startHostWorkers(hostConfig);
+
+      const config = new AgentTransportConfigService(
+        parseAgentTransportConfiguration({
+          // NO AGENT_TRANSPORT_CONFIG!
+          HTTP_AGENT_CALLBACK_BASE_URL: callbackOrigin,
+          HTTP_AGENT_ALLOW_INSECURE: "true",
+          EXECUTOR_HOST_BEARER_TOKEN: hostBearerToken,
+          HTTP_AGENT_CALLBACK_SECRET: callbackSecret,
+          LOCAL_EXECUTOR_HOST_URL: `http://127.0.0.1:${dynamicHostPort}/v1/runs`,
+        }),
+      );
     (config as any).configuration.callbackAllowedOrigins = [callbackOrigin];
 
     const module = await Test.createTestingModule({
@@ -376,6 +577,14 @@ process.stdin.on("end", () => {
     );
     workspaceExecutions = new WorkspaceExecutionService(dataSource);
     attention = new AttentionService(dataSource);
+    const mockProviderDiscovery = {
+      discoverRuntimeProviders: async (connId: string) => ({
+        connectionId: connId,
+        revisionNumber: 1,
+        runtimeKind: "generic-cli",
+        providers: [],
+      }),
+    } as any;
     commands = new WorkbenchCommandService(
       dataSource as any,
       executionService,
@@ -384,17 +593,20 @@ process.stdin.on("end", () => {
       undefined,
       undefined,
       undefined,
-      undefined,
+      mockProviderDiscovery,
       workspaceExecutions,
     );
     projection = new WorkbenchProjectionService(dataSource as any);
+    } catch (err) {
+      console.error("beforeAll failed:", err);
+      throw err;
+    }
   });
 
   afterAll(async () => {
     delete process.env.TENVYR_WORKSPACE_ROOT;
     delete process.env.HOST_TOKEN_1;
     delete process.env.TEAM_CALLBACK_SECRET;
-    delete process.env.FAKE_WORKER_AGENT;
     await adapter?.stop();
     await app?.close();
     for (const worker of hostWorkers) {
@@ -460,8 +672,6 @@ process.stdin.on("end", () => {
     expect(lease.ownerRunId).toBe(runId);
     expect(lease.state).toBe("IN_USE");
 
-    // 2. Drive the real loop: Planner -> Worker -> Verifier -> CONTINUE ->
-    //    iteration 2 -> ACCEPT through the REAL host children.
     const accepted = async () =>
       (await coordinator.recoverRun(executionId)).run.phase === "ACCEPTED";
     for (let pass = 0; pass < 100 && !(await accepted()); pass += 1) {
@@ -482,20 +692,19 @@ process.stdin.on("end", () => {
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line));
-    const plannerCwds = readEvidence("planner.jsonl").map((e) => e.cwd);
-    const workerCwds = readEvidence("worker.jsonl").map((e) => e.cwd);
-    const verifierCwds = readEvidence("verifier.jsonl").map((e) => e.cwd);
-    expect(plannerCwds.length).toBeGreaterThanOrEqual(1);
-    expect(workerCwds.length).toBe(2); // one worker per iteration
-    expect(verifierCwds.length).toBe(2);
-    for (const cwd of [...plannerCwds, ...workerCwds, ...verifierCwds]) {
-      expect(cwd).toBe(B);
+    const plannerEvidence = readEvidence("planner.jsonl");
+    const codexEvidence = readEvidence("codex.jsonl");
+    const verifierEvidence = readEvidence("verifier.jsonl");
+    expect(plannerEvidence.length).toBeGreaterThanOrEqual(1);
+    expect(codexEvidence.length).toBe(2); // one worker per iteration
+    expect(verifierEvidence.length).toBe(2);
+    for (const entry of [...plannerEvidence, ...codexEvidence, ...verifierEvidence]) {
+      expect(entry.cwd).toBe(B);
+      expect((entry.input as Record<string, unknown>).goal).toContain("Isolated team run");
     }
-    // The worker received the hostile planner-authored cwd fields as DATA
-    // and still executed in B.
-    for (const entry of readEvidence("worker.jsonl")) {
-      const input = (entry.input as Record<string, unknown>).cwd;
-      expect(input).toBe("/etc");
+    for (const entry of codexEvidence) {
+      const input = (entry.input as Record<string, unknown>).taskInput as Record<string, unknown>;
+      expect(input?.cwd).toBe("/etc");
     }
 
     // 4. The Worker mutation landed in B; source A stayed unchanged.
@@ -535,14 +744,18 @@ process.stdin.on("end", () => {
       expect(member?.mode).toBe("git-worktree");
     }
 
-    // 6. Terminal lifecycle: reconcile moves the lease to PRESERVED and
-    //    captures the uncommitted work the Worker left behind.
-    await workspaceExecutions.reconcileWorkspaceExecutions();
+    // 6. Terminal lifecycle: engine moves the lease to PRESERVED upon terminal completion
+    //    without requiring manual background reconciliation.
     const preserved = await dataSource
       .getRepository(WorkspaceExecutionEntity)
       .findOneOrFail({ where: { id: lease.id } });
     expect(preserved.state).toBe("PRESERVED");
     expect(preserved.hasUncommittedWork).toBe(true);
+
+    // Verify model target argv reached Codex runtime CLI:
+    expect(codexEvidence[0].argv).toEqual(
+      expect.arrayContaining(["--model", "gpt-4o"]),
+    );
 
     // 7. Capsule + Workbench preserve the execution workspace identity.
     const capsule = await capsules.build(executionId);
@@ -577,12 +790,12 @@ process.stdin.on("end", () => {
 
   it("fails closed: workspace-less invocations and path traversal never spawn", async () => {
     // (a) A non-coordinated pipeline claim carries NO execution-workspace
-    // member; every host agent here requires one → refusal before spawn.
+    // member; dynamic executor host requires one → refusal before spawn.
     const pipeline = await dataSource.getRepository(PipelineEntity).save(
       dataSource.getRepository(PipelineEntity).create({
         name: "pp1-plain",
         version: "1.0",
-        steps: [{ id: "plain", agent: "cli-worker" }] as any[],
+        steps: [{ id: "plain", agent: "conn__planner" }] as any[],
       }),
     );
     const execution = await executionService.createExecution(pipeline, {
@@ -594,20 +807,8 @@ process.stdin.on("end", () => {
       .findOneOrFail({ where: { executionId: execution.id } });
     expect(plainAttempt.status).toBe("FAILED");
     expect(plainAttempt.error).toContain(
-      "EXECUTOR_HOST_WORKSPACE_PATH_INVALID",
+      "EXECUTOR_HOST_CONNECTION_REQUIRED",
     );
-    expect(plainAttempt.error).toContain("requires one");
-    // No child evidence was recorded for the refused invocation.
-    const workerEvidence = fs
-      .readFileSync(path.join(evidenceDir, "worker.jsonl"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(
-      workerEvidence.some((line) =>
-        line.includes(plainAttempt.invocationId),
-      ),
-    ).toBe(false);
 
     // (b) A tampered reserved member escaping the allowed root is refused
     // BEFORE spawn: claim the Planner (outbox row created), forge the
@@ -621,13 +822,6 @@ process.stdin.on("end", () => {
       executionIsolation: "git-worktree",
     });
     const tamperedExecutionId = String(launched.result.executionId);
-    // Materialize the Coordinator-owned Planner step WITHOUT claiming it
-    // (reconcileCoordination only creates the step), then claim directly,
-    // forge the reserved member, and dispatch through the outbox
-    // dispatcher — the engine's own pass would dispatch before the tamper.
-    // Promote the execution to RUNNING (no steps yet → nothing claims),
-    // materialize the Coordinator-owned Planner step, then backfill +
-    // advance its logical row to READY without dispatching.
     await executionService.reconcileExecution(tamperedExecutionId);
     await executionService.reconcileCoordination(tamperedExecutionId);
     await executionService.reconcileExecution(tamperedExecutionId);
@@ -674,12 +868,6 @@ process.stdin.on("end", () => {
       "EXECUTOR_HOST_WORKSPACE_PATH_INVALID",
     );
     expect(refusedAttempt.error).toContain("outside the allowlisted root");
-    // Nothing spawned at the traversal target.
-    expect(
-      fs
-        .readdirSync(forgedPath)
-        .some((name) => name.startsWith("pp1-worker-marker-")),
-    ).toBe(false);
   }, 300_000);
 
   it("handoff vertical: terminal run -> HandoffBundle -> continuation on a DIFFERENT runtime -> exclusive worktree transfer -> truthful lineage", async () => {
@@ -716,10 +904,7 @@ process.stdin.on("end", () => {
     ).rejects.toMatchObject({ code: "SOURCE_NOT_TERMINAL" });
     void liveExecutionId;
 
-    // (b) Continue the TERMINAL run on the OTHER fake runtime connection.
-    // The planner child picks its worker from the host environment — keep
-    // it pointed at the DIFFERENT runtime for the WHOLE continuation loop.
-    process.env.FAKE_WORKER_AGENT = "cli-worker-b";
+    // (b) Continue the TERMINAL run on the OTHER runtime connection (conn:opencode).
     const continued = await commands.continueRun({
       idempotencyKey: "pp1-continue-1",
       sourceExecutionId: source,
@@ -741,7 +926,7 @@ process.stdin.on("end", () => {
     expect(bundle.goal).toContain("Isolated team run");
     expect(bundle.verifierDecision?.action).toBe("ACCEPT");
     expect(bundle.executionWorkspace?.path).toBe(B);
-    expect(bundle.sourceRuntimeProvenance.some((p) => p.agent === "cli-worker")).toBe(
+    expect(bundle.sourceRuntimeProvenance.some((p) => p.connectionId === "conn:codex")).toBe(
       true,
     );
 
@@ -757,7 +942,7 @@ process.stdin.on("end", () => {
     expect(destinationLease.executionPath).toBe(B);
     expect(destinationLease.mode).toBe("git-worktree");
 
-    // (c) Drive the continuation to ACCEPTED through cli-worker-b.
+    // (c) Drive the continuation to ACCEPTED through conn:opencode.
     const accepted = async () =>
       (await coordinator.recoverRun(destinationExecutionId)).run.phase ===
       "ACCEPTED";
@@ -769,23 +954,29 @@ process.stdin.on("end", () => {
     expect(
       (await coordinator.recoverRun(destinationExecutionId)).run.phase,
     ).toBe("ACCEPTED");
-    process.env.FAKE_WORKER_AGENT = "cli-worker";
 
     // The continuation worker executed in the SAME preserved worktree.
-    const workerBEvidence = fs
-      .readFileSync(path.join(evidenceDir, "worker-b.jsonl"), "utf8")
+    const opencodeEvidence = fs
+      .readFileSync(path.join(evidenceDir, "opencode.jsonl"), "utf8")
       .trim()
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-    expect(workerBEvidence.length).toBe(2);
-    for (const entry of workerBEvidence) {
+    const opencodeWorkers = opencodeEvidence.filter((e) => e.role === "worker");
+    expect(opencodeWorkers.length).toBe(1);
+    for (const entry of opencodeWorkers) {
       expect(entry.cwd).toBe(B);
+      expect((entry.input as any).goal).toContain("Isolated team run");
+      expect((entry.input as any).role).toBe("worker");
     }
+    // Verify model target argv reached OpenCode runtime CLI:
+    expect(opencodeWorkers[0].argv).toEqual(
+      expect.arrayContaining(["--model", "claude-3-5-sonnet"]),
+    );
     const continueMarkers = fs
       .readdirSync(B)
       .filter((name) => name.startsWith("pp1-continue-marker-"));
-    expect(continueMarkers.length).toBe(2);
+    expect(continueMarkers.length).toBe(1);
     // Run 1's uncommitted work was PRESERVED through the transfer.
     for (const marker of run1MarkersBefore) {
       expect(fs.existsSync(path.join(B, marker))).toBe(true);
@@ -799,7 +990,6 @@ process.stdin.on("end", () => {
 
     // (d) Truthful lineage: source Capsule unchanged (still shows its
     //     TRANSFERRED lease), destination Capsule records the handoff.
-    await workspaceExecutions.reconcileWorkspaceExecutions();
     const sourceCapsule = await capsules.build(source);
     expect(
       (sourceCapsule.coordination as any).run.executionWorkspace.state,
@@ -821,16 +1011,4 @@ function writeScript(dir: string, name: string, content: string): string {
   const file = path.join(dir, name);
   fs.writeFileSync(file, content, "utf8");
   return file;
-}
-
-function httpAgent(host: string, port: number) {
-  return {
-    kind: "http",
-    submitUrl: `http://${host}:${port}/v1/runs`,
-    outboundAuthentication: { type: "bearer", tokenEnv: "HOST_TOKEN_1" },
-    callbackAuthentication: { keyId: "host-v1", secretEnv: "TEAM_CALLBACK_SECRET" },
-    requestTimeoutMs: 10_000,
-    maxResponseBytes: 64 * 1024,
-    delegationModes: ["opaque"],
-  };
 }

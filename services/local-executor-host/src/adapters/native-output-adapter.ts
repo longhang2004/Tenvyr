@@ -103,7 +103,12 @@ export function adaptNativeRuntimeOutput(
 
 /**
  * Codex `codex exec --json` emits a JSON Lines stream.
- * Identifies the final assistant event and extracts its text/payload.
+ * Official contract:
+ * - `thread.started`, `turn.started`
+ * - `item.completed` with `item.type === "agent_message"` and `item.text: string` -> candidate assistant output
+ * - `item.completed` with `item.type === "command_execution"` -> tool execution (ignored)
+ * - `turn.completed` with `usage` -> turn metadata (ignored)
+ * - fail closed on malformed JSONL or missing agent_message.
  */
 function adaptCodexOutput(stdout: string, agent: string): NativeOutputResult {
   const lines = stdout
@@ -111,8 +116,8 @@ function adaptCodexOutput(stdout: string, agent: string): NativeOutputResult {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  let lastAssistantText: string | null = null;
-  let lastAssistantJson: unknown = null;
+  let lastAgentMessageText: string | null = null;
+  let singleDirectJson: unknown = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -128,56 +133,45 @@ function adaptCodexOutput(stdout: string, agent: string): NativeOutputResult {
       };
     }
 
-    // Inspect known Codex event patterns:
-    // 1. { type: "item.completed", item: { role: "assistant", content: [{ text: "..." }] } }
-    // 2. { type: "message.completed", message: { role: "assistant", content: "..." } }
-    // 3. { type: "response.done", response: { output: [{ role: "assistant", ... }] } }
-    // 4. { role: "assistant", content: "..." }
-    // 5. { type: "turn.completed", text: "..." }
-    // 6. Direct JSON object if single-line
-    if (lines.length === 1 && !event.type && !event.role) {
-      lastAssistantJson = event;
+    if (lines.length === 1 && !event.type && !event.item) {
+      singleDirectJson = event;
       break;
     }
 
-    const role = event.role ?? (event.item as any)?.role ?? (event.message as any)?.role;
-    if (role === "assistant" || event.type === "turn.completed" || event.type === "agent_message") {
-      const extracted = extractTextFromPayload(event);
-      if (extracted !== null) {
-        lastAssistantText = extracted;
-      }
-    } else if (event.type === "response.done" && (event.response as any)?.output) {
-      const outputList = (event.response as any).output;
-      if (Array.isArray(outputList)) {
-        for (const out of outputList) {
-          if (out?.role === "assistant") {
-            const extracted = extractTextFromPayload(out);
-            if (extracted !== null) lastAssistantText = extracted;
-          }
-        }
+    if (event.type === "item.completed") {
+      const item = event.item as Record<string, unknown> | undefined;
+      if (
+        item &&
+        item.type === "agent_message" &&
+        typeof item.text === "string"
+      ) {
+        lastAgentMessageText = item.text;
       }
     }
   }
 
-  if (lastAssistantJson !== null) {
-    return { success: true, output: lastAssistantJson };
+  if (singleDirectJson !== null) {
+    return { success: true, output: singleDirectJson };
   }
 
-  if (lastAssistantText === null) {
+  if (lastAgentMessageText === null) {
     return {
       success: false,
       code: "EXECUTOR_HOST_INVALID_STRUCTURED_RESULT",
-      message: `Codex stream from "${agent}" did not emit a final assistant output event`,
+      message: `Codex stream from "${agent}" did not emit an item.completed agent_message event`,
       retryable: false,
     };
   }
 
-  return parseFinalPayload(lastAssistantText, agent);
+  return parseFinalPayload(lastAgentMessageText, agent);
 }
 
 /**
- * OpenCode `opencode run --format json` emits JSON events.
- * Identifies the final assistant event and extracts its message payload.
+ * OpenCode pinned v1.18.16 `opencode run --format json` emits JSON events:
+ * - `step_start`, `step_finish`
+ * - `tool_use`, `reasoning`, `error`
+ * - `type === "text"` with `part.type === "text"` and `part.text: string`
+ * - fail closed on malformed lines or missing text events.
  */
 function adaptOpenCodeOutput(stdout: string, agent: string): NativeOutputResult {
   const lines = stdout
@@ -185,8 +179,8 @@ function adaptOpenCodeOutput(stdout: string, agent: string): NativeOutputResult 
     .map((l) => l.trim())
     .filter(Boolean);
 
-  let lastAssistantText: string | null = null;
-  let lastAssistantJson: unknown = null;
+  let lastText: string | null = null;
+  let singleDirectJson: unknown = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -202,41 +196,33 @@ function adaptOpenCodeOutput(stdout: string, agent: string): NativeOutputResult 
       };
     }
 
-    if (lines.length === 1 && !event.type && !event.role) {
-      lastAssistantJson = event;
+    if (lines.length === 1 && !event.type && !event.part) {
+      singleDirectJson = event;
       break;
     }
 
-    const type = event.type;
-    const role = event.role ?? (event.message as any)?.role;
-    if (
-      role === "assistant" ||
-      type === "response" ||
-      type === "turn_complete" ||
-      type === "final" ||
-      type === "message"
-    ) {
-      const extracted = extractTextFromPayload(event);
-      if (extracted !== null) {
-        lastAssistantText = extracted;
+    if (event.type === "text") {
+      const part = event.part as Record<string, unknown> | undefined;
+      if (part && part.type === "text" && typeof part.text === "string") {
+        lastText = part.text;
       }
     }
   }
 
-  if (lastAssistantJson !== null) {
-    return { success: true, output: lastAssistantJson };
+  if (singleDirectJson !== null) {
+    return { success: true, output: singleDirectJson };
   }
 
-  if (lastAssistantText === null) {
+  if (lastText === null) {
     return {
       success: false,
       code: "EXECUTOR_HOST_INVALID_STRUCTURED_RESULT",
-      message: `OpenCode stream from "${agent}" did not emit a final assistant output event`,
+      message: `OpenCode stream from "${agent}" did not emit a completed text event`,
       retryable: false,
     };
   }
 
-  return parseFinalPayload(lastAssistantText, agent);
+  return parseFinalPayload(lastText, agent);
 }
 
 /**

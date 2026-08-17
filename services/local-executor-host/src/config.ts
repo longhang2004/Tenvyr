@@ -138,7 +138,7 @@ export function parseHostConfig(
         }
       : {};
   const callbackAllowInsecure =
-    environment.EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE !== "false";
+    environment.EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE === "true";
 
   const port = Number(environment.EXECUTOR_HOST_PORT || 3002);
   const bearerTokenEnv =

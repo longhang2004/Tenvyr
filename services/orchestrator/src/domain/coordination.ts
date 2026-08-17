@@ -1,6 +1,8 @@
 import { sha256Json } from "./canonical-json";
 import { CONNECTION_ID_PATTERN } from "../executors/runtime-connection";
 import type { WorkspaceSnapshotV1 } from "./workspace";
+import type { HandoffBundleV1 } from "./handoff";
+import type { ExecutionWorkspaceIdentityV1 } from "./workspace-execution";
 
 /**
  * M9-S1: pure Coordinator semantics — team configuration, phases, bounded
@@ -100,7 +102,8 @@ export class CoordinationError extends Error {
       | "MODEL_NOT_ALLOWED"
       | "EXECUTOR_NOT_ALLOWED"
       | "PHASE_TRANSITION_INVALID"
-      | "AGGREGATION_INVALID",
+      | "AGGREGATION_INVALID"
+      | "PAYLOAD_INVALID",
     message: string,
   ) {
     super(message);
@@ -239,6 +242,141 @@ export type VerifierContextV1 = {
   /** Deterministic truncation/omission metadata. */
   omitted: string[];
 };
+
+/**
+ * Strict bounded Tenvyr role input protocols delivered to runtime children.
+ *
+ * Provides enough durable control-plane truth (Goal, Handoff, Workspace,
+ * Execution Workspace, Iteration/Revision, Output contract) to execute the
+ * role without leaking raw logs, chain of thought, credentials, or sessions.
+ */
+
+export type RoleOutputContractV1 = {
+  schema?: string;
+  instructions: string;
+};
+
+export type PlannerInvocationInputV1 = {
+  schemaVersion: 1;
+  role: "planner";
+  goal: string;
+  iterationNumber: number;
+  planRevision: number;
+  workspace?: WorkspaceSnapshotV1 | null;
+  executionWorkspace?: ExecutionWorkspaceIdentityV1 | null;
+  handoff?: HandoffBundleV1 | null;
+  acceptanceCriteria?: string[];
+  outputContract: RoleOutputContractV1 & { schema: "TaskBatchProposalV1" };
+};
+
+export type WorkerInvocationInputV1 = {
+  schemaVersion: 1;
+  role: "worker";
+  taskId: string;
+  goal: string;
+  iterationNumber: number;
+  taskInput: unknown;
+  workspace?: WorkspaceSnapshotV1 | null;
+  executionWorkspace?: ExecutionWorkspaceIdentityV1 | null;
+  outputContract: RoleOutputContractV1;
+};
+
+export type VerifierInvocationInputV1 = {
+  schemaVersion: 1;
+  role: "verifier";
+  goal: string;
+  iterationNumber: number;
+  context: VerifierContextV1;
+  workspace?: WorkspaceSnapshotV1 | null;
+  executionWorkspace?: ExecutionWorkspaceIdentityV1 | null;
+  outputContract: RoleOutputContractV1 & { schema: "VerifierDecisionV1" };
+};
+
+export type RoleInvocationInputV1 =
+  | PlannerInvocationInputV1
+  | WorkerInvocationInputV1
+  | VerifierInvocationInputV1;
+
+export function parseRoleInvocationInput(value: unknown): RoleInvocationInputV1 {
+  if (!isRecord(value)) {
+    throw new CoordinationError(
+      "PAYLOAD_INVALID",
+      "RoleInvocationInput must be an object",
+    );
+  }
+  if (value.schemaVersion !== 1) {
+    throw new CoordinationError(
+      "PAYLOAD_INVALID",
+      `RoleInvocationInput schemaVersion must be 1, got ${value.schemaVersion}`,
+    );
+  }
+  if (
+    value.role !== "planner" &&
+    value.role !== "worker" &&
+    value.role !== "verifier"
+  ) {
+    throw new CoordinationError(
+      "PAYLOAD_INVALID",
+      `RoleInvocationInput role must be planner/worker/verifier, got ${value.role}`,
+    );
+  }
+  if (typeof value.goal !== "string") {
+    throw new CoordinationError(
+      "PAYLOAD_INVALID",
+      "RoleInvocationInput goal must be a string",
+    );
+  }
+  if (
+    typeof value.iterationNumber !== "number" ||
+    !Number.isInteger(value.iterationNumber) ||
+    value.iterationNumber < 1
+  ) {
+    throw new CoordinationError(
+      "PAYLOAD_INVALID",
+      "RoleInvocationInput iterationNumber must be a positive integer",
+    );
+  }
+  if (
+    !isRecord(value.outputContract) ||
+    typeof value.outputContract.instructions !== "string"
+  ) {
+    throw new CoordinationError(
+      "PAYLOAD_INVALID",
+      "RoleInvocationInput outputContract must contain instructions",
+    );
+  }
+  if (value.role === "worker") {
+    if (typeof value.taskId !== "string" || !value.taskId) {
+      throw new CoordinationError(
+        "PAYLOAD_INVALID",
+        "WorkerInvocationInput taskId must be a non-empty string",
+      );
+    }
+    return value as WorkerInvocationInputV1;
+  }
+  if (value.role === "planner") {
+    if (
+      typeof value.planRevision !== "number" ||
+      !Number.isInteger(value.planRevision)
+    ) {
+      throw new CoordinationError(
+        "PAYLOAD_INVALID",
+        "PlannerInvocationInput planRevision must be an integer",
+      );
+    }
+    return value as PlannerInvocationInputV1;
+  }
+  if (value.role === "verifier") {
+    if (!isRecord(value.context)) {
+      throw new CoordinationError(
+        "PAYLOAD_INVALID",
+        "VerifierInvocationInput context must be an object",
+      );
+    }
+    return value as VerifierInvocationInputV1;
+  }
+  throw new CoordinationError("PAYLOAD_INVALID", "Invalid RoleInvocationInput");
+}
 
 const PHASE_EVENTS = [
   "plannerProposed",
@@ -832,19 +970,37 @@ export function validateTaskBatchProposal(
     );
   }
   for (const task of proposal.tasks) {
-    const allowed = config.allowedWorkers.some((selection) =>
-      selection.kind === "agent"
-        ? task.connectionId === undefined && selection.name === task.agent
-        : selection.kind === "connection" &&
+    if (task.connectionId !== undefined) {
+      const matchingSelection = config.allowedWorkers.find(
+        (selection) =>
+          selection.kind === "connection" &&
           selection.name === task.connectionId,
-    );
-    if (!allowed) {
-      throw new CoordinationError(
-        task.connectionId !== undefined
-          ? "CONNECTION_NOT_ALLOWED"
-          : "AGENT_NOT_ALLOWED",
-        `task "${task.taskId}" selects agent "${task.agent}"${task.connectionId ? ` connection "${task.connectionId}"` : ""} outside the allowlist`,
       );
+      if (!matchingSelection) {
+        throw new CoordinationError(
+          "CONNECTION_NOT_ALLOWED",
+          `task "${task.taskId}" selects connection "${task.connectionId}" outside the allowlist`,
+        );
+      }
+      const expectedAgent =
+        matchingSelection.agent ?? toTransportAgent(matchingSelection.name);
+      if (task.agent !== undefined && task.agent !== expectedAgent) {
+        throw new CoordinationError(
+          "AGENT_NOT_ALLOWED",
+          `task "${task.taskId}" selects connection "${task.connectionId}" with mismatched agent "${task.agent}" (expected "${expectedAgent}")`,
+        );
+      }
+    } else {
+      const matchingSelection = config.allowedWorkers.find(
+        (selection) =>
+          selection.kind === "agent" && selection.name === task.agent,
+      );
+      if (!matchingSelection) {
+        throw new CoordinationError(
+          "AGENT_NOT_ALLOWED",
+          `task "${task.taskId}" selects agent "${task.agent}" outside the allowlist`,
+        );
+      }
     }
     // P2: model selection is bounded by the frozen Runtime Target allowlist.
     // A Planner may choose only targets frozen in `allowedTargets`; it can
@@ -949,6 +1105,8 @@ export function compileIterationPlanPatch(
   proposal: TaskBatchProposalV1,
   iterationNumber: number,
   workspace?: WorkspaceSnapshotV1,
+  goal?: string,
+  executionWorkspace?: ExecutionWorkspaceIdentityV1 | null,
 ): { patch: PlanPatchLikeV1; verifierStepId: string } {
   if (
     config.verifier.kind !== "agent" &&
@@ -961,28 +1119,40 @@ export function compileIterationPlanPatch(
   }
   const operations: PlanPatchOperationLikeV1[] = [];
   for (const task of proposal.tasks) {
-    // Product Phase 1: the frozen workspace snapshot is injected into every
-    // worker step's input envelope (bounded block, deterministic for the
-    // run) so the worker knows the repository path + frozen revision it
-    // executes against. The planner-authored input is preserved verbatim.
-    const isPlainObjectInput =
-      typeof task.input === "object" &&
-      task.input !== null &&
-      !Array.isArray(task.input);
-    const stepInput: unknown =
-      workspace === undefined
-        ? task.input
-        : {
-            ...(isPlainObjectInput
-              ? (task.input as object)
-              : { value: task.input }),
-            workspace,
-          };
-    const workerAgent =
-      task.agent ||
-      (task.connectionId !== undefined
-        ? toTransportAgent(task.connectionId)
-        : "default");
+    // Tenvyr Role Protocol: every worker receives a typed WorkerInvocationInputV1
+    // containing the operator goal, taskId, execution workspace, and output instructions.
+    // Planner-authored task.input is strictly namespaced under taskInput and NEVER
+    // flattened into the Tenvyr-owned role protocol envelope.
+    const stepInput: WorkerInvocationInputV1 = {
+      schemaVersion: 1,
+      role: "worker",
+      taskId: task.taskId,
+      goal: goal || "",
+      iterationNumber,
+      taskInput: task.input ?? null,
+      workspace: workspace ?? null,
+      executionWorkspace: executionWorkspace ?? null,
+      outputContract: {
+        instructions:
+          "Execute the assigned task in the execution workspace and return structured output.",
+      },
+    };
+    let workerAgent: string;
+    if (task.connectionId !== undefined) {
+      const matchingSelection = config.allowedWorkers.find(
+        (selection) =>
+          selection.kind === "connection" &&
+          selection.name === task.connectionId,
+      );
+      workerAgent =
+        matchingSelection?.agent ?? toTransportAgent(task.connectionId);
+    } else {
+      const matchingSelection = config.allowedWorkers.find(
+        (selection) =>
+          selection.kind === "agent" && selection.name === task.agent,
+      );
+      workerAgent = matchingSelection?.name ?? task.agent ?? "default";
+    }
     const step: Record<string, unknown> = {
       id: task.taskId,
       agent: workerAgent,

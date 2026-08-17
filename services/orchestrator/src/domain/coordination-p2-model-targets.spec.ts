@@ -61,15 +61,20 @@ const batch = (
 
 const task = (
   overrides: Record<string, unknown> = {},
-): Record<string, unknown> => ({
-  taskId: "t1",
-  agent: "worker",
-  input: null,
-  dependsOn: [],
-  required: true,
-  reason: "test",
-  ...overrides,
-});
+): Record<string, unknown> => {
+  const defaultAgent = overrides.connectionId
+    ? `conn__${String(overrides.connectionId).replace(/^conn[:_]/, "").replace(/[^A-Za-z0-9_.-]/g, "_")}`
+    : "worker";
+  return {
+    taskId: "t1",
+    agent: defaultAgent,
+    input: null,
+    dependsOn: [],
+    required: true,
+    reason: "test",
+    ...overrides,
+  };
+};
 
 describe("P2 model selection authorization", () => {
   test("config parses frozen role targets and allowedTargets", () => {

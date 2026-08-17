@@ -386,19 +386,32 @@ export class EngineService {
           logicalSteps,
         );
         // M9-S4: a Coordinator-owned Verifier step receives the bounded
-        // aggregation as its frozen input (built at claim time — later
-        // outcomes can never change a frozen attempt).
+        // aggregation and typed VerifierInvocationInputV1 as its frozen input
+        // (built at claim time — later outcomes can never change a frozen attempt).
         if (
           await this.executionService.isCoordinationVerifierStep(
             execution.id,
             config.id,
           )
         ) {
+          const context = (await this.executionService.buildVerifierInput(
+            execution.id,
+            config.id,
+          )) as import("../domain/coordination").VerifierContextV1;
+          const execInput = (execution.input ?? {}) as Record<string, unknown>;
+          const goal = typeof execInput.goal === "string" ? execInput.goal : "";
           resolvedInput = {
-            context: await this.executionService.buildVerifierInput(
-              execution.id,
-              config.id,
-            ),
+            schemaVersion: 1,
+            role: "verifier",
+            goal,
+            iterationNumber: context.iterationNumber,
+            context,
+            ...(context.workspace ? { workspace: context.workspace } : {}),
+            outputContract: {
+              schema: "VerifierDecisionV1",
+              instructions:
+                'Evaluate the iteration outcome and return a VerifierDecisionV1 JSON object with schemaVersion: 1, iterationId, iterationNumber, action ("ACCEPT", "CONTINUE", or "FAIL"), reason, and evidenceRefs.',
+            },
           };
         }
       } catch (err) {

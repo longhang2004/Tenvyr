@@ -570,8 +570,8 @@ process.stdin.on("end", () => {
       expect(verifierEvidence).toHaveLength(2);
       const workerAEvidence = evidenceLines("worker-a");
       expect(workerAEvidence).toHaveLength(2);
-      expect(workerAEvidence[0].input).toEqual({ module: "core" });
-      expect(workerAEvidence[1].input).toEqual({ module: "core" });
+      expect((workerAEvidence[0].input as any).taskInput ?? workerAEvidence[0].input).toEqual({ module: "core" });
+      expect((workerAEvidence[1].input as any).taskInput ?? workerAEvidence[1].input).toEqual({ module: "core" });
       expect(evidenceLines("worker-b")).toHaveLength(2);
       for (const [role, script] of roleScripts) {
         for (const line of evidenceLines(role)) {

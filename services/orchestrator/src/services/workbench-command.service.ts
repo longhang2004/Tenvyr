@@ -345,7 +345,16 @@ export class WorkbenchCommandService {
       {
         name,
         config: summarizeConfig(config),
-        workspace,
+        workspace: workspace
+          ? {
+              workspaceId: workspace.workspaceId,
+              path: workspace.path,
+              repoRoot: workspace.repoRoot ?? null,
+              branch: workspace.branch ?? null,
+              headSha: workspace.headSha ?? null,
+              dirty: workspace.dirty ?? null,
+            }
+          : null,
         acceptanceEvidence,
         // Only include the key when a workspace exists: an undefined value
         // would canonicalize to null in the idempotency hash while JSONB
@@ -483,14 +492,14 @@ export class WorkbenchCommandService {
     sourceExecutionId: string;
     config: CoordinationConfigV1;
   }): Promise<CommandResult> {
-    // P2 final closure: destination Runtime Target authority is validated
-    // against CURRENT provider state BEFORE the authority transaction —
-    // exactly like startTeamRun.
-    await this.assertExplicitTargetsReady(input.config);
     const bundle = await this.handoffs.buildHandoffBundle(
       input.sourceExecutionId,
     );
     const bundleHash = handoffBundleHash(bundle);
+    // P2 final closure: destination Runtime Target authority is validated
+    // against CURRENT provider state BEFORE the authority transaction —
+    // exactly like startTeamRun.
+    await this.assertExplicitTargetsReady(input.config);
     return this.runCommand(
       "continue-run",
       input.idempotencyKey,

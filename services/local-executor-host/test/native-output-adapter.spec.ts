@@ -24,27 +24,44 @@ describe("NativeRuntimeOutputAdapter", () => {
       runtimeKind: "codex",
     };
 
-    it("extracts TaskBatchProposal from Codex event stream", () => {
+    it("extracts TaskBatchProposal from official Codex item.completed agent_message event", () => {
       const proposal = {
+        schemaVersion: 1,
+        iterationNumber: 1,
+        baseRevision: 1,
         tasks: [
           {
-            id: "task-1",
-            title: "Implement feature",
+            taskId: "task-1",
             agent: "worker",
-            description: "Write code",
+            reason: "Write code",
           },
         ],
+        reason: "iteration 1",
       };
       const stdout = [
-        JSON.stringify({ type: "session.started", sessionId: "sess-1" }),
+        JSON.stringify({ type: "thread.started", threadId: "th_123" }),
+        JSON.stringify({ type: "turn.started", turnId: "turn_1" }),
         JSON.stringify({
           type: "item.completed",
           item: {
-            role: "assistant",
-            content: [{ type: "text", text: JSON.stringify(proposal) }],
+            id: "cmd_1",
+            type: "command_execution",
+            command: "git status",
+            exitCode: 0,
           },
         }),
-        JSON.stringify({ type: "turn.completed" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "msg_1",
+            type: "agent_message",
+            text: JSON.stringify(proposal),
+          },
+        }),
+        JSON.stringify({
+          type: "turn.completed",
+          usage: { inputTokens: 100, outputTokens: 50 },
+        }),
       ].join("\n");
 
       const outcome: ProcessOutcome = {
@@ -61,22 +78,38 @@ describe("NativeRuntimeOutputAdapter", () => {
       }
     });
 
-    it("extracts VerifierDecision from Codex response.done output", () => {
-      const decision = {
-        decision: "ACCEPT",
-        reason: "All checks passed",
+    it("uses the authoritative final agent_message when multiple exist", () => {
+      const first = { intermediate: true };
+      const final = {
+        schemaVersion: 1,
+        iterationNumber: 1,
+        baseRevision: 1,
+        tasks: [],
+        reason: "final",
       };
       const stdout = [
-        JSON.stringify({ type: "init" }),
         JSON.stringify({
-          type: "response.done",
-          response: {
-            output: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: JSON.stringify(decision) }],
-              },
-            ],
+          type: "item.completed",
+          item: {
+            id: "msg_1",
+            type: "agent_message",
+            text: JSON.stringify(first),
+          },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "cmd_2",
+            type: "command_execution",
+            command: "ls -la",
+          },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "msg_2",
+            type: "agent_message",
+            text: JSON.stringify(final),
           },
         }),
       ].join("\n");
@@ -91,16 +124,23 @@ describe("NativeRuntimeOutputAdapter", () => {
       const result = adaptNativeRuntimeOutput(outcome, codexProfile);
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.output).toEqual(decision);
+        expect(result.output).toEqual(final);
       }
     });
 
-    it("handles markdown code block JSON from assistant", () => {
+    it("handles markdown code block JSON from agent_message text", () => {
       const payload = { result: "completed", linesChanged: 42 };
       const stdout = [
         JSON.stringify({
-          role: "assistant",
-          content: "Here is the result:\n```json\n" + JSON.stringify(payload) + "\n```",
+          type: "item.completed",
+          item: {
+            id: "msg_1",
+            type: "agent_message",
+            text:
+              "Here is the result:\n```json\n" +
+              JSON.stringify(payload) +
+              "\n```",
+          },
         }),
       ].join("\n");
 
@@ -120,7 +160,7 @@ describe("NativeRuntimeOutputAdapter", () => {
 
     it("fails closed when Codex stream emits invalid JSON line", () => {
       const stdout = [
-        JSON.stringify({ type: "start" }),
+        JSON.stringify({ type: "thread.started" }),
         "not-valid-json-line",
       ].join("\n");
 
@@ -139,10 +179,21 @@ describe("NativeRuntimeOutputAdapter", () => {
       }
     });
 
-    it("fails closed when Codex stream emits no assistant event", () => {
+    it("fails closed when Codex stream emits turn.completed usage without agent_message", () => {
       const stdout = [
-        JSON.stringify({ type: "session.started" }),
-        JSON.stringify({ type: "tool.called", tool: "bash" }),
+        JSON.stringify({ type: "thread.started" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "cmd_1",
+            type: "command_execution",
+            command: "git status",
+          },
+        }),
+        JSON.stringify({
+          type: "turn.completed",
+          usage: { inputTokens: 50, outputTokens: 10 },
+        }),
       ].join("\n");
 
       const outcome: ProcessOutcome = {
@@ -156,25 +207,49 @@ describe("NativeRuntimeOutputAdapter", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.code).toBe("EXECUTOR_HOST_INVALID_STRUCTURED_RESULT");
-        expect(result.message).toMatch(/did not emit a final assistant output event/);
+        expect(result.message).toMatch(
+          /did not emit an item.completed agent_message event/,
+        );
       }
     });
   });
 
-  describe("OpenCode JSON event adapter", () => {
+  describe("OpenCode JSON event adapter (pinned v1.18.16)", () => {
     const openCodeProfile: HostAgentConfig = {
       ...baseProfile,
       runtimeKind: "opencode",
     };
 
-    it("extracts assistant payload from OpenCode turn_complete event", () => {
+    it("extracts assistant payload from pinned OpenCode text part events", () => {
       const payload = { status: "success", files: ["src/index.ts"] };
       const stdout = [
-        JSON.stringify({ type: "step", step: 1 }),
         JSON.stringify({
-          type: "message",
-          role: "assistant",
-          content: JSON.stringify(payload),
+          type: "step_start",
+          timestamp: 1700000000,
+          sessionID: "ses_1",
+        }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: 1700000001,
+          sessionID: "ses_1",
+          tool: "bash",
+        }),
+        JSON.stringify({
+          type: "reasoning",
+          timestamp: 1700000002,
+          sessionID: "ses_1",
+          part: { type: "reasoning", text: "Thinking about files..." },
+        }),
+        JSON.stringify({
+          type: "text",
+          timestamp: 1700000003,
+          sessionID: "ses_1",
+          part: { type: "text", text: JSON.stringify(payload) },
+        }),
+        JSON.stringify({
+          type: "step_finish",
+          timestamp: 1700000004,
+          sessionID: "ses_1",
         }),
       ].join("\n");
 
@@ -192,8 +267,16 @@ describe("NativeRuntimeOutputAdapter", () => {
       }
     });
 
-    it("fails closed when OpenCode stream has no assistant output", () => {
-      const stdout = JSON.stringify({ type: "step", step: 1 });
+    it("fails closed when OpenCode stream emits only step_start/tool_use/reasoning without text", () => {
+      const stdout = [
+        JSON.stringify({ type: "step_start", timestamp: 1700000000 }),
+        JSON.stringify({
+          type: "reasoning",
+          part: { type: "reasoning", text: "Only thinking" },
+        }),
+        JSON.stringify({ type: "step_finish", timestamp: 1700000005 }),
+      ].join("\n");
+
       const outcome: ProcessOutcome = {
         kind: "succeeded",
         exitCode: 0,
@@ -205,6 +288,28 @@ describe("NativeRuntimeOutputAdapter", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.code).toBe("EXECUTOR_HOST_INVALID_STRUCTURED_RESULT");
+        expect(result.message).toMatch(/did not emit a completed text event/);
+      }
+    });
+
+    it("fails closed on malformed JSON in OpenCode stream", () => {
+      const stdout = [
+        JSON.stringify({ type: "step_start" }),
+        "{ not valid json",
+      ].join("\n");
+
+      const outcome: ProcessOutcome = {
+        kind: "succeeded",
+        exitCode: 0,
+        stdout,
+        stderr: "",
+      };
+
+      const result = adaptNativeRuntimeOutput(outcome, openCodeProfile);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe("EXECUTOR_HOST_INVALID_STRUCTURED_RESULT");
+        expect(result.message).toMatch(/is not valid JSON/);
       }
     });
   });

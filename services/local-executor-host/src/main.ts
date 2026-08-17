@@ -90,8 +90,12 @@ export async function startHostWorkers(config: HostConfig): Promise<
   if (config.agents.length === 0) {
     const bearerToken =
       process.env[config.bearerTokenEnv ?? "EXECUTOR_HOST_BEARER_TOKEN"] ??
-      process.env.HTTP_AGENT_BEARER_TOKEN ??
-      "tenvyr-dev-host-token";
+      process.env.HTTP_AGENT_BEARER_TOKEN;
+    if (!bearerToken) {
+      throw new Error(
+        "Missing required bearer token environment variable for Local Executor Host dynamic bridge",
+      );
+    }
     const port = config.port ?? 3002;
 
     const worker = createTenvyrWorker({
@@ -145,7 +149,9 @@ export async function startHostWorkers(config: HostConfig): Promise<
               args: cli.args || [],
               modelArgvPrefix: Array.isArray(cli.modelArgvPrefix)
                 ? cli.modelArgvPrefix
-                : undefined,
+                : typeof cli.modelArgvPrefix === "string"
+                  ? [cli.modelArgvPrefix]
+                  : undefined,
               runtimeKind: rev.profile?.runtimeKind,
               cwd: cli.cwd
                 ? path.resolve(config.allowedRoot, cli.cwd)

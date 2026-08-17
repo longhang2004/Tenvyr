@@ -74,13 +74,42 @@ const DEFAULT_REPLAY_MAX_ENTRIES = 10_000;
 export function parseAgentTransportConfiguration(
   environment: NodeJS.ProcessEnv = process.env,
 ): ParsedAgentTransportConfiguration {
+  const allowInsecure = environment.HTTP_AGENT_ALLOW_INSECURE === "true";
+  const callbackMaxSkewSeconds = optionalPositiveInteger(
+    environment.HTTP_AGENT_CALLBACK_MAX_SKEW_SECONDS,
+    DEFAULT_CALLBACK_MAX_SKEW_SECONDS,
+    "HTTP_AGENT_CALLBACK_MAX_SKEW_SECONDS",
+  );
+  const replayTtlMs = optionalPositiveInteger(
+    environment.HTTP_AGENT_REPLAY_TTL_MS,
+    callbackMaxSkewSeconds * 1000,
+    "HTTP_AGENT_REPLAY_TTL_MS",
+  );
+  if (replayTtlMs < callbackMaxSkewSeconds * 1000) {
+    throw invalidConfiguration(
+      "HTTP_AGENT_REPLAY_TTL_MS must cover the callback clock-skew window",
+    );
+  }
+  const callbackBaseUrl = environment.HTTP_AGENT_CALLBACK_BASE_URL
+    ? validatedUrl(
+        environment.HTTP_AGENT_CALLBACK_BASE_URL,
+        "HTTP_AGENT_CALLBACK_BASE_URL",
+        allowInsecure,
+      )
+    : undefined;
+
   const raw = environment.AGENT_TRANSPORT_CONFIG?.trim();
   if (!raw) {
     return {
       agents: new Map(),
-      callbackMaxSkewSeconds: DEFAULT_CALLBACK_MAX_SKEW_SECONDS,
-      replayTtlMs: DEFAULT_CALLBACK_MAX_SKEW_SECONDS * 1000,
-      replayMaxEntries: DEFAULT_REPLAY_MAX_ENTRIES,
+      callbackBaseUrl,
+      callbackMaxSkewSeconds,
+      replayTtlMs,
+      replayMaxEntries: optionalPositiveInteger(
+        environment.HTTP_AGENT_REPLAY_MAX_ENTRIES,
+        DEFAULT_REPLAY_MAX_ENTRIES,
+        "HTTP_AGENT_REPLAY_MAX_ENTRIES",
+      ),
     };
   }
 
@@ -95,8 +124,6 @@ export function parseAgentTransportConfiguration(
   }
   if (!isRecord(value))
     throw invalidConfiguration("AGENT_TRANSPORT_CONFIG must be an object");
-
-  const allowInsecure = environment.HTTP_AGENT_ALLOW_INSECURE === "true";
   const agents = new Map<string, AgentTransportConfiguration>();
   for (const [agent, entry] of Object.entries(value)) {
     if (!agent || !isRecord(entry))
@@ -172,26 +199,9 @@ export function parseAgentTransportConfiguration(
   const hasHttpAgent = Array.from(agents.values()).some(
     (configuration) => configuration.kind === "http",
   );
-  const callbackBaseUrl = hasHttpAgent
-    ? validatedUrl(
-        environment.HTTP_AGENT_CALLBACK_BASE_URL,
-        "HTTP_AGENT_CALLBACK_BASE_URL",
-        allowInsecure,
-      )
-    : undefined;
-  const callbackMaxSkewSeconds = optionalPositiveInteger(
-    environment.HTTP_AGENT_CALLBACK_MAX_SKEW_SECONDS,
-    DEFAULT_CALLBACK_MAX_SKEW_SECONDS,
-    "HTTP_AGENT_CALLBACK_MAX_SKEW_SECONDS",
-  );
-  const replayTtlMs = optionalPositiveInteger(
-    environment.HTTP_AGENT_REPLAY_TTL_MS,
-    callbackMaxSkewSeconds * 1000,
-    "HTTP_AGENT_REPLAY_TTL_MS",
-  );
-  if (replayTtlMs < callbackMaxSkewSeconds * 1000) {
+  if (hasHttpAgent && !callbackBaseUrl) {
     throw invalidConfiguration(
-      "HTTP_AGENT_REPLAY_TTL_MS must cover the callback clock-skew window",
+      "HTTP_AGENT_CALLBACK_BASE_URL is required for HTTP agents",
     );
   }
 
@@ -241,11 +251,15 @@ export class AgentTransportConfigService {
         "http://127.0.0.1:3002/v1/runs";
       const token =
         process.env.EXECUTOR_HOST_BEARER_TOKEN ||
-        process.env.HTTP_AGENT_BEARER_TOKEN ||
-        "tenvyr-dev-host-token";
+        process.env.HTTP_AGENT_BEARER_TOKEN;
       const secret =
         process.env.HTTP_AGENT_CALLBACK_SECRET ||
-        "tenvyr-dev-callback-secret";
+        process.env.LOOPBACK_CALLBACK_SECRET;
+      if (!token || !secret) {
+        throw new Error(
+          `Local Runtime Bridge credentials missing: EXECUTOR_HOST_BEARER_TOKEN (or HTTP_AGENT_BEARER_TOKEN) and HTTP_AGENT_CALLBACK_SECRET (or LOOPBACK_CALLBACK_SECRET) must be set in the environment for dynamic bridge routing`,
+        );
+      }
       return {
         kind: "http",
         submitUrl,
@@ -296,7 +310,7 @@ export class AgentTransportConfigService {
   }
 
   httpForAgent(agent: string): HttpAgentTransportConfiguration | undefined {
-    const configuration = this.configuration.agents.get(agent);
+    const configuration = this.forAgent(agent);
     return configuration?.kind === "http" ? configuration : undefined;
   }
 
