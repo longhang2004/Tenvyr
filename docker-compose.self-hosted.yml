@@ -59,6 +59,7 @@ services:
       # never generated, checked in, or logged.
       HTTP_AGENT_CALLBACK_BASE_URL: ${HTTP_AGENT_CALLBACK_BASE_URL:?set the callback base URL}
       HTTP_AGENT_CALLBACK_KEYS: ${HTTP_AGENT_CALLBACK_KEYS:?set callback keys (JSON of keyId -> secretEnv name)}
+      HTTP_AGENT_ALLOW_INSECURE: ${HTTP_AGENT_ALLOW_INSECURE:-true}
       ORCHESTRATOR_SUPERVISION_CONFIG: ${ORCHESTRATOR_SUPERVISION_CONFIG:-{}}
     ports:
       - "127.0.0.1:${TENVYR_ORCHESTRATOR_PORT:-3001}:3001"
