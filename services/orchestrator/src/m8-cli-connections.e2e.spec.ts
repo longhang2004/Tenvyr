@@ -117,8 +117,8 @@ const teamConfig = (): CoordinationConfigV1 => ({
   planner: { kind: "connection", name: "conn:planner-cli", agent: "cli-planner" },
   verifier: { kind: "connection", name: "conn:verifier-cli", agent: "cli-verifier" },
   allowedWorkers: [
-    { kind: "connection", name: "conn:worker-a" },
-    { kind: "connection", name: "conn:worker-b" },
+    { kind: "connection", name: "conn:worker-a", agent: "cli-worker-a" },
+    { kind: "connection", name: "conn:worker-b", agent: "cli-worker-b" },
   ],
   maxIterations: 3,
   maxWorkersPerIteration: 4,
@@ -490,11 +490,11 @@ process.stdin.on("end", () => {
       const counterFile = path.join(fixtureDir, "flaky-counter");
       plannerScript = writeScript(fixtureDir, "planner.js", fakePlanner(path.join(evidenceDir, "planner.jsonl")));
       verifierScript = writeScript(fixtureDir, "verifier.js", fakeVerifier(path.join(evidenceDir, "verifier.jsonl")));
-      workerAScript = writeScript(fixtureDir, "worker-a.js", fakeWorker(path.join(evidenceDir, "worker-a.jsonl"), `{ built: true, module: invocation.input?.module ?? "" }`));
+      workerAScript = writeScript(fixtureDir, "worker-a.js", fakeWorker(path.join(evidenceDir, "worker-a.jsonl"), `{ built: true, module: invocation.input?.taskInput?.module ?? invocation.input?.module ?? "" }`));
       workerBScript = writeScript(fixtureDir, "worker-b.js", fakeWorker(path.join(evidenceDir, "worker-b.jsonl"), `{ passed: 12 }`));
       plannerRetryScript = writeScript(fixtureDir, "planner-retry.js", fakePlannerRetry(path.join(evidenceDir, "planner-retry.jsonl")));
       workerFlakyScript = writeScript(fixtureDir, "worker-flaky.js", fakeFlaky(path.join(evidenceDir, "worker-flaky.jsonl"), counterFile));
-      workerAV2Script = writeScript(fixtureDir, "worker-a-v2.js", fakeWorker(path.join(evidenceDir, "worker-a-v2.jsonl"), `{ built: true, module: (invocation.input?.module ?? "") + "-v2" }`));
+      workerAV2Script = writeScript(fixtureDir, "worker-a-v2.js", fakeWorker(path.join(evidenceDir, "worker-a-v2.jsonl"), `{ built: true, module: (invocation.input?.taskInput?.module ?? invocation.input?.module ?? "") + "-v2" }`));
 
       inbox = new ResultInboxService(dataSource);
       connections = new RuntimeConnectionService(dataSource);
@@ -850,7 +850,9 @@ process.stdin.on("end", () => {
         ...teamConfig(),
         planner: { kind: "connection", name: "conn:planner-cli", agent: "cli-planner" },
         verifier: { kind: "connection", name: "conn:verifier-cli", agent: "cli-verifier" },
-        allowedWorkers: [{ kind: "connection", name: "conn:worker-c" }],
+        allowedWorkers: [
+          { kind: "connection", name: "conn:worker-c", agent: "cli-worker-c" },
+        ],
         allowedExecutors: ["local-host"],
       };
       const callbackPort = await availablePort();

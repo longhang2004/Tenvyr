@@ -259,6 +259,10 @@ TENVYR_POSTGRES_VOLUME=${E2E_VOLUME}
     if (needsBuild) {
       runOk("docker", [...COMPOSE.slice(1), "build"], { timeout: 1_200_000 });
     }
+    // Pull external service images with retries before starting
+    for (let pullAttempt = 0; pullAttempt < 3; pullAttempt++) {
+      if (run("docker", ["pull", "postgres:15-alpine"], { timeout: 300_000 }).status === 0) break;
+    }
     // From this point the disposable stack may exist — the teardown is
     // allowed to tear it down (and ONLY it).
     disposableStackCreated = true;

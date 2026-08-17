@@ -275,6 +275,9 @@ jobs:
       - name: Install workspace
         run: pnpm install --frozen-lockfile
 
+      - name: Pre-pull base service images
+        run: docker pull postgres:15-alpine
+
       - name: Disposable self-hosted recovery E2E (required)
         run: pnpm self-hosted:recovery-test
 
