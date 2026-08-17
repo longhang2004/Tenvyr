@@ -377,8 +377,16 @@ process.stdin.on("end", () => {
         agent: "cli-verifier",
       },
       allowedWorkers: [
-        { kind: "connection", name: "conn:worker-a" },
-        { kind: "connection", name: "conn:worker-b" },
+        {
+          kind: "connection",
+          name: "conn:worker-a",
+          agent: "cli-worker-a",
+        },
+        {
+          kind: "connection",
+          name: "conn:worker-b",
+          agent: "cli-worker-b",
+        },
       ],
       plannerTarget: FROZEN_TARGETS.planner,
       verifierTarget: FROZEN_TARGETS.verifier,
