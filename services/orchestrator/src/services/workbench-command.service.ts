@@ -684,11 +684,11 @@ export class WorkbenchCommandService {
 
     const outcome = auditRow.outcome as Record<string, unknown> | undefined;
     if (outcome && outcome.pending !== true) {
-      if (outcome.refusal === true || outcome.failureCode === "WORKTREE_DIRTY") {
+      if (outcome.refusal === true) {
         throw new WorkspaceExecutionError(
           (outcome.failureCode as string) ?? "WORKTREE_DIRTY",
           (outcome.error as string) ??
-            `Execution workspace "${input.workspaceExecutionId}" contains uncommitted work and release was refused`,
+            `Execution workspace "${input.workspaceExecutionId}" release was refused`,
         );
       }
       return {
@@ -699,13 +699,43 @@ export class WorkbenchCommandService {
       };
     }
 
-    // Step 2: Execute safe release saga
+    // Step 1.5: Idempotent durable execution ownership — at most one
+    // caller drives the external Git mutation for this (action, key).
+    // The outcome row carries phase: EXECUTING once the winner claims
+    // ownership; other concurrent callers observe and return the
+    // winner's final outcome once committed (or the current truthful
+    // state). No DB transaction is held over Git.
+    const claimed = await this.claimReleaseOwnership(auditRow.id, auditRow.outcome as Record<string, unknown> | undefined);
+    if (!claimed.claimed) {
+      // Lost the claim or this is a retry of our own EXECUTING row
+      // whose outcome was already reconciled: return the authoritative
+      // stored outcome. If still EXECUTING, wait briefly for the
+      // winner to commit, then reconciled truth.
+      const authoritative = await this.waitForReleaseFinalOutcome(auditRow.id, key, action);
+      if (authoritative.refusal === true) {
+        throw new WorkspaceExecutionError(
+          (authoritative.failureCode as string) ?? "WORKTREE_DIRTY",
+          (authoritative.error as string) ?? `Execution workspace "${input.workspaceExecutionId}" release was refused`,
+        );
+      }
+      return {
+        action,
+        idempotencyKey: key,
+        outcome: "duplicate",
+        result: authoritative,
+      };
+    }
+
+    // Step 2: Execute safe release saga (we are the owner)
+    // Allow the idempotent path in the same call to short-circuit without
+    // re-allocating the saga.
+    // eslint-disable-next-line no-restricted-syntax -- bounded safe release controls its own catch per invariant
     try {
       const released =
         await this.workspaceExecutions.releaseExecutionWorkspace(
           input.workspaceExecutionId,
         );
-      const result = {
+      const result: Record<string, unknown> = {
         workspaceExecutionId: released.id,
         state: released.state,
       };
@@ -720,18 +750,32 @@ export class WorkbenchCommandService {
       };
     } catch (error) {
       if (error instanceof WorkspaceExecutionError) {
-        const failureResult = {
-          workspaceExecutionId: input.workspaceExecutionId,
-          state: "PRESERVED",
-          failureCode: error.code,
-          error: error.message,
-          refusal: true,
-        };
+        // H1 audit truth: never fabricate PRESERVED when the durable
+        // workspace state is not actually PRESERVED. Map each
+        // non-releasable code to the operator-visible truthful refusal.
+        const code = error.code;
+        const truthful = this.truthfulReleaseRefusalOutcome(
+          input.workspaceExecutionId,
+          code,
+          error.message,
+        );
         await this.dataSource
           .getRepository(OperatorActionEntity)
-          .update({ id: auditRow.id }, { outcome: failureResult });
-        throw error;
+          .update({ id: auditRow.id }, { outcome: truthful });
+        throw new WorkspaceExecutionError(truthful.failureCode as string, truthful.error as string);
       }
+      // Non-WorkspaceExecutionError: mark INTERRUPTED with truthful evidence
+      // so a retry can re-enter and recover (no ambiguous pending forever).
+      const interrupted: Record<string, unknown> = {
+        workspaceExecutionId: input.workspaceExecutionId,
+        state: "INTERRUPTED",
+        failureCode: "RELEASE_INTERRUPTED",
+        error: error instanceof Error ? error.message : String(error),
+        retryRequired: true,
+      };
+      await this.dataSource
+        .getRepository(OperatorActionEntity)
+        .update({ id: auditRow.id }, { outcome: interrupted });
       throw error;
     }
   }
@@ -1119,7 +1163,7 @@ export class WorkbenchCommandService {
     );
   }
 
-  /** OpenCode OAuth: COMPLETE through the SAME live session that performed
+/** OpenCode OAuth: COMPLETE through the SAME live session that performed
    *  authorize; proves connected via a refreshed GET /provider; then
    *  closes the server and removes the flow. The bounded code (code flow
    *  only) is never logged or persisted. Audited. */
@@ -1140,6 +1184,137 @@ export class WorkbenchCommandService {
         return { providerId, connectionId, connected };
       },
     );
+  }
+
+  // ---- Safe Release execution ownership + audit truth (PP1 final closure) ----
+
+  private async claimReleaseOwnership(
+    auditRowId: string,
+    outcome: Record<string, unknown> | undefined,
+  ): Promise<{ claimed: boolean }> {
+    if (outcome?.pending === true && (outcome as { phase?: string }).phase === "EXECUTING") {
+      return { claimed: false };
+    }
+    if (outcome?.pending !== true || (outcome as { phase?: string }).phase !== "REQUESTED") {
+      return { claimed: false };
+    }
+    const repo = this.dataSource.getRepository(OperatorActionEntity);
+    const result = await repo
+      .createQueryBuilder()
+      .update(OperatorActionEntity)
+      .set({ outcome: { pending: true, phase: "EXECUTING" } as unknown as Record<string, unknown> })
+      .where("id = :id", { id: auditRowId })
+      .andWhere("(outcome->>'pending')::boolean = true")
+      .andWhere("outcome->>'phase' = 'REQUESTED'")
+      .execute();
+    return { claimed: (result.affected ?? 0) === 1 };
+  }
+
+  private async waitForReleaseFinalOutcome(
+    auditRowId: string,
+    _key: string,
+    _action: string,
+  ): Promise<Record<string, unknown>> {
+    const repo = this.dataSource.getRepository(OperatorActionEntity);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const row = await repo.findOne({ where: { id: auditRowId } });
+      const out = row?.outcome as Record<string, unknown> | undefined;
+      if (out && out.pending !== true) return out;
+      if (out?.pending === true && (out as { phase?: string }).phase === "EXECUTING") {
+        try {
+          await this.workspaceExecutions.reconcileWorkspaceExecutions();
+        } catch {
+          // ignore
+        }
+        const after = await repo.findOne({ where: { id: auditRowId } });
+        const out2 = after?.outcome as Record<string, unknown> | undefined;
+        if (out2 && out2.pending !== true) return out2;
+      }
+      if (attempt < 19) await new Promise((r) => setTimeout(r, 100));
+    }
+    const finalRow = await repo.findOne({ where: { id: auditRowId } });
+    const fin = finalRow?.outcome as Record<string, unknown> | undefined;
+    if (fin && fin.pending !== true) return fin as Record<string, unknown>;
+    const leaseId = (fin?.workspaceExecutionId as string | undefined) ?? (finalRow?.targetId as string | undefined);
+    if (leaseId) {
+      try {
+        const { WorkspaceExecutionEntity: WEE } = await import("../entities/workspace-execution.entity");
+        const lease = await this.dataSource.getRepository(WEE).findOne({ where: { id: leaseId } } as unknown as Record<string, unknown>);
+        if (lease) {
+          const l = lease as unknown as { state: string; id: string; failureCode?: string | null };
+          if (l.state === "REMOVED") return { workspaceExecutionId: l.id, state: "REMOVED" };
+          if (l.state === "PRESERVED") {
+            return {
+              workspaceExecutionId: l.id,
+              state: "PRESERVED",
+              failureCode: (l as { failureCode?: string }).failureCode ?? "WORKTREE_DIRTY",
+              error: "Execution workspace is preserved",
+              refusal: true,
+            };
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return (fin as Record<string, unknown>) ?? { state: "INTERRUPTED", failureCode: "RELEASE_INTERRUPTED", retryRequired: true };
+  }
+
+  private truthfulReleaseRefusalOutcome(
+    workspaceExecutionId: string,
+    code: string,
+    message: string,
+  ): Record<string, unknown> {
+    switch (code) {
+      case "LEASE_NOT_FOUND":
+        return {
+          workspaceExecutionId,
+          state: "NOT_FOUND",
+          failureCode: "LEASE_NOT_FOUND",
+          error: message,
+          refusal: true,
+        };
+      case "LEASE_NOT_RELEASABLE":
+        return {
+          workspaceExecutionId,
+          state: "IN_USE",
+          failureCode: "LEASE_NOT_RELEASABLE",
+          error: message,
+          refusal: true,
+        };
+      case "SHARED_MODE_NO_REMOVAL":
+        return {
+          workspaceExecutionId,
+          state: "PRESERVED",
+          failureCode: "SHARED_MODE_NO_REMOVAL",
+          error: message,
+          refusal: true,
+        };
+      case "LEASE_PATH_MISSING":
+        return {
+          workspaceExecutionId,
+          state: "PRESERVED",
+          failureCode: "LEASE_PATH_MISSING",
+          error: message,
+          refusal: true,
+        };
+      case "WORKTREE_DIRTY":
+        return {
+          workspaceExecutionId,
+          state: "PRESERVED",
+          failureCode: "WORKTREE_DIRTY",
+          error: message,
+          refusal: true,
+        };
+      default:
+        return {
+          workspaceExecutionId,
+          state: "PRESERVED",
+          failureCode: code,
+          error: message,
+          refusal: true,
+        };
+    }
   }
 
   private boundedProfile(profile: ConnectionProfileV1): ConnectionProfileV1 {

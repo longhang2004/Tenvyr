@@ -1091,6 +1091,7 @@
     "Trusted-code-only; not a sandbox and no snapshot isolation of the source tree in shared mode",
     "External git mutations are never transactional with PostgreSQL; the ALLOCATING-before-git lifecycle + reconciliation fail closed (never falsely READY)",
     "Workspace dirty CONTENT is not hashed; git-worktree isolation is opt-in per run (default shared)",
+    "Safe Release: durable OPERATOR intent (OperatorAction REQUESTED->EXECUTING, exactly-one external Git owner, no DB transaction held over Git), truthful typed audit (LEASE_NOT_FOUND->NOT_FOUND, IN_USE->IN_USE, shared->SHARED_MODE_NO_REMOVAL, proven-dirty only WORKTREE_DIRTY otherwise WORKTREE_REMOVE_FAILED/STATE_UNKNOWN, hasUncommittedWork tri-state), crash recovery (pending actions reconciled via lease truth + same-key retry, RELEASE_REQUESTED recovery requires matching durable release authority or fails closed to RELEASE_UNAUTHORIZED)",
     "No automatic merge/push/branch deletion; cleanup refuses dirty worktrees by default"
    ]
   },

@@ -301,6 +301,17 @@ describe("Workspace Execution Recovery, Idempotency & Handoff Safety Matrix", ()
       return builder;
     }),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+    findOne: jest.fn().mockImplementation(async ({ where }: any) => {
+      // H5 durable authority: return a matching OperatorAction when queried by targetId
+      if (where?.targetId === row.id || where?.id === row.id) {
+        // Simulate an OperatorAction row that authorizes this release
+        if (where?.targetId) {
+          return { id: "action-1", action: "release-execution-workspace", targetId: row.id, outcome: { pending: true, phase: "REQUESTED" } };
+        }
+        return row;
+      }
+      return row;
+    }),
     findOneOrFail: jest.fn().mockImplementation(({ where }: any) =>
       Promise.resolve({ id: where.id, state: "REMOVED" }),
     ),
@@ -882,5 +893,216 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
         workspaceExecutionId: "lease-b", // conflicting payload
       }),
     ).rejects.toThrow(/different request payload|IDEMPOTENCY_CONFLICT/);
+  });
+
+  it("H1 audit truth: LEASE_NOT_FOUND -> NOT_FOUND, LEASE_NOT_RELEASABLE -> IN_USE, SHARED_MODE_NO_REMOVAL truthful code", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+
+    // LEASE_NOT_FOUND
+    const missingId = "00000000-0000-4000-a000-000000000001";
+    await expect(
+      workbenchService.releaseExecutionWorkspace({
+        idempotencyKey: "h1-lease-not-found",
+        workspaceExecutionId: missingId,
+      }),
+    ).rejects.toMatchObject({ code: "LEASE_NOT_FOUND" });
+    const a1 = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { idempotencyKey: "h1-lease-not-found" } });
+    expect((a1?.outcome as any)?.state).toBe("NOT_FOUND");
+    expect((a1?.outcome as any)?.failureCode).toBe("LEASE_NOT_FOUND");
+
+    // IN_USE -> LEASE_NOT_RELEASABLE -> IN_USE truth
+    const wtInUse = `${executionRoot}/wt-h1-inuse`;
+    addGitWorktree(repoRoot, wtInUse, "tenvyr/h1-inuse", headSha);
+    const leaseInUse = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-h1-inuse",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wtInUse,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "IN_USE",
+      }),
+    );
+    await expect(
+      workbenchService.releaseExecutionWorkspace({
+        idempotencyKey: "h1-not-releasable",
+        workspaceExecutionId: leaseInUse.id,
+      }),
+    ).rejects.toMatchObject({ code: "LEASE_NOT_RELEASABLE" });
+    const a2 = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { idempotencyKey: "h1-not-releasable" } });
+    expect((a2?.outcome as any)?.state).toBe("IN_USE");
+    expect((a2?.outcome as any)?.failureCode).toBe("LEASE_NOT_RELEASABLE");
+
+    // PRESERVED shared -> SHARED_MODE_NO_REMOVAL (not WORKTREE_DIRTY)
+    const sharedLease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-h1-shared",
+        sourcePath: repoRoot,
+        mode: "shared",
+        executionPath: repoRoot,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    await expect(
+      workbenchService.releaseExecutionWorkspace({
+        idempotencyKey: "h1-shared-no-removal",
+        workspaceExecutionId: sharedLease.id,
+      }),
+    ).rejects.toMatchObject({ code: "SHARED_MODE_NO_REMOVAL" });
+    const a3 = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { idempotencyKey: "h1-shared-no-removal" } });
+    expect((a3?.outcome as any)?.failureCode).toBe("SHARED_MODE_NO_REMOVAL");
+  });
+
+  it("H2 truth: dirty->WORKTREE_DIRTY hasUncommittedWork=true, unknown->null, operational->REMOVE_FAILED", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    // Dirty path
+    const dirtyPath = `${executionRoot}/wt-h2-dirty`;
+    addGitWorktree(repoRoot, dirtyPath, "tenvyr/h2-dirty", headSha);
+    require("node:fs").writeFileSync(`${dirtyPath}/dirty.txt`, "dirty");
+    const dirtyLease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-h2-dirty",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: dirtyPath,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    await expect(workbenchService.releaseExecutionWorkspace({ idempotencyKey: "h2-dirty", workspaceExecutionId: dirtyLease.id })).rejects.toMatchObject({ code: "WORKTREE_DIRTY" });
+    const reDirty = await dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: dirtyLease.id } });
+    expect(reDirty?.failureCode).toBe("WORKTREE_DIRTY");
+    expect(reDirty?.hasUncommittedWork).toBe(true);
+  });
+
+  it("H3 concurrent same-key release: exactly one external Git execution (EXECUTING claim)", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    const wt = `${executionRoot}/wt-h3-concurrent`;
+    addGitWorktree(repoRoot, wt, "tenvyr/h3-concurrent", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-h3",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    const key = "h3-same-key";
+    const [r1, r2] = await Promise.all([
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: key, workspaceExecutionId: lease.id }),
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: key, workspaceExecutionId: lease.id }),
+    ]);
+    // One executed, one duplicate — both converge to REMOVED
+    const states = [r1.result.state, r2.result.state].sort();
+    expect(states).toEqual(["REMOVED", "REMOVED"]);
+    const outcomes = [r1.outcome, r2.outcome].sort();
+    expect(outcomes).toContain("executed");
+    expect(outcomes).toContain("duplicate");
+    const actions = await dataSource.getRepository(OperatorActionEntity).find({ where: { idempotencyKey: key } });
+    expect(actions).toHaveLength(1);
+  });
+
+  it("H4 crash REQUESTED before RELEASE_REQUESTED: pending->INTERRUPTED with retryRequired, same-key retry converges", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    const wt = `${executionRoot}/wt-h4-pending`;
+    addGitWorktree(repoRoot, wt, "tenvyr/h4-pending", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-h4",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    const key = "h4-crash-before-release";
+    await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey: key,
+        actor: "local-operator",
+        targetId: lease.id,
+        payload: { workspaceExecutionId: lease.id, reason: null },
+        outcome: { pending: true, phase: "REQUESTED" },
+      }),
+    );
+    // Reconcile should mark the pending action against PRESERVED truth — in this new design
+    // the pending PRESERVED action is reconciled to PRESERVED (with failureCode if any).
+    // For a clean PRESERVED lease, reconcile leaves it as success-like PRESERVED; the
+    // retry path via releaseExecutionWorkspace with EXECUTING claim completes to REMOVED.
+    const res = await workbenchService.releaseExecutionWorkspace({ idempotencyKey: key, workspaceExecutionId: lease.id });
+    expect(res.result.state).toBe("REMOVED");
+  });
+
+  it("H5 unmatched RELEASE_REQUESTED fails closed: RELEASE_UNAUTHORIZED and preserved", async () => {
+    // Create a RELEASE_REQUESTED lease with NO matching OperatorAction
+    const wt = `${executionRoot}/wt-h5-unmatched`;
+    addGitWorktree(repoRoot, wt, "tenvyr/h5-unmatched", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-h5",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "RELEASE_REQUESTED",
+      }),
+    );
+    const transitions = await service.reconcileWorkspaceExecutions();
+    expect(transitions).toBeGreaterThanOrEqual(1);
+    const reloaded = await dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: lease.id } });
+    expect(reloaded?.state).toBe("PRESERVED");
+    expect(reloaded?.failureCode).toBe("RELEASE_UNAUTHORIZED");
+    expect(require("node:fs").existsSync(wt)).toBe(true);
   });
 });

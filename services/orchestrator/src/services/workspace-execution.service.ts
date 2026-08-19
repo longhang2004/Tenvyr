@@ -149,11 +149,11 @@ export function addGitWorktree(
 
 /** Remove a worktree WITHOUT --force (Git refuses dirty trees — operator
  *  work is preserved). Returns "removed" | "already-removed" | { refused:
- *  reason }. */
+ *  reason, code } where code distinguishes proven-dirty vs unknown/operational. */
 export function removeGitWorktree(
   sourceRepoRoot: string,
   executionPath: string,
-): "removed" | "already-removed" | { refused: string } {
+): "removed" | "already-removed" | { refused: string; code: "WORKTREE_DIRTY" | "WORKTREE_REMOVE_FAILED" | "WORKTREE_STATE_UNKNOWN" } {
   const removed = runBoundedGit(sourceRepoRoot, [
     "worktree",
     "remove",
@@ -163,7 +163,22 @@ export function removeGitWorktree(
   if (!worktreeIsRegistered(sourceRepoRoot, executionPath)) {
     return "already-removed";
   }
-  return { refused: (removed.stderr || "git worktree remove failed").slice(0, 512) };
+  const stderrLower = (removed.stderr || "").toLowerCase();
+  const refused = (removed.stderr || "git worktree remove failed").slice(0, 512);
+  // Only claim dirty when Git's refusal indicates dirty/untracked changes;
+  // otherwise the failure is operational/unknown and must not set hasUncommittedWork.
+  const looksDirty =
+    stderrLower.includes("contains modified files") ||
+    stderrLower.includes("contains untracked files") ||
+    stderrLower.includes("cannot remove") && (stderrLower.includes("dirty") || stderrLower.includes("modified") || stderrLower.includes("untracked"));
+  if (looksDirty || stderrLower.includes("dirty")) {
+    return { refused, code: "WORKTREE_DIRTY" };
+  }
+  // Deterministic operational failure vs unknown state
+  if (removed.status !== null && removed.status !== 0) {
+    return { refused, code: "WORKTREE_REMOVE_FAILED" };
+  }
+  return { refused, code: "WORKTREE_STATE_UNKNOWN" };
 }
 
 /** Tenvyr-owned root for isolated execution workspaces. Operator-configurable
@@ -645,6 +660,19 @@ export class WorkspaceExecutionService {
         transitions++;
         continue;
       }
+      // H5: RELEASE_REQUESTED recovery requires durable operator authority.
+      // If no matching OperatorAction exists for this lease, fail closed:
+      // preserve the resource, surface operator-visible evidence, do not
+      // silently remove an externally-destructive transition.
+      const hasAuthority = await this.hasReleaseAuthority(row.id);
+      if (!hasAuthority) {
+        await this.transition(row.id, "PRESERVED", {
+          failureCode: "RELEASE_UNAUTHORIZED",
+          hasUncommittedWork: null,
+        });
+        transitions++;
+        continue;
+      }
       const isRegistered = worktreeIsRegistered(row.sourcePath, row.executionPath);
       if (!isRegistered) {
         await this.transition(row.id, "REMOVED");
@@ -655,9 +683,12 @@ export class WorkspaceExecutionService {
           await this.transition(row.id, "REMOVED");
           transitions++;
         } else {
+          // H2: truthful failureCode — only WORKTREE_DIRTY when proven dirty
+          const code = (outcome as { code: string }).code ?? "WORKTREE_REMOVE_FAILED";
+          const provenDirty = code === "WORKTREE_DIRTY";
           await this.transition(row.id, "PRESERVED", {
-            failureCode: "WORKTREE_DIRTY",
-            hasUncommittedWork: true,
+            failureCode: code,
+            hasUncommittedWork: provenDirty ? true : null,
           });
           transitions++;
         }
@@ -676,35 +707,97 @@ export class WorkspaceExecutionService {
         const outcome = act.outcome as Record<string, unknown> | undefined;
         if (outcome?.pending === true && act.targetId) {
           const lease = await repository.findOne({ where: { id: act.targetId } });
-          if (lease) {
-            if (lease.state === "REMOVED") {
-              await actionsRepo.update(
-                { id: act.id },
-                {
-                  outcome: {
-                    workspaceExecutionId: lease.id,
-                    state: lease.state,
-                  },
+          if (!lease) {
+            await actionsRepo.update(
+              { id: act.id },
+              {
+                outcome: {
+                  workspaceExecutionId: act.targetId,
+                  state: "NOT_FOUND",
+                  failureCode: "LEASE_NOT_FOUND",
+                  error: `Execution workspace "${act.targetId}" does not exist`,
+                  refusal: true,
                 },
-              );
-            } else if (
-              lease.state === "PRESERVED" &&
-              lease.failureCode === "WORKTREE_DIRTY"
-            ) {
-              await actionsRepo.update(
-                { id: act.id },
-                {
-                  outcome: {
-                    workspaceExecutionId: lease.id,
-                    state: lease.state,
-                    failureCode: "WORKTREE_DIRTY",
-                    error: "Worktree contains uncommitted changes",
-                    refusal: true,
-                  },
-                },
-              );
-            }
+              },
+            );
+            continue;
           }
+          if (lease.state === "REMOVED") {
+            await actionsRepo.update(
+              { id: act.id },
+              {
+                outcome: {
+                  workspaceExecutionId: lease.id,
+                  state: lease.state,
+                },
+              },
+            );
+          } else if (lease.state === "PRESERVED") {
+            // H4: server-side recovery — pending REQUESTED/EXECUTING is
+            // reconciled against durable lease truth, not browser UUID.
+            // Preserve the actual failureCode; only refusal cases get refusal:true.
+            const isRefusal = !!lease.failureCode;
+            await actionsRepo.update(
+              { id: act.id },
+              {
+                outcome: {
+                  workspaceExecutionId: lease.id,
+                  state: lease.state,
+                  ...(lease.failureCode ? { failureCode: lease.failureCode } : {}),
+                  ...(isRefusal ? { error: lease.failureCode ?? "Worktree preserved", refusal: true } : {}),
+                  ...(lease.hasUncommittedWork !== null && lease.hasUncommittedWork !== undefined
+                    ? { hasUncommittedWork: lease.hasUncommittedWork }
+                    : {}),
+                },
+              },
+            );
+          } else if (lease.state === "IN_USE" || lease.state === "READY" || lease.state === "ALLOCATING") {
+            // Crash before RELEASE_REQUESTED: pending intent whose lease
+            // never entered release — mark INTERRUPTED so a retry (same
+            // key) can re-enter with truthful evidence (H4).
+            await actionsRepo.update(
+              { id: act.id },
+              {
+                outcome: {
+                  workspaceExecutionId: lease.id,
+                  state: "INTERRUPTED",
+                  failureCode: "RELEASE_INTERRUPTED",
+                  error: `Release intent committed but lease is ${lease.state}; retry with the same idempotency key to resume`,
+                  retryRequired: true,
+                },
+              },
+            );
+          } else if (lease.state === "RELEASE_REQUESTED") {
+            // Still in-flight — leave pending for the owner to complete;
+            // if EXECUTING crashed, the owner retry will claim and finish.
+            // Don't prematurely finalize here.
+          } else {
+            // FAILED, TRANSFERRED, etc. — surface truth
+            await actionsRepo.update(
+              { id: act.id },
+              {
+                outcome: {
+                  workspaceExecutionId: lease.id,
+                  state: lease.state,
+                  ...(lease.failureCode ? { failureCode: lease.failureCode } : {}),
+                  ...(lease.state === "FAILED" ? { refusal: true, error: lease.failureCode ?? "Lease failed" } : {}),
+                },
+              },
+            );
+          }
+        } else if (outcome?.pending === true && !act.targetId) {
+          // No target — mark interrupted so it doesn't stay pending forever
+          await actionsRepo.update(
+            { id: act.id },
+            {
+              outcome: {
+                state: "INTERRUPTED",
+                failureCode: "RELEASE_INTERRUPTED",
+                error: "Release intent has no target",
+                retryRequired: true,
+              },
+            },
+          );
         }
       }
     } catch {
@@ -795,13 +888,15 @@ export class WorkspaceExecutionService {
     }
     // Anything else is preserved (dirty or unknown) — never force-removed.
     const reason = outcome.refused;
+    const code = (outcome as { code?: string }).code ?? "WORKTREE_REMOVE_FAILED";
+    const provenDirty = code === "WORKTREE_DIRTY";
     await this.transition(row.id, "PRESERVED", {
-      failureCode: "WORKTREE_DIRTY",
-      hasUncommittedWork: true,
+      failureCode: code,
+      hasUncommittedWork: provenDirty ? true : null,
     });
     throw new WorkspaceExecutionError(
-      "WORKTREE_DIRTY",
-      `Execution workspace "${workspaceExecutionId}" contains uncommitted work (or removal failed): ${reason}. It is preserved for inspection; destructive cleanup is refused by default`,
+      code,
+      `Execution workspace "${workspaceExecutionId}" ${provenDirty ? "contains uncommitted work" : "removal failed"}: ${reason}. It is preserved for inspection; destructive cleanup is refused by default`,
     );
   }
 
@@ -813,5 +908,23 @@ export class WorkspaceExecutionService {
     await this.executions.update(id, { state, ...fields });
     const updated = await this.executions.findOneOrFail({ where: { id } });
     return updated;
+  }
+
+  private async hasReleaseAuthority(workspaceExecutionId: string): Promise<boolean> {
+    try {
+      const actionsRepo = this.dataSource.getRepository(OperatorActionEntity);
+      const action = await actionsRepo.findOne({
+        where: {
+          action: "release-execution-workspace",
+          targetId: workspaceExecutionId,
+        } as unknown as Record<string, unknown>,
+      });
+      if (!action) return false;
+      // Any durable action counts as authority — pending (REQUESTED/EXECUTING) or finalized.
+      // Legacy rows without pending flag also count (conservative).
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

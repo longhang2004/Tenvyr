@@ -162,8 +162,7 @@ individual services in separate terminals:
 pnpm dev:infra           # starts every service in the default Compose file
 pnpm dev:orchestrator    # :3001
 pnpm dev:gateway         # :3000
-pnpm dev:reviewer        # :3002
-pnpm dev:observability   # :3003
+pnpm dev:host            # :3002 (Local Executor Host — Dynamic Local Runtime Bridge)
 pnpm dev:frontend        # :4000
 ```
 
@@ -188,8 +187,7 @@ docker compose -f docker-compose.yml -f docker-compose.no-host-ports.yml up -d -
 | ------------------- | ----------------: |
 | Gateway             |              3000 |
 | Orchestrator        |              3001 |
-| Code reviewer       |              3002 |
-| Observability agent |              3003 |
+| Local Executor Host |              3002 |
 | Frontend            |              4000 |
 | Java Agent Runner   |              8085 |
 | Worker examples     |              8080 |
