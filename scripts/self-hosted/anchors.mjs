@@ -60,6 +60,7 @@ export const TABLES = [
   "coordination_iterations",
   "operator_actions",
   "workspace_executions",
+  "workspace_release_locks",
   "handoffs",
 ];
 

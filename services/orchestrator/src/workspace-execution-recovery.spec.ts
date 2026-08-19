@@ -363,14 +363,14 @@ describe("Workspace Execution Recovery, Idempotency & Handoff Safety Matrix", ()
       mode: "git-worktree",
       sourcePath: repoRoot,
       executionPath: cleanPath,
+      releaseOperationId: "action-1",
     });
     const svc = new WorkspaceExecutionService({ getRepository: () => mockRepo } as any);
     const transitions = await svc.reconcileWorkspaceExecutions();
-    expect(transitions).toBe(1);
-    expect(mockRepo.update).toHaveBeenCalledWith(
-      "lease-releasing-2",
-      expect.objectContaining({ state: "REMOVED" }),
-    );
+    // PP1 LAST CLOSURE: generic reconciler must NOT perform Git for RELEASE_REQUESTED; the owning release operation does.
+    // This lease is RELEASE_REQUESTED with valid releaseOperationId and still registered, so it stays for operation recovery.
+    expect(transitions).toBe(0);
+    expect(mockRepo.update).not.toHaveBeenCalled();
   });
 });
 
@@ -1317,7 +1317,7 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
         baseBranch: "main",
         baseHeadSha: headSha,
         state: "RELEASE_REQUESTED",
-        // No releaseOperationId — legacy/unmatched, even though historyAction exists for a different lease
+        // No releaseOperationId — legacy/unmatched, even though historical action exists for different lease
       }),
     );
     const transitions = await service.reconcileWorkspaceExecutions();
@@ -1328,6 +1328,233 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
     expect(require("node:fs").existsSync(unrelatedWt)).toBe(true);
     // History action must not have been used to authorize this unrelated lease
     expect(historyAction.id).not.toBe(reloaded?.releaseOperationId);
+  });
+
+  it("Target-level BARRIER B: different keys ×2 same workspace → one target owner, Git count exactly 1", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    const wt = `${executionRoot}/wt-barrier-b`;
+    addGitWorktree(repoRoot, wt, "tenvyr/barrier-b", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-barrier-b",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    resetRemoveInvocationCount();
+    const [r1, r2] = await Promise.allSettled([
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-b-key1", workspaceExecutionId: lease.id }),
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-b-key2", workspaceExecutionId: lease.id }),
+    ]);
+    const successes = [r1, r2].filter((r) => r.status === "fulfilled" && (r.value as any).result.state === "REMOVED");
+    const conflicts = [r1, r2].filter(
+      (r) => r.status === "rejected" && (r.reason as any).code === "RELEASE_IN_PROGRESS",
+    );
+    expect(successes).toHaveLength(1);
+    expect(conflicts).toHaveLength(1);
+    expect(getRemoveInvocationCount()).toBe(1);
+    const reloaded = await dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: lease.id } });
+    expect(reloaded?.state).toBe("REMOVED");
+    const actions = await dataSource.getRepository(OperatorActionEntity).find({ where: { targetId: lease.id } });
+    expect(actions.length).toBe(2);
+    const truthful = actions.every((a) => {
+      const o = a.outcome as any;
+      return o.state === "REMOVED" || o.failureCode === "RELEASE_IN_PROGRESS" || o.state === "INTERRUPTED";
+    });
+    expect(truthful).toBe(true);
+  });
+
+  it("Target-level BARRIER C: different keys ×3 same workspace → Git count exactly 1", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    const wt = `${executionRoot}/wt-barrier-c`;
+    addGitWorktree(repoRoot, wt, "tenvyr/barrier-c", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-barrier-c",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    resetRemoveInvocationCount();
+    const results = await Promise.allSettled([
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-c-k1", workspaceExecutionId: lease.id }),
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-c-k2", workspaceExecutionId: lease.id }),
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-c-k3", workspaceExecutionId: lease.id }),
+    ]);
+    const successes = results.filter((r) => r.status === "fulfilled" && (r.value as any).result.state === "REMOVED");
+    expect(successes).toHaveLength(1);
+    expect(getRemoveInvocationCount()).toBe(1);
+    const reloaded = await dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: lease.id } });
+    expect(reloaded?.state).toBe("REMOVED");
+  });
+
+  it("Target-level BARRIER D: active owner blocked before Git + Attention polling → no second Git", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    const { AttentionService } = await import("./services/attention.service");
+    const attentionService = new AttentionService(dataSource, service);
+    const wt = `${executionRoot}/wt-barrier-d`;
+    addGitWorktree(repoRoot, wt, "tenvyr/barrier-d", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-barrier-d",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    let releaseBarrier: () => void;
+    const barrierPromise = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let ownerStarted = false;
+    resetRemoveInvocationCount();
+    setBeforeRemoveHook(async () => {
+      if (!ownerStarted) {
+        ownerStarted = true;
+        await barrierPromise;
+      }
+    });
+    try {
+      const ownerPromise = workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-d-owner", workspaceExecutionId: lease.id });
+      await new Promise((r) => setTimeout(r, 200));
+      // Poll Attention repeatedly while owner is blocked
+      for (let i = 0; i < 5; i++) {
+        await attentionService.attention();
+        await new Promise((r) => setTimeout(r, 100));
+        expect(getRemoveInvocationCount()).toBe(0);
+      }
+      releaseBarrier!();
+      const ownerRes = await ownerPromise;
+      expect(ownerRes.result.state).toBe("REMOVED");
+      expect(getRemoveInvocationCount()).toBe(1);
+      // After owner completes, Attention should still not trigger extra Git
+      await attentionService.attention();
+      expect(getRemoveInvocationCount()).toBe(1);
+    } finally {
+      setBeforeRemoveHook(null);
+      resetRemoveInvocationCount();
+    }
+  });
+
+  it("Target-level BARRIER E/F: stale vs current-process EXECUTING takeover", async () => {
+    const workbenchService = new WorkbenchCommandService(
+      dataSource,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+    );
+    const wt = `${executionRoot}/wt-barrier-e`;
+    addGitWorktree(repoRoot, wt, "tenvyr/barrier-e", headSha);
+    const lease = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-barrier-e",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    const key = "barrier-e-key";
+    // Create a stale EXECUTING from previous process
+    const deadProcessId = "dead-process-999";
+    const staleAction = await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey: key,
+        actor: "local-operator",
+        targetId: lease.id,
+        payload: { workspaceExecutionId: lease.id, reason: null },
+        outcome: { pending: true, phase: "EXECUTING", ownerProcessId: deadProcessId, ownerToken: "old", claimedAt: new Date().toISOString() },
+      }),
+    );
+    // Current process should be able to take over (different PROCESS_INSTANCE_ID)
+    resetRemoveInvocationCount();
+    const res = await workbenchService.releaseExecutionWorkspace({ idempotencyKey: key, workspaceExecutionId: lease.id });
+    expect(res.result.state).toBe("REMOVED");
+    expect(getRemoveInvocationCount()).toBe(1);
+
+    // F: current-process EXECUTING cannot be taken over (same PROCESS_INSTANCE_ID)
+    const wt2 = `${executionRoot}/wt-barrier-f`;
+    addGitWorktree(repoRoot, wt2, "tenvyr/barrier-f", headSha);
+    const lease2 = await dataSource.getRepository(WorkspaceExecutionEntity).save(
+      dataSource.getRepository(WorkspaceExecutionEntity).create({
+        sourceWorkspaceId: "ws-barrier-f",
+        sourcePath: repoRoot,
+        mode: "git-worktree",
+        executionPath: wt2,
+        baseBranch: "main",
+        baseHeadSha: headSha,
+        state: "PRESERVED",
+      }),
+    );
+    const key2 = "barrier-f-key";
+    const { PROCESS_INSTANCE_ID } = await import("./services/workbench-command.service");
+    await dataSource.getRepository(OperatorActionEntity).save(
+      dataSource.getRepository(OperatorActionEntity).create({
+        action: "release-execution-workspace",
+        idempotencyKey: key2,
+        actor: "local-operator",
+        targetId: lease2.id,
+        payload: { workspaceExecutionId: lease2.id, reason: null },
+        outcome: { pending: true, phase: "EXECUTING", ownerProcessId: PROCESS_INSTANCE_ID, ownerToken: "current", claimedAt: new Date().toISOString() },
+      }),
+    );
+    // A second attempt with same key while owner is live should see IN_PROGRESS and not take over
+    await expect(workbenchService.releaseExecutionWorkspace({ idempotencyKey: key2, workspaceExecutionId: lease2.id })).rejects.toMatchObject({
+      code: "OPERATION_IN_PROGRESS",
+    });
+    // And a different key targeting same workspace should see RELEASE_IN_PROGRESS (target-level), not take over via stale logic
+    await expect(
+      workbenchService.releaseExecutionWorkspace({ idempotencyKey: "barrier-f-other-key", workspaceExecutionId: lease2.id }),
+    ).rejects.toMatchObject({ code: "RELEASE_IN_PROGRESS" });
   });
 
   it("Audit variant: LEASE_NOT_RELEASABLE records actual state READY/IN_USE/TRANSFERRED", async () => {

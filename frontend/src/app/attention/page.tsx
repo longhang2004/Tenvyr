@@ -106,10 +106,8 @@ export default function AttentionPage() {
         const msg = (parsed.result as { error?: string })?.error ?? "Workspace is preserved; release was refused";
         setNotice({ type: "error", message: msg });
       } else {
-        setNotice({
-          type: "success",
-          message: "Execution workspace released safely.",
-        });
+        const msg = (parsed.result as { error?: string })?.error ?? `Unknown outcome: ${String(resultState ?? "unknown")}`;
+        setNotice({ type: "error", message: msg });
       }
       await load();
     } catch (err: unknown) {

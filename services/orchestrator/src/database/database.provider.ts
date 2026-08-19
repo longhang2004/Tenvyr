@@ -57,9 +57,11 @@ import { Handoff1722270022000 } from "./migrations/1722270022000-Handoff";
 import { WorkspaceExecutionAllocationKey1722270023000 } from "./migrations/1722270023000-WorkspaceExecutionAllocationKey";
 import { WorkspaceExecutionUniqueAllocationKey1722270024000 } from "./migrations/1722270024000-WorkspaceExecutionUniqueAllocationKey";
 import { WorkspaceExecutionReleaseOperation1722270025000 } from "./migrations/1722270025000-WorkspaceExecutionReleaseOperation";
+import { WorkspaceReleaseLock1722270026000 } from "./migrations/1722270026000-WorkspaceReleaseLock";
 import { ModelSourceEntity } from "../entities/model-source.entity";
 import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { HandoffEntity } from "../entities/handoff.entity";
+import { WorkspaceReleaseLockEntity } from "../entities/workspace-release-lock.entity";
 
 export function databaseOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -112,6 +114,7 @@ export function databaseOptions(
       ModelSourceEntity,
       WorkspaceExecutionEntity,
       HandoffEntity,
+      WorkspaceReleaseLockEntity,
     ],
     migrations: [
       MilestoneZeroFoundation1722270000000,
@@ -140,6 +143,7 @@ export function databaseOptions(
       WorkspaceExecutionAllocationKey1722270023000,
       WorkspaceExecutionUniqueAllocationKey1722270024000,
       WorkspaceExecutionReleaseOperation1722270025000,
+      WorkspaceReleaseLock1722270026000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",

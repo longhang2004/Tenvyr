@@ -687,7 +687,6 @@ export class WorkbenchCommandService {
       assertSameRequestPayload(existing.payload, payloadHash, action, key);
       return existing;
     });
-
     let outcome = auditRow.outcome as Record<string, unknown> | undefined;
     // PP1 FINAL: explicit outcome semantics — INTERRUPTED/IN_PROGRESS are NOT success.
     if (outcome && outcome.pending !== true) {
@@ -769,6 +768,53 @@ export class WorkbenchCommandService {
         throw new WorkspaceExecutionError(
           (outcome.failureCode as string) ?? "RELEASE_INTERRUPTED",
           (outcome.error as string) ?? "Release outcome requires retry",
+        );
+      }
+    }
+
+    // Target-level active release check: at most one ACTIVE release per workspaceExecutionId.
+    const { WorkspaceExecutionEntity } = await import("../entities/workspace-execution.entity");
+    const leaseRow0 = await this.dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: targetId } as any });
+    if (leaseRow0 && (leaseRow0 as unknown as { state: string }).state === "RELEASE_REQUESTED") {
+      const ownerOp = (leaseRow0 as unknown as { releaseOperationId?: string | null }).releaseOperationId;
+      if (ownerOp && ownerOp !== auditRow.id) {
+        throw new WorkspaceExecutionError(
+          "RELEASE_IN_PROGRESS",
+          `Execution workspace "${input.workspaceExecutionId}" release is already in progress by operation ${ownerOp}`,
+        );
+      }
+      if (!ownerOp) {
+        throw new WorkspaceExecutionError(
+          "RELEASE_UNAUTHORIZED",
+          `Execution workspace "${input.workspaceExecutionId}" RELEASE_REQUESTED has no authorizing operation`,
+        );
+      }
+    }
+    // 2) Check for any other EXECUTING (same PROCESS_INSTANCE_ID) targeting the same workspace.
+    const activeForTarget = await this.dataSource
+      .getRepository(OperatorActionEntity)
+      .createQueryBuilder("a")
+      .where("a.action = :action", { action })
+      .andWhere("a.targetId = :targetId", { targetId })
+      .andWhere("a.id != :id", { id: auditRow.id })
+      .andWhere("(a.outcome->>'pending')::boolean = true")
+      .andWhere("a.outcome->>'phase' = 'EXECUTING'")
+      .andWhere("a.outcome->>'ownerProcessId' = :pid", { pid: PROCESS_INSTANCE_ID })
+      .getMany();
+    // console.log(`activeForTarget ${targetId} current ${auditRow.id} found ${activeForTarget.length} other EXECUTING same pid`);
+    if (activeForTarget.length > 0) {
+      throw new WorkspaceExecutionError(
+        "RELEASE_IN_PROGRESS",
+        `Execution workspace "${input.workspaceExecutionId}" release is already in progress`,
+      );
+    }
+    for (const other of activeForTarget) {
+      const otherOutcome = other.outcome as Record<string, unknown> | undefined;
+      const otherPid = (otherOutcome as { ownerProcessId?: string } | undefined)?.ownerProcessId;
+      if (otherPid === PROCESS_INSTANCE_ID) {
+        throw new WorkspaceExecutionError(
+          "RELEASE_IN_PROGRESS",
+          `Execution workspace "${input.workspaceExecutionId}" release is already in progress`,
         );
       }
     }

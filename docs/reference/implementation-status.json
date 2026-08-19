@@ -1114,11 +1114,11 @@
    "docs": [
     "docs/architecture/attention.md"
    ],
-   "limitations": [
-    "Read projection only — items exist exactly while their durable source condition exists; resolution always uses the existing authority commands",
-    "Classes are limited to what durable rows prove today (approval/FAILED/LIMIT_REACHED/preserved uncommitted workspace)",
-    "Workspace attention requires the lazy lease reconciliation to have run (run start or attention read)"
-   ]
+    "limitations": [
+     "Read projection only — items exist exactly while their durable source condition exists; resolution always uses the existing authority commands",
+     "Classes are limited to what durable rows prove today (approval/FAILED/LIMIT_REACHED/preserved uncommitted workspace)",
+     "Attention is a pure read projection; terminal IN_USE → PRESERVED is handled authoritatively via run completion (no lazy reconciliation on read)"
+    ]
   },
   {
    "id": "portable-handoff",

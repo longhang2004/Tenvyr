@@ -758,7 +758,7 @@ test("the canonical backup inventory matches the authoritative entity/schema inv
   assert.ok(backupSet.has("plan_proposals"));
   assert.ok(backupSet.has("workspace_executions"));
   assert.ok(backupSet.has("handoffs"));
-  assert.equal(TABLES.length, 35);
+  assert.equal(TABLES.length, 36);
 });
 
 test("restore verifies BEFORE quiescing and swaps via a rollback-capable state machine", async () => {
