@@ -138,7 +138,7 @@ For a scripted 5–10 minute demo flow, follow the
 
 The one-command dev stack starts the infrastructure (Postgres, Redis,
 Zookeeper, Kafka, Kafka UI) plus the operational services — orchestrator,
-gateway, and frontend — in parallel watch mode:
+gateway, Local Executor Host, and frontend — in parallel watch mode:
 
 ```bash
 pnpm dev
@@ -151,7 +151,7 @@ cleanup. If you previously started the full Compose stack
 (`pnpm dev:infra`), stop it first (`pnpm dev:infra:down`) — its app containers
 hold the host ports the watch services need.
 
-`pnpm dev` covers the HTTP Worker path (orchestrator + gateway + dashboard).
+`pnpm dev` covers the HTTP Worker path (orchestrator + gateway + Local Executor Host + dashboard).
 The Kafka-path agents (`pnpm dev:reviewer`, `pnpm dev:observability`) are not
 included because a host-run Kafka client cannot reach the Compose broker (it
 advertises its docker-internal hostname) — run those agents inside the full

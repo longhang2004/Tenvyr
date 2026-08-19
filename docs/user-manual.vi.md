@@ -136,8 +136,8 @@ thật được export và `LLM_FAILURE_MODE` không đặt, lỗi provider sẽ
 ## 6. Chạy stack phát triển đầy đủ
 
 Lệnh một dòng cho stack phát triển: khởi động hạ tầng (Postgres, Redis,
-Zookeeper, Kafka, Kafka UI) cùng các dịch vụ vận hành — orchestrator, gateway
-và frontend — song song ở chế độ watch:
+Zookeeper, Kafka, Kafka UI) cùng các dịch vụ vận hành — orchestrator, gateway,
+Local Executor Host và frontend — song song ở chế độ watch:
 
 ```bash
 pnpm dev
@@ -150,7 +150,7 @@ không chạy được. Nếu trước đó bạn đã khởi động toàn bộ
 (`pnpm dev:infra`), hãy dừng nó trước (`pnpm dev:infra:down`) — các container
 ứng dụng của nó đang giữ cổng host mà các dịch vụ watch cần.
 
-`pnpm dev` bao phủ đường HTTP Worker (orchestrator + gateway + dashboard).
+`pnpm dev` bao phủ đường HTTP Worker (orchestrator + gateway + Local Executor Host + dashboard).
 Các agent đường Kafka (`pnpm dev:reviewer`, `pnpm dev:observability`) không
 được bao gồm vì client Kafka chạy trên host không kết nối được broker Compose
 (nó quảng bá hostname nội bộ docker) — hãy chạy các agent đó bên trong toàn bộ

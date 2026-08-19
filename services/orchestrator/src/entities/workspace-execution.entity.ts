@@ -76,6 +76,12 @@ export class WorkspaceExecutionEntity {
   @Column({ type: "boolean", nullable: true })
   hasUncommittedWork: boolean | null;
 
+  /** PP1 FINAL CLOSURE: exact durable correlation for a RELEASE_REQUESTED
+   *  transition — the OperatorAction id that authorized it. Null for every
+   *  other state; legacy rows without it fail closed (RELEASE_UNAUTHORIZED). */
+  @Column({ type: "varchar", length: 36, nullable: true })
+  releaseOperationId: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

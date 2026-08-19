@@ -45,7 +45,9 @@ export type GitResult = {
   stderr: string;
 };
 
-export function runBoundedGit(cwd: string, args: string[]): GitResult {
+export type GitRunner = (cwd: string, args: string[]) => GitResult;
+
+let defaultGitRunner: GitRunner = (cwd, args) => {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
@@ -63,6 +65,34 @@ export function runBoundedGit(cwd: string, args: string[]): GitResult {
     stdout: (result.stdout ?? "").slice(0, GIT_WORKTREE_BOUNDS.maxOutputBytes),
     stderr: (result.stderr ?? "").slice(0, GIT_WORKTREE_BOUNDS.maxOutputBytes),
   };
+};
+
+let currentGitRunner: GitRunner = defaultGitRunner;
+let removeInvocationCount = 0;
+let beforeRemoveHook: (() => Promise<void>) | null = null;
+
+export function setGitRunner(runner: GitRunner | null): void {
+  currentGitRunner = runner ?? defaultGitRunner;
+}
+
+export function getGitRunner(): GitRunner {
+  return currentGitRunner;
+}
+
+export function setBeforeRemoveHook(hook: (() => Promise<void>) | null): void {
+  beforeRemoveHook = hook;
+}
+
+export function getRemoveInvocationCount(): number {
+  return removeInvocationCount;
+}
+
+export function resetRemoveInvocationCount(): void {
+  removeInvocationCount = 0;
+}
+
+export function runBoundedGit(cwd: string, args: string[]): GitResult {
+  return currentGitRunner(cwd, args);
 }
 
 /** Is `executionPath` registered as a git worktree of the repo at
@@ -154,6 +184,7 @@ export function removeGitWorktree(
   sourceRepoRoot: string,
   executionPath: string,
 ): "removed" | "already-removed" | { refused: string; code: "WORKTREE_DIRTY" | "WORKTREE_REMOVE_FAILED" | "WORKTREE_STATE_UNKNOWN" } {
+  removeInvocationCount++;
   const removed = runBoundedGit(sourceRepoRoot, [
     "worktree",
     "remove",
@@ -167,10 +198,13 @@ export function removeGitWorktree(
   const refused = (removed.stderr || "git worktree remove failed").slice(0, 512);
   // Only claim dirty when Git's refusal indicates dirty/untracked changes;
   // otherwise the failure is operational/unknown and must not set hasUncommittedWork.
+  // Git's message varies: "contains modified files", "contains untracked files", or combined "contains modified or untracked files"
   const looksDirty =
-    stderrLower.includes("contains modified files") ||
-    stderrLower.includes("contains untracked files") ||
-    stderrLower.includes("cannot remove") && (stderrLower.includes("dirty") || stderrLower.includes("modified") || stderrLower.includes("untracked"));
+    stderrLower.includes("contains modified") ||
+    stderrLower.includes("contains untracked") ||
+    stderrLower.includes("untracked files") ||
+    stderrLower.includes("modified files") ||
+    (stderrLower.includes("cannot remove") && (stderrLower.includes("dirty") || stderrLower.includes("modified") || stderrLower.includes("untracked")));
   if (looksDirty || stderrLower.includes("dirty")) {
     return { refused, code: "WORKTREE_DIRTY" };
   }
@@ -660,11 +694,11 @@ export class WorkspaceExecutionService {
         transitions++;
         continue;
       }
-      // H5: RELEASE_REQUESTED recovery requires durable operator authority.
-      // If no matching OperatorAction exists for this lease, fail closed:
-      // preserve the resource, surface operator-visible evidence, do not
-      // silently remove an externally-destructive transition.
-      const hasAuthority = await this.hasReleaseAuthority(row.id);
+      // H5/PP1 FINAL: RELEASE_REQUESTED recovery requires EXACT durable operator authority.
+      // The lease's releaseOperationId must equal a durable OperatorAction id for
+      // action=release-execution-workspace and targetId=workspaceExecutionId.
+      // Legacy/unmatched RELEASE_REQUESTED (null or no exact match) fails closed.
+      const hasAuthority = await this.hasReleaseAuthority(row);
       if (!hasAuthority) {
         await this.transition(row.id, "PRESERVED", {
           failureCode: "RELEASE_UNAUTHORIZED",
@@ -673,6 +707,7 @@ export class WorkspaceExecutionService {
         transitions++;
         continue;
       }
+      if (beforeRemoveHook) await beforeRemoveHook();
       const isRegistered = worktreeIsRegistered(row.sourcePath, row.executionPath);
       if (!isRegistered) {
         await this.transition(row.id, "REMOVED");
@@ -722,6 +757,7 @@ export class WorkspaceExecutionService {
             );
             continue;
           }
+          const phase = (outcome as { phase?: string }).phase;
           if (lease.state === "REMOVED") {
             await actionsRepo.update(
               { id: act.id },
@@ -733,44 +769,95 @@ export class WorkspaceExecutionService {
               },
             );
           } else if (lease.state === "PRESERVED") {
-            // H4: server-side recovery — pending REQUESTED/EXECUTING is
-            // reconciled against durable lease truth, not browser UUID.
-            // Preserve the actual failureCode; only refusal cases get refusal:true.
-            const isRefusal = !!lease.failureCode;
-            await actionsRepo.update(
-              { id: act.id },
-              {
-                outcome: {
-                  workspaceExecutionId: lease.id,
-                  state: lease.state,
-                  ...(lease.failureCode ? { failureCode: lease.failureCode } : {}),
-                  ...(isRefusal ? { error: lease.failureCode ?? "Worktree preserved", refusal: true } : {}),
-                  ...(lease.hasUncommittedWork !== null && lease.hasUncommittedWork !== undefined
-                    ? { hasUncommittedWork: lease.hasUncommittedWork }
-                    : {}),
+            // PP1 FINAL: never fabricate success for a clean PRESERVED that is not the result of this exact operation.
+            // A PRESERVED with matching releaseOperationId and a failureCode is a truthful refusal from this operation.
+            // A clean PRESERVED (or mismatched operation) with pending EXECUTING/REQUESTED is a crash-before-release → INTERRUPTED or keep pending for takeover.
+            if (lease.releaseOperationId === act.id && lease.failureCode) {
+              const isRefusal = true;
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: lease.state,
+                    failureCode: lease.failureCode,
+                    error: lease.failureCode ?? "Worktree preserved",
+                    refusal: true,
+                    ...(lease.hasUncommittedWork !== null && lease.hasUncommittedWork !== undefined
+                      ? { hasUncommittedWork: lease.hasUncommittedWork }
+                      : {}),
+                  },
                 },
-              },
-            );
+              );
+            } else if (phase === "REQUESTED") {
+              // Crash before claim: keep pending for takeover (matrix A) — do not finalize as success
+            } else if (phase === "EXECUTING") {
+              // Crash before RELEASE_REQUESTED: EXECUTING but lease never became RELEASE_REQUESTED for this operation → INTERRUPTED
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: "INTERRUPTED",
+                    failureCode: "RELEASE_INTERRUPTED",
+                    error: `Release intent committed but lease is ${lease.state}; retry with the same idempotency key to resume`,
+                    retryRequired: true,
+                  },
+                },
+              );
+            } else {
+              // Fallback: treat as INTERRUPTED to avoid false success
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: "INTERRUPTED",
+                    failureCode: "RELEASE_INTERRUPTED",
+                    error: `Release pending but lease is ${lease.state}; retry required`,
+                    retryRequired: true,
+                  },
+                },
+              );
+            }
           } else if (lease.state === "IN_USE" || lease.state === "READY" || lease.state === "ALLOCATING") {
-            // Crash before RELEASE_REQUESTED: pending intent whose lease
-            // never entered release — mark INTERRUPTED so a retry (same
-            // key) can re-enter with truthful evidence (H4).
-            await actionsRepo.update(
-              { id: act.id },
-              {
-                outcome: {
-                  workspaceExecutionId: lease.id,
-                  state: "INTERRUPTED",
-                  failureCode: "RELEASE_INTERRUPTED",
-                  error: `Release intent committed but lease is ${lease.state}; retry with the same idempotency key to resume`,
-                  retryRequired: true,
+            if (phase === "REQUESTED") {
+              // Crash before claim: keep pending for takeover (matrix A)
+            } else {
+              // Crash before RELEASE_REQUESTED: pending EXECUTING whose lease never entered release → INTERRUPTED
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: "INTERRUPTED",
+                    failureCode: "RELEASE_INTERRUPTED",
+                    error: `Release intent committed but lease is ${lease.state}; retry with the same idempotency key to resume`,
+                    retryRequired: true,
+                  },
                 },
-              },
-            );
+              );
+            }
           } else if (lease.state === "RELEASE_REQUESTED") {
-            // Still in-flight — leave pending for the owner to complete;
-            // if EXECUTING crashed, the owner retry will claim and finish.
-            // Don't prematurely finalize here.
+            // Still in-flight — leave pending for the owner to complete only if exact correlation;
+            // unmatched RELEASE_REQUESTED is handled by the lease reconciliation (fail closed), but a pending act
+            // that does not match the lease's releaseOperationId should be marked INTERRUPTED
+            const leaseOp = (lease as unknown as { releaseOperationId?: string | null }).releaseOperationId;
+            if (leaseOp !== act.id) {
+              await actionsRepo.update(
+                { id: act.id },
+                {
+                  outcome: {
+                    workspaceExecutionId: lease.id,
+                    state: "INTERRUPTED",
+                    failureCode: "RELEASE_INTERRUPTED",
+                    error: `Release pending but lease RELEASE_REQUESTED is owned by a different operation; retry required`,
+                    retryRequired: true,
+                  },
+                },
+              );
+            }
+            // else keep pending for the exact owner
           } else {
             // FAILED, TRANSFERRED, etc. — surface truth
             await actionsRepo.update(
@@ -846,6 +933,7 @@ export class WorkspaceExecutionService {
    */
   async releaseExecutionWorkspace(
     workspaceExecutionId: string,
+    releaseOperationId?: string | null,
   ): Promise<WorkspaceExecutionEntity> {
     const row = await this.executions.findOne({
       where: { id: workspaceExecutionId },
@@ -879,8 +967,40 @@ export class WorkspaceExecutionService {
         `Execution workspace "${workspaceExecutionId}" has no execution path`,
       );
     }
-    // 1. Mark durable intent RELEASE_REQUESTED before external Git mutation
-    await this.transition(row.id, "RELEASE_REQUESTED", {});
+    // PP1 FINAL: exact operation correlation for RELEASE_REQUESTED.
+    // If the lease is already RELEASE_REQUESTED, its releaseOperationId must match the current operation; otherwise it's an unmatched legacy state.
+    if (row.state === "RELEASE_REQUESTED") {
+      const existingOp = (row as unknown as { releaseOperationId?: string | null }).releaseOperationId;
+      if (existingOp && releaseOperationId && existingOp !== releaseOperationId) {
+        throw new WorkspaceExecutionError(
+          "RELEASE_UNAUTHORIZED",
+          `Execution workspace "${workspaceExecutionId}" is RELEASE_REQUESTED by a different operation; this operation is not authorized to mutate it`,
+        );
+      }
+      if (!existingOp || (releaseOperationId && existingOp !== releaseOperationId)) {
+        // Legacy/unmatched RELEASE_REQUESTED with no exact authority — fail closed
+        if (!existingOp) {
+          throw new WorkspaceExecutionError(
+            "RELEASE_UNAUTHORIZED",
+            `Execution workspace "${workspaceExecutionId}" RELEASE_REQUESTED has no authorizing operation; refusing Git mutation`,
+          );
+        }
+      }
+    }
+    // 1. Mark durable intent RELEASE_REQUESTED before external Git mutation, with exact operation correlation
+    if (row.state !== "RELEASE_REQUESTED") {
+      await this.transition(row.id, "RELEASE_REQUESTED", {
+        ...(releaseOperationId ? { releaseOperationId } : {}),
+      });
+    } else if (releaseOperationId && (row as unknown as { releaseOperationId?: string | null }).releaseOperationId !== releaseOperationId) {
+      // Already RELEASE_REQUESTED but caller is the authorized operation — ensure correlation is set (idempotent)
+      await this.transition(row.id, "RELEASE_REQUESTED", { releaseOperationId } as unknown as Partial<WorkspaceExecutionEntity>);
+    }
+    // Matrix D: if filesystem already shows worktree absent, transition to REMOVED without destructive Git call
+    if (!worktreeIsRegistered(row.sourcePath, row.executionPath)) {
+      return this.transition(row.id, "REMOVED", {});
+    }
+    if (beforeRemoveHook) await beforeRemoveHook();
     const sourcePath = row.sourcePath;
     const outcome = removeGitWorktree(sourcePath, row.executionPath);
     if (outcome === "removed" || outcome === "already-removed") {
@@ -910,18 +1030,21 @@ export class WorkspaceExecutionService {
     return updated;
   }
 
-  private async hasReleaseAuthority(workspaceExecutionId: string): Promise<boolean> {
+  private async hasReleaseAuthority(row: WorkspaceExecutionEntity): Promise<boolean> {
     try {
+      const opId = (row as unknown as { releaseOperationId?: string | null }).releaseOperationId;
+      if (!opId) return false;
       const actionsRepo = this.dataSource.getRepository(OperatorActionEntity);
       const action = await actionsRepo.findOne({
         where: {
+          id: opId,
           action: "release-execution-workspace",
-          targetId: workspaceExecutionId,
+          targetId: row.id,
         } as unknown as Record<string, unknown>,
       });
       if (!action) return false;
-      // Any durable action counts as authority — pending (REQUESTED/EXECUTING) or finalized.
-      // Legacy rows without pending flag also count (conservative).
+      // Exact correlation required: the lease's releaseOperationId must equal a durable release action for this target.
+      // Pending or finalized both count, but the operation must be the one that authorized this RELEASE_REQUESTED.
       return true;
     } catch {
       return false;

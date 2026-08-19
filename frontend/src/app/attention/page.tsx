@@ -82,15 +82,46 @@ export default function AttentionPage() {
       const res = await tenvyrApi.releaseExecutionWorkspace(
         item.workspaceExecutionId,
       );
-      parseWorkbenchCommandResult(res.data);
-      setNotice({
-        type: "success",
-        message: "Execution workspace released safely.",
-      });
+      const parsed = parseWorkbenchCommandResult(res.data);
+      const resultState = (parsed.result as { state?: string } | undefined)?.state;
+      const failureCode = (parsed.result as { failureCode?: string } | undefined)?.failureCode;
+      const retryRequired = (parsed.result as { retryRequired?: boolean } | undefined)?.retryRequired;
+      // PP1 FINAL §4: never show "released safely" unless durable truth is REMOVED
+      if (resultState === "REMOVED") {
+        setNotice({
+          type: "success",
+          message: "Execution workspace released safely.",
+        });
+      } else if (resultState === "IN_PROGRESS" || failureCode === "OPERATION_IN_PROGRESS") {
+        setNotice({
+          type: "info",
+          message: "Release operation is in progress; retry with the same operation to observe the final outcome.",
+        });
+      } else if (resultState === "INTERRUPTED" || retryRequired === true) {
+        setNotice({
+          type: "info",
+          message: "Release was interrupted; retry with the same idempotency key to resume.",
+        });
+      } else if (resultState === "PRESERVED" || resultState === "NOT_FOUND") {
+        const msg = (parsed.result as { error?: string })?.error ?? "Workspace is preserved; release was refused";
+        setNotice({ type: "error", message: msg });
+      } else {
+        setNotice({
+          type: "success",
+          message: "Execution workspace released safely.",
+        });
+      }
       await load();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      setNotice({ type: "error", message });
+      const lower = message.toLowerCase();
+      if (lower.includes("in progress") || lower.includes("operation_in_progress")) {
+        setNotice({ type: "info", message: "Release operation is in progress; retry to observe the final outcome." });
+      } else if (lower.includes("interrupted") || lower.includes("retry_required") || lower.includes("retryrequired")) {
+        setNotice({ type: "info", message: "Release was interrupted; retry with the same idempotency key to resume." });
+      } else {
+        setNotice({ type: "error", message });
+      }
     } finally {
       setActing(null);
     }

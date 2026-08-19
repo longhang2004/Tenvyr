@@ -56,6 +56,7 @@ import { WorkspaceExecutionIsolation1722270021000 } from "./migrations/172227002
 import { Handoff1722270022000 } from "./migrations/1722270022000-Handoff";
 import { WorkspaceExecutionAllocationKey1722270023000 } from "./migrations/1722270023000-WorkspaceExecutionAllocationKey";
 import { WorkspaceExecutionUniqueAllocationKey1722270024000 } from "./migrations/1722270024000-WorkspaceExecutionUniqueAllocationKey";
+import { WorkspaceExecutionReleaseOperation1722270025000 } from "./migrations/1722270025000-WorkspaceExecutionReleaseOperation";
 import { ModelSourceEntity } from "../entities/model-source.entity";
 import { WorkspaceExecutionEntity } from "../entities/workspace-execution.entity";
 import { HandoffEntity } from "../entities/handoff.entity";
@@ -138,6 +139,7 @@ export function databaseOptions(
       Handoff1722270022000,
       WorkspaceExecutionAllocationKey1722270023000,
       WorkspaceExecutionUniqueAllocationKey1722270024000,
+      WorkspaceExecutionReleaseOperation1722270025000,
     ],
     migrationsRun:
       !disposableDevelopment && env.TENVYR_DB_MIGRATIONS !== "false",
