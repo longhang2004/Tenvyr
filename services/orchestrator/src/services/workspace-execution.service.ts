@@ -1065,17 +1065,20 @@ export class WorkspaceExecutionService {
       if (currentOp) {
         return { acquired: false, fresh: row };
       }
-      try {
-        await manager.query(
-          `INSERT INTO "workspace_release_locks" ("workspaceExecutionId", "releaseOperationId") VALUES ($1, $2)`,
-          [workspaceExecutionId, releaseOperationId],
-        );
-      } catch (e: any) {
-        if (String(e?.code) === "23505" || String(e?.message).includes("duplicate key")) {
+      const insertResult: any = await manager.query(
+        `INSERT INTO "workspace_release_locks" ("workspaceExecutionId", "releaseOperationId") VALUES ($1, $2) ON CONFLICT ("workspaceExecutionId") DO NOTHING RETURNING "workspaceExecutionId"`,
+        [workspaceExecutionId, releaseOperationId],
+      );
+      const inserted = Array.isArray(insertResult) ? insertResult.length > 0 : (insertResult?.rowCount ?? 0) > 0 || (insertResult as any)?.length > 0;
+      const didInsert = (insertResult as any)?.rowCount === 1 || inserted;
+      if (!didInsert) {
+        const existingLock: any = await manager.query(`SELECT "releaseOperationId" FROM "workspace_release_locks" WHERE "workspaceExecutionId" = $1`, [workspaceExecutionId]);
+        const existingOp = Array.isArray(existingLock) ? existingLock[0]?.releaseOperationId : (existingLock as any)?.rows?.[0]?.releaseOperationId;
+        if (existingOp === releaseOperationId) {
+        } else {
           const fresh2 = await repo.findOne({ where: { id: workspaceExecutionId } });
           return { acquired: false, fresh: fresh2 };
         }
-        throw e;
       }
       const result = await repo
         .createQueryBuilder()
@@ -1091,9 +1094,11 @@ export class WorkspaceExecutionService {
           releaseOperationId,
         ]);
         const fresh2 = await repo.findOne({ where: { id: workspaceExecutionId } });
+        console.log(`tryAcquireTarget ${workspaceExecutionId} op ${releaseOperationId} not acquired fresh state ${fresh2?.state} currentOp ${(fresh2 as any)?.releaseOperationId}`);
         return { acquired: false, fresh: fresh2 };
       }
       const fresh = await repo.findOne({ where: { id: workspaceExecutionId } });
+      console.log(`tryAcquireTarget ${workspaceExecutionId} op ${releaseOperationId} acquired fresh state ${fresh?.state}`);
       return { acquired: true, fresh };
     });
   }
