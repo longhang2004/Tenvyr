@@ -1089,16 +1089,10 @@ export class WorkspaceExecutionService {
         .andWhere("releaseOperationId IS NULL")
         .execute();
       if ((result.affected ?? 0) !== 1) {
-        await manager.query(`DELETE FROM "workspace_release_locks" WHERE "workspaceExecutionId" = $1 AND "releaseOperationId" = $2`, [
-          workspaceExecutionId,
-          releaseOperationId,
-        ]);
         const fresh2 = await repo.findOne({ where: { id: workspaceExecutionId } });
-        console.log(`tryAcquireTarget ${workspaceExecutionId} op ${releaseOperationId} not acquired fresh state ${fresh2?.state} currentOp ${(fresh2 as any)?.releaseOperationId}`);
         return { acquired: false, fresh: fresh2 };
       }
       const fresh = await repo.findOne({ where: { id: workspaceExecutionId } });
-      console.log(`tryAcquireTarget ${workspaceExecutionId} op ${releaseOperationId} acquired fresh state ${fresh?.state}`);
       return { acquired: true, fresh };
     });
   }
