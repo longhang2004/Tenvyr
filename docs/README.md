@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-08-11
+last_verified: 2026-09-10
 sources:
   - package.json
   - docs/reference/implementation-status.json
@@ -91,7 +91,7 @@ Developer tooling is not a Tenvyr production runtime feature.
 ## Roadmap, plans, and history
 
 - Planned work: [roadmap index](roadmap/README.md), the accepted
-  [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md),
+  [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md) (M8–M10 plans archived; M11 remains active),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
   the [P2 runtime model sources + model selection slice](plans/active/tenvyr-productization-roadmap/P2-runtime-model-sources/GOAL.md),
   the [PP1 coding-agent wedge slice](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md) ([report](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/IMPLEMENTATION_REPORT.md)),

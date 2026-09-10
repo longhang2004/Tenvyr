@@ -4,12 +4,14 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-17
+last_verified: 2026-09-10
 sources:
   - services/orchestrator/src/domain/workspace-execution.ts
   - services/orchestrator/src/services/workspace-execution.service.ts
   - services/orchestrator/src/entities/workspace-execution.entity.ts
   - services/orchestrator/src/services/execution.service.ts
+  - services/orchestrator/src/services/execution-claim.ts
+  - services/orchestrator/src/services/workbench-release-workspace.ts
   - services/local-executor-host/src/config.ts
   - services/local-executor-host/src/main.ts
 ---

@@ -392,6 +392,7 @@
     "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
     "services/orchestrator/src/services/artifact-projection.resolver.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/result-inbox.service.ts"
    ],
    "tests": [
@@ -425,6 +426,7 @@
     "services/orchestrator/src/domain/context-snapshot.ts",
     "services/orchestrator/src/services/execution-state.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/pipeline-validation.service.ts",
     "services/orchestrator/src/entities/execution.entity.ts",
     "services/orchestrator/src/database/migrations/1722270003000-MilestoneTwoExecutionState.ts",
@@ -467,6 +469,7 @@
     "services/orchestrator/src/domain/policy.ts",
     "services/orchestrator/src/services/policy.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/plan-proposal.service.ts",
     "services/orchestrator/src/services/delegation.service.ts"
    ],
@@ -578,6 +581,7 @@
     "services/orchestrator/src/services/approval.service.ts",
     "services/orchestrator/src/database/migrations/1722270008000-MilestoneFourApprovals.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/runtime-recovery.service.ts"
    ],
    "tests": [
@@ -729,6 +733,7 @@
     "services/orchestrator/src/domain/budget.ts",
     "services/orchestrator/src/services/budget-ledger.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/approval.service.ts"
    ],
    "tests": [
@@ -751,7 +756,8 @@
     "services/orchestrator/src/entities/policy-decision.entity.ts",
     "services/orchestrator/src/services/policy.service.ts",
     "services/orchestrator/src/database/migrations/1722270007000-MilestoneFourPolicy.ts",
-    "services/orchestrator/src/services/execution.service.ts"
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts"
    ],
    "tests": [
     "services/orchestrator/src/domain/policy.spec.ts",
@@ -803,7 +809,8 @@
     "scripts/self-hosted/backup.mjs",
     "scripts/self-hosted/restore.mjs",
     "scripts/self-hosted/contract.test.mjs",
-    "services/orchestrator/src/services/execution.service.ts"
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts"
    ],
    "tests": [
     "scripts/self-hosted/contract.test.mjs",
@@ -869,6 +876,7 @@
     "services/orchestrator/src/database/migrations/1722270017000-CoordinationApprovalResume.ts",
     "services/orchestrator/src/services/delegation.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/engine.service.ts"
    ],
    "tests": [
@@ -902,7 +910,8 @@
     "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
     "services/orchestrator/src/services/dispatch-outbox.service.ts",
     "services/orchestrator/src/services/engine.service.ts",
-    "services/orchestrator/src/services/execution.service.ts"
+    "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts"
    ],
    "tests": [
     "services/orchestrator/src/executors/executor-descriptor.spec.ts",
@@ -939,6 +948,7 @@
     "services/orchestrator/src/executors/executor-descriptor.ts",
     "services/orchestrator/src/agent-adapters/agent-transport-config.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/dispatch-outbox.service.ts",
     "services/orchestrator/src/connections.controller.ts",
     "services/gateway/src/app.controller.ts"
@@ -982,6 +992,7 @@
     "services/orchestrator/src/domain/coordination.ts",
     "services/orchestrator/src/executors/executor-descriptor.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/runtime-coordination.service.ts"
    ],
    "tests": [
@@ -1049,6 +1060,7 @@
     "services/orchestrator/src/executors/context-projection-cache.ts",
     "services/orchestrator/src/domain/context-snapshot.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/result-inbox.service.ts",
     "services/orchestrator/src/services/workbench-projection.service.ts",
     "services/orchestrator/src/services/execution-capsule.service.ts",
@@ -1090,8 +1102,10 @@
     "services/orchestrator/src/database/migrations/1722270023000-WorkspaceExecutionAllocationKey.ts",
     "services/orchestrator/src/database/migrations/1722270024000-WorkspaceExecutionUniqueAllocationKey.ts",
     "services/orchestrator/src/services/execution.service.ts",
+    "services/orchestrator/src/services/execution-claim.ts",
     "services/orchestrator/src/services/approval.service.ts",
     "services/orchestrator/src/services/workbench-command.service.ts",
+    "services/orchestrator/src/services/workbench-release-workspace.ts",
     "services/local-executor-host/src/adapters/native-output-adapter.ts",
     "services/local-executor-host/src/config.ts",
     "services/local-executor-host/src/main.ts",

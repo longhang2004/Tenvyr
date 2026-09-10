@@ -3,7 +3,7 @@ title: Documentation Plan Lifecycle
 status: current
 audience:
   - developer
-last_verified: 2026-07-28
+last_verified: 2026-09-10
 sources:
   - AGENTS.md
   - .gitignore

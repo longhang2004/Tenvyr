@@ -1,15 +1,17 @@
 ---
 title: "Tenvyr M8 Implementation Report: Runtime Connections"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/executors/runtime-connections.md
 audience:
   - product
   - developer
 last_verified: 2026-08-12
 sources:
   - docs/plans/active/tenvyr-productization-roadmap/EXECUTION_STATUS.md
-  - docs/plans/active/tenvyr-productization-roadmap/M8-runtime-connections/PLAN.md
-  - docs/plans/active/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md
-  - docs/plans/active/tenvyr-productization-roadmap/M8-runtime-connections/VERIFY.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/VERIFY.md
 ---
 
 # M8 Runtime Connections — implementation report

@@ -1,11 +1,13 @@
 ---
 title: "M9 Verification: Supervised Agent Team Execution"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/coordination-loop.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md
   - docs/operations/testing-and-verification.md
   - services/orchestrator/src/database/postgres.integration.spec.ts
 ---

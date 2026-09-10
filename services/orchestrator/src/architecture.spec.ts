@@ -81,7 +81,7 @@ describe("application transport boundary", () => {
 
   // M2B–M2E boundary: ExecutionState is an internal durable primitive. No
   // business service may import it except the reviewed seams — the M2C claim
-  // seam (execution.service.ts, domain type under the execution lock) and the
+  // seam (execution-claim.ts, domain type under the execution lock) and the
   // M2E canonical-result seam (result-inbox.service.ts, pure patch functions
   // under the already-locked execution entity). The primitive never reaches
   // for agent transports, contracts, or the result path.
@@ -108,7 +108,7 @@ describe("application transport boundary", () => {
 
   it("the claim seam imports only the ExecutionState domain type, never the service", () => {
     const source = fs.readFileSync(
-      path.resolve(__dirname, "services/execution.service.ts"),
+      path.resolve(__dirname, "services/execution-claim.ts"),
       "utf8",
     );
     expect(source).toMatch(/from "\.\.\/domain\/execution-state"/);
@@ -183,14 +183,16 @@ describe("application transport boundary", () => {
     // recovery and adapters must send the persisted outbox invocation
     // byte-for-byte; they never synthesize or recompute context.
     const executionSource = fs.readFileSync(
-      path.join(servicesDir, "execution.service.ts"),
+      path.join(servicesDir, "execution-claim.ts"),
       "utf8",
     );
     expect(executionSource).toMatch(/materializeContextSnapshot/);
     expect(executionSource).not.toMatch(/["']tenvyr["']\s*:\s*\{/);
 
     for (const file of serviceFiles) {
-      if (file === "execution.service.ts") continue;
+      if (file === "execution.service.ts" || file === "execution-claim.ts") {
+        continue;
+      }
       const source = fs.readFileSync(path.join(servicesDir, file), "utf8");
       expect(source).not.toMatch(
         /AgentInvocation[^;]*\.context\s*=|\.context\s*=\s*[^;]*AgentInvocation/,
@@ -210,6 +212,7 @@ describe("application transport boundary", () => {
     const guarded = [
       "artifact-projection.resolver.ts",
       "execution.service.ts",
+      "execution-claim.ts",
       "dispatch-outbox.service.ts",
       "runtime-recovery.service.ts",
       "agent-result.service.ts",
@@ -233,13 +236,14 @@ describe("application transport boundary", () => {
       .filter((file) => file.endsWith(".ts") && !file.endsWith(".spec.ts"))
       .sort();
     const executionSource = fs.readFileSync(
-      path.join(servicesDir, "execution.service.ts"),
+      path.join(servicesDir, "execution-claim.ts"),
       "utf8",
     );
     expect(executionSource).toMatch(/ArtifactProjectionResolver/);
     for (const file of serviceFiles) {
       if (
         file === "execution.service.ts" ||
+        file === "execution-claim.ts" ||
         file === "artifact-projection.resolver.ts"
       ) {
         continue;

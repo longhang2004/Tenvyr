@@ -1,11 +1,13 @@
 ---
 title: "M8 Specification: Runtime Connections"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/executors/runtime-connections.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M8-runtime-connections/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/PLAN.md
   - docs/architecture/transports/adapter-model.md
   - docs/architecture/executors/local-executor-host.md
   - docs/operations/configuration.md

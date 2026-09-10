@@ -1,11 +1,13 @@
 ---
 title: "M10 Verification: Operator Workbench and Product Wedge"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/workbench.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md
   - docs/operations/testing-and-verification.md
   - docs/showcase/demo-guide.md
 ---

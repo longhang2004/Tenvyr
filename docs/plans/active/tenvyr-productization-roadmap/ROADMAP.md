@@ -90,9 +90,9 @@ flowchart TD
 | M10 Operator Workbench                      | Local operator can connect runtimes, launch a team goal, observe authority, act on approvals, and inspect its Capsule                   | Turns infrastructure into the primary adoption wedge and demo                | M8–M9                            | BLOCKED               |
 | M11 Single-owner self-hosted productization | Supported Docker installation, upgrade, backup, secret bootstrap, health, and local security profile                                    | Makes design-partner adoption repeatable without premature SaaS architecture | M10 and design-partner feedback  | BLOCKED               |
 
-Each milestone has a [PLAN](M8-runtime-connections/PLAN.md), behavioral
-[SPEC](M8-runtime-connections/SPEC.md), independent [VERIFY](M8-runtime-connections/VERIFY.md),
-and adaptive [GOAL](M8-runtime-connections/GOAL.md). The same four-file contract
+Each milestone has a [PLAN](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/PLAN.md), behavioral
+[SPEC](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md), independent [VERIFY](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/VERIFY.md),
+and adaptive [GOAL](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/GOAL.md). The same four-file contract
 exists under M9, M10, and M11.
 
 ## Product and commercial prioritization
@@ -157,30 +157,30 @@ security, and maintenance, a higher number means more risk/burden.
 - [Research register](RESEARCH_REGISTER.md)
 - [Product discovery and design partners](PRODUCT_DISCOVERY.md)
 - [Implementation report template](IMPLEMENTATION_REPORT_TEMPLATE.md)
-- [M8 implementation report](M8-runtime-connections/IMPLEMENTATION_REPORT.md)
+- [M8 implementation report](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/IMPLEMENTATION_REPORT.md)
   (provisional; Sol audit requested)
-- [M9 implementation report](M9-supervised-agent-team-execution/IMPLEMENTATION_REPORT.md)
+- [M9 implementation report](../../../archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/IMPLEMENTATION_REPORT.md)
   (provisional; Sol audit requested)
-- [M10 implementation report](M10-operator-workbench/IMPLEMENTATION_REPORT.md)
+- [M10 implementation report](../../../archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/IMPLEMENTATION_REPORT.md)
   (provisional; Sol audit requested)
 - [M11 implementation report](M11-self-hosted-productization/IMPLEMENTATION_REPORT.md)
   (provisional; Sol audit requested)
 
 ## Milestone contracts
 
-- M8 Runtime Connections: [PLAN](M8-runtime-connections/PLAN.md),
-  [SPEC](M8-runtime-connections/SPEC.md),
-  [VERIFY](M8-runtime-connections/VERIFY.md), and
-  [GOAL](M8-runtime-connections/GOAL.md).
+- M8 Runtime Connections: [PLAN](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/PLAN.md),
+  [SPEC](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md),
+  [VERIFY](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/VERIFY.md), and
+  [GOAL](../../../archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/GOAL.md).
 - M9 Supervised Agent Team Execution:
-  [PLAN](M9-supervised-agent-team-execution/PLAN.md),
-  [SPEC](M9-supervised-agent-team-execution/SPEC.md),
-  [VERIFY](M9-supervised-agent-team-execution/VERIFY.md), and
-  [GOAL](M9-supervised-agent-team-execution/GOAL.md).
-- M10 Operator Workbench: [PLAN](M10-operator-workbench/PLAN.md),
-  [SPEC](M10-operator-workbench/SPEC.md),
-  [VERIFY](M10-operator-workbench/VERIFY.md), and
-  [GOAL](M10-operator-workbench/GOAL.md).
+  [PLAN](../../../archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/PLAN.md),
+  [SPEC](../../../archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md),
+  [VERIFY](../../../archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/VERIFY.md), and
+  [GOAL](../../../archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/GOAL.md).
+- M10 Operator Workbench: [PLAN](../../../archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md),
+  [SPEC](../../../archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md),
+  [VERIFY](../../../archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/VERIFY.md), and
+  [GOAL](../../../archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/GOAL.md).
 - M11 Single-owner self-hosted productization:
   [PLAN](M11-self-hosted-productization/PLAN.md),
   [SPEC](M11-self-hosted-productization/SPEC.md),

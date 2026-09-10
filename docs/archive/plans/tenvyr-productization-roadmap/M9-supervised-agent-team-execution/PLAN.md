@@ -1,6 +1,8 @@
 ---
 title: "M9 Plan: Supervised Agent Team Execution"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/coordination-loop.md
 audience:
   - product
   - developer

@@ -1,11 +1,13 @@
 ---
 title: "M10 Specification: Operator Workbench and Product Wedge"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/workbench.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md
   - docs/architecture/overview.md
   - docs/archive/plans/tenvyr-roadmap/M7-execution-capsule/SPEC.md
   - docs/plans/active/tenvyr-productization-roadmap/EXTERNAL_PRODUCTION_EXPOSURE_GATE.md

@@ -4,11 +4,11 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-12
+last_verified: 2026-09-10
 sources:
   - services/orchestrator/src/executors/runtime-connection.ts
   - services/orchestrator/src/executors/runtime-connection.spec.ts
-  - docs/plans/active/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md
 ---
 
 # Runtime Connections (M8)

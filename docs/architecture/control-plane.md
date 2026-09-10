@@ -3,7 +3,7 @@ title: Control Plane
 status: current
 audience:
   - developer
-last_verified: 2026-08-10
+last_verified: 2026-09-10
 sources:
   - services/orchestrator/src/database/data-source.ts
   - services/orchestrator/src/database/migrations/1722270000000-MilestoneZeroFoundation.ts
@@ -19,6 +19,7 @@ sources:
   - services/orchestrator/src/services/dispatch-outbox.service.ts
   - services/orchestrator/src/services/runtime-recovery.service.ts
   - services/orchestrator/src/services/execution.service.ts
+  - services/orchestrator/src/services/execution-claim.ts
   - services/orchestrator/src/services/pipeline.service.ts
   - services/orchestrator/src/entities/agent-event.entity.ts
   - services/orchestrator/src/entities/agent-event-conflict.entity.ts

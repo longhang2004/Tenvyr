@@ -4,11 +4,12 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-16
+last_verified: 2026-09-10
 sources:
   - services/orchestrator/src/domain/context-bundle.ts
   - services/orchestrator/src/executors/context-projection-cache.ts
   - services/orchestrator/src/services/execution.service.ts
+  - services/orchestrator/src/services/execution-claim.ts
   - services/orchestrator/src/services/result-inbox.service.ts
   - services/orchestrator/src/services/workbench-projection.service.ts
   - contracts/schemas/agent-result.v1.schema.json

@@ -1,11 +1,13 @@
 ---
 title: "M9 Specification: Supervised Agent Team Execution"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/coordination-loop.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/PLAN.md
   - docs/architecture/control-plane.md
   - docs/archive/plans/tenvyr-roadmap/M5-dynamic-planner/SPEC.md
   - docs/archive/plans/tenvyr-roadmap/M6-delegation-subagents/SPEC.md

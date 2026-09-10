@@ -4,9 +4,11 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-16
+last_verified: 2026-09-10
 sources:
   - services/orchestrator/src/services/workbench-projection.service.ts
+  - services/orchestrator/src/services/workbench-command.service.ts
+  - services/orchestrator/src/services/workbench-release-workspace.ts
   - services/orchestrator/src/workbench.controller.ts
   - services/gateway/src/app.controller.ts
   - services/orchestrator/src/services/runtime-connection.service.ts

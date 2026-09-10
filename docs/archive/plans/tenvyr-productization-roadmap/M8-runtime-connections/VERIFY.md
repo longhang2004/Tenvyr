@@ -1,11 +1,13 @@
 ---
 title: "M8 Verification: Runtime Connections"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/executors/runtime-connections.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M8-runtime-connections/SPEC.md
   - docs/operations/testing-and-verification.md
   - services/orchestrator/src/database/postgres.integration.spec.ts
 ---

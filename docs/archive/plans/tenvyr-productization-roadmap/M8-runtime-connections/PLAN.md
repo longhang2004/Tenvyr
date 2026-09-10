@@ -1,6 +1,8 @@
 ---
 title: "M8 Plan: Runtime Connections"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/executors/runtime-connections.md
 audience:
   - product
   - developer

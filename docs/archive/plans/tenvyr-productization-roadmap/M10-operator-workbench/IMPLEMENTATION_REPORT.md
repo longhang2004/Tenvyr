@@ -1,15 +1,17 @@
 ---
 title: "Tenvyr M10 Implementation Report: Operator Workbench"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/workbench.md
 audience:
   - product
   - developer
 last_verified: 2026-08-12
 sources:
   - docs/plans/active/tenvyr-productization-roadmap/EXECUTION_STATUS.md
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/VERIFY.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/VERIFY.md
 ---
 
 # M10 Operator Workbench — implementation report

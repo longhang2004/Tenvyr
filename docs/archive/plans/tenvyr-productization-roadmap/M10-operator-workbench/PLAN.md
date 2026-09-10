@@ -1,6 +1,8 @@
 ---
 title: "M10 Plan: Operator Workbench and Product Wedge"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/workbench.md
 audience:
   - product
   - developer

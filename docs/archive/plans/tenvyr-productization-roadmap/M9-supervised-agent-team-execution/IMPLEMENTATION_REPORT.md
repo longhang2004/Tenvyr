@@ -1,15 +1,17 @@
 ---
 title: "Tenvyr M9 Implementation Report: Supervised Agent Team Execution"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/coordination-loop.md
 audience:
   - product
   - developer
 last_verified: 2026-08-12
 sources:
   - docs/plans/active/tenvyr-productization-roadmap/EXECUTION_STATUS.md
-  - docs/plans/active/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/PLAN.md
-  - docs/plans/active/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md
-  - docs/plans/active/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/VERIFY.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/VERIFY.md
 ---
 
 # M9 Supervised Agent Team Execution — implementation report

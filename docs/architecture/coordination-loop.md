@@ -3,11 +3,11 @@ title: Coordinator Loop Domain (M9)
 status: current
 audience:
   - developer
-last_verified: 2026-08-12
+last_verified: 2026-09-10
 sources:
   - services/orchestrator/src/domain/coordination.ts
   - services/orchestrator/src/domain/coordination.spec.ts
-  - docs/plans/active/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M9-supervised-agent-team-execution/SPEC.md
 ---
 
 # Coordinator loop domain (M9-S1)

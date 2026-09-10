@@ -1,13 +1,15 @@
 ---
 title: "M10 DeepSeek Goal: Operator Workbench and Product Wedge"
-status: planned
+status: historical
+superseded_by:
+  - docs/architecture/workbench.md
 audience:
   - developer
 last_verified: 2026-08-12
 sources:
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md
-  - docs/plans/active/tenvyr-productization-roadmap/M10-operator-workbench/VERIFY.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/PLAN.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/SPEC.md
+  - docs/archive/plans/tenvyr-productization-roadmap/M10-operator-workbench/VERIFY.md
 ---
 
 # M10 Goal Mode
