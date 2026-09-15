@@ -107,8 +107,12 @@ def test_parity_ledger_has_machine_readable_per_feature_entries() -> None:
         "intentional_difference",
         "reason",
     }
+    optional_keys = {"java_status", "cpp_status"}
     assert ledger["features"]
-    assert all(set(entry) == required_keys for entry in ledger["features"])
+    for entry in ledger["features"]:
+        keys = set(entry)
+        assert required_keys <= keys, entry["feature"]
+        assert keys <= required_keys | optional_keys, entry["feature"]
     assert ledger["sharedConformanceCaseCount"] == 73
 
 
