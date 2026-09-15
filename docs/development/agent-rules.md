@@ -126,7 +126,7 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 
 - **Purpose:** Hosts JDK 17 agents through `com.tenvyr:tenvyr-worker` using Jackson and `com.sun.net.httpserver.HttpServer`. Same HTTP Worker protocol as TypeScript/Python.
 - **Interfaces:** `POST /v1/runs`, `GET /health/live`, `GET /health/ready`. HMAC constants live in `Hmac.java`.
-- **Rules:** Do not add Spring. Do not rewrite Orchestrator. Keep `X-AgentWeave-*` header names. Bundle five schema resources; `scripts/sync-java-worker-schemas.py check` must pass. AgentEvents are out of scope until a later slice.
+- **Rules:** Do not add Spring. Do not rewrite Orchestrator. Keep the four protocol-v1 HMAC header constants in `Hmac.java`. Bundle five schema resources; `scripts/sync-java-worker-schemas.py check` must pass. AgentEvents are out of scope until a later slice.
 - **Verification:** `python3 scripts/sync-java-worker-schemas.py check`; `mvn -B -f sdks/java-worker/pom.xml test`.
 
 ### C++ HTTP Worker
@@ -134,7 +134,7 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 - **Purpose:** C++17 HTTP worker for the same submit/callback contract. OpenSSL HMAC; POSIX HTTP/1.1 Content-Length subset.
 - **Interfaces:** `POST /v1/runs`, `GET /health/live`, `GET /health/ready`. HMAC constants live in `include/tenvyr/hmac.hpp`.
 - **Rules:** Do not invent routes or `X-Tenvyr-*` aliases. Do not claim chunked-encoding or AgentEvent support.
-- **Verification:** `cmake -S sdks/cpp-worker -B sdks/cpp-worker/build && cmake --build sdks/cpp-worker/build && ctest --test-dir sdks/cpp-worker/build --output-on-failure`.
+- **Verification:** `cmake -S sdks/cpp-worker -B sdks/cpp-worker/build -DCMAKE_CXX_COMPILER=g++ && cmake --build sdks/cpp-worker/build && ctest --test-dir sdks/cpp-worker/build --output-on-failure`.
 
 ### Product Identity and Observability Roadmap
 

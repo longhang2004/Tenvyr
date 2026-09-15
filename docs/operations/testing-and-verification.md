@@ -111,7 +111,7 @@ Do not report an Orchestrator loopback as passed.
 ## C++ HTTP Worker
 
 ```bash
-cmake -S sdks/cpp-worker -B sdks/cpp-worker/build
+cmake -S sdks/cpp-worker -B sdks/cpp-worker/build -DCMAKE_CXX_COMPILER=g++
 cmake --build sdks/cpp-worker/build
 ctest --test-dir sdks/cpp-worker/build --output-on-failure
 ```

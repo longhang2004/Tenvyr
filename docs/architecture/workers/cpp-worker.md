@@ -42,7 +42,7 @@ no Orchestrator loopback gate in this slice.
 ## Verification
 
 ```bash
-cmake -S sdks/cpp-worker -B sdks/cpp-worker/build
+cmake -S sdks/cpp-worker -B sdks/cpp-worker/build -DCMAKE_CXX_COMPILER=g++
 cmake --build sdks/cpp-worker/build
 ctest --test-dir sdks/cpp-worker/build --output-on-failure
 ```

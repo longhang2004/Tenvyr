@@ -18,7 +18,7 @@ sources:
 ```bash
 python3 scripts/sync-java-worker-schemas.py check
 mvn -B -f sdks/java-worker/pom.xml test
-cmake -S sdks/cpp-worker -B /tmp/tenvyr-cpp-worker -DVECTORS_JSON=/workspace/contracts/conformance/callback-signatures/vectors.json
+cmake -S sdks/cpp-worker -B /tmp/tenvyr-cpp-worker -DCMAKE_CXX_COMPILER=g++
 cmake --build /tmp/tenvyr-cpp-worker
 ctest --test-dir /tmp/tenvyr-cpp-worker --output-on-failure
 pnpm test:executor-host-rs
@@ -37,8 +37,8 @@ pnpm verify:docs
    verifies.
 3. Rust: `kill_at` in written state is after `started_at` by wall time;
    `scripts/dev-ux.test.mjs` still defaults to the TypeScript host.
-4. Identity: `java-worker-sends-X-AgentWeave-*` and
-   `cpp-worker-sends-X-AgentWeave-*` rules match constants.
+4. Identity: `java-worker-sends-` and `cpp-worker-sends-` rules match the
+   four protocol-v1 HMAC header constants.
 
 ## Anti-pattern grep
 

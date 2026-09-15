@@ -32,7 +32,7 @@ Orchestrator and Gateway stay the authority.
    TypeScript host (`now + wallTimeMs`). Do not flip `pnpm dev` default.
    Put `cargo test` on CI.
 4. **Docs + identity + ledger.** Parity matrix, current worker docs,
-   `X-AgentWeave-*` identity constants, implementation-status.
+   protocol-v1 HMAC identity constants, implementation-status.
 
 ## Non-goals
 

@@ -54,7 +54,7 @@ allowlist; HTTPS unless insecure HTTP is explicit.
 
 Integers at every protocol boundary stay inside
 ±9,007,199,254,740,991. Finite numbers only. See
-[JSON interoperability](../../architecture/contracts/json-interoperability.md).
+[JSON interoperability](../../../architecture/contracts/json-interoperability.md).
 
 ## Java SDK
 
