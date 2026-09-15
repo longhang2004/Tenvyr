@@ -247,7 +247,8 @@
    ],
    "limitations": [
     "Provider HTTP is unit-tested with mocks; live APIs are not called in CI",
-    "Token usage is estimated and labeled usageSource=estimated"
+    "Token usage is estimated and labeled usageSource=estimated",
+    "Compatible OpenAI/Anthropic base URLs are unit-tested with a mock HTTP client; live proxy APIs are not CI gates"
    ]
   },
   {

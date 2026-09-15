@@ -94,8 +94,9 @@ mvn test
 ```
 
 The supported release path uses JDK 17. Java tests mock provider HTTP and cover
-mock/OpenAI/Anthropic/Ollama selection, required configuration, explicit
-`fail|mock` behavior, metadata, and safe logging; they do not call live models.
+mock/OpenAI/Anthropic/Ollama selection, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`
+compatible prefixes, required configuration, explicit `fail|mock` behavior,
+metadata, and safe logging; they do not call live models.
 The checked-in Mockito subclass mock maker avoids inline-mock self-attachment
 and keeps this JDK 17 path deterministic.
 

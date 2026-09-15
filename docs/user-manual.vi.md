@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - package.json
   - README.md
@@ -452,12 +452,12 @@ Từ `services/agent-runner`:
 # Mock tất định (mặc định)
 LLM_PROVIDER=mock LLM_FAILURE_MODE=mock mvn spring-boot:run
 
-# OpenAI
+# OpenAI (hoặc OpenAI-compatible: đặt OPENAI_BASE_URL là prefix /v1)
 export LLM_PROVIDER=openai OPENAI_API_KEY='<key>' OPENAI_MODEL='<model>'
 unset LLM_FAILURE_MODE
 mvn spring-boot:run
 
-# Anthropic
+# Anthropic (hoặc Anthropic-compatible: đặt ANTHROPIC_BASE_URL là origin)
 export LLM_PROVIDER=anthropic ANTHROPIC_API_KEY='<key>' ANTHROPIC_MODEL='<model>'
 unset LLM_FAILURE_MODE
 mvn spring-boot:run
@@ -476,9 +476,9 @@ của provider).
 
 Cài SDK provider bất kỳ làm dependency của **ứng dụng** (không bao giờ là
 dependency của các package lõi Worker), gọi nó bên trong handler `execute` và
-đính metadata provider vào output thành công. Gemini, Azure OpenAI, Bedrock,
-Vertex AI, vLLM và các endpoint tương thích OpenAI theo cùng mẫu nhưng chưa
-phải tích hợp hạng nhất v0.1.0.
+đính metadata provider vào output thành công. Java Runner đã nhận
+`OPENAI_BASE_URL` và `ANTHROPIC_BASE_URL` cho HTTP API tương thích. Gemini,
+Bedrock, Vertex AI và các client tương tự phía Worker vẫn là mã ứng dụng.
 
 Đoạn mã đầy đủ: [sử dụng model providers](showcase/using-model-providers.md).
 

@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - package.json
   - README.md
@@ -436,12 +436,12 @@ From `services/agent-runner`:
 # Deterministic mock (default)
 LLM_PROVIDER=mock LLM_FAILURE_MODE=mock mvn spring-boot:run
 
-# OpenAI
+# OpenAI (or OpenAI-compatible: set OPENAI_BASE_URL to the /v1 prefix)
 export LLM_PROVIDER=openai OPENAI_API_KEY='<key>' OPENAI_MODEL='<model>'
 unset LLM_FAILURE_MODE
 mvn spring-boot:run
 
-# Anthropic
+# Anthropic (or Anthropic-compatible: set ANTHROPIC_BASE_URL to the origin)
 export LLM_PROVIDER=anthropic ANTHROPIC_API_KEY='<key>' ANTHROPIC_MODEL='<model>'
 unset LLM_FAILURE_MODE
 mvn spring-boot:run
@@ -459,9 +459,10 @@ Runner results include `provider`, `model`, `fallbackUsed`, and
 
 Install any provider SDK as an **application** dependency (never as a
 dependency of the Worker core packages), call it inside your `execute`
-handler, and attach provider metadata to the success output. Gemini, Azure
-OpenAI, Bedrock, Vertex AI, vLLM, and OpenAI-compatible endpoints follow the
-same pattern but are not first-class v0.1.0 integrations.
+handler, and attach provider metadata to the success output. The Java
+Runner already accepts `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` for
+compatible HTTP APIs. Worker-side Gemini, Bedrock, Vertex AI, and similar
+clients remain application code.
 
 Full snippets: [using model providers](showcase/using-model-providers.md).
 
