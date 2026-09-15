@@ -9,6 +9,7 @@ sources:
   - package.json
   - scripts/verify-product-identity.mjs
   - scripts/verify-docs.mjs
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
 ---
 
 # VERIFY
@@ -26,6 +27,7 @@ pnpm test:identity
 pnpm verify:identity
 pnpm test:docs
 pnpm verify:docs
+TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback
 ```
 
 ## Proof each slice
@@ -40,6 +42,10 @@ pnpm verify:docs
 4. Identity: `java-worker-sends-` and `cpp-worker-sends-` rules match the
    four protocol-v1 HMAC header constants.
 
+5. Java loopback: retry + idempotent re-invoke without re-run; safe
+   integer boundaries; unsafe output → `AGENT_OUTPUT_INVALID`; raw
+   unsafe input 400 then the same invocation ID still runs.
+
 ## Anti-pattern grep
 
 - No `X-Tenvyr-Signature` in worker sources.
@@ -48,5 +54,5 @@ pnpm verify:docs
 
 ## Unavailable
 
-Live Orchestrator↔Java/C++ loopback is out of this slice (mock callback
+Live Orchestrator↔C++ loopback is out of this slice (mock callback
 server only). Do not report it as passed.

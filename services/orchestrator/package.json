@@ -16,7 +16,9 @@
     "migration:run": "pnpm run build && typeorm -d dist/database/data-source.js migration:run",
     "migration:revert": "pnpm run build && typeorm -d dist/database/data-source.js migration:revert",
     "pretest:python-worker-loopback": "pnpm --filter @tenvyr/contracts build",
-    "test:python-worker-loopback": "jest --config jest.python-worker.config.js --runInBand"
+    "test:python-worker-loopback": "jest --config jest.python-worker.config.js --runInBand",
+    "pretest:java-worker-loopback": "pnpm --filter @tenvyr/contracts build && mvn -B -f ../../sdks/java-worker/pom.xml -DskipTests test-compile org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -DincludeScope=runtime -Dmdep.outputFile=target/loopback-classpath.txt",
+    "test:java-worker-loopback": "jest --config jest.java-worker.config.js --runInBand"
   },
   "dependencies": {
     "@tenvyr/contracts": "workspace:*",

@@ -57,9 +57,9 @@ because renaming a wire protocol is a migration, not cosmetic cleanup.
 ## Cross-language lessons
 
 The same versioned invocation and result contracts cross Python, TypeScript,
-Java, and C++ HTTP workers. Java and C++ currently prove the wire with mock
-callback servers and the shared HMAC vectors; TypeScript and Python also have
-Orchestrator loopback gates.
+Java, and C++ HTTP workers. TypeScript, Python, and Java have Orchestrator
+loopback gates; C++ currently proves the wire with a mock callback server and
+the shared HMAC vectors.
 
 The Python and TypeScript runtimes exposed edge cases that single-language tests
 miss: JSON integer safety, canonical serialization, retry timing, callback

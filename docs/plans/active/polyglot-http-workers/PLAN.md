@@ -9,6 +9,7 @@ sources:
   - sdks/python-worker/src/tenvyr_worker/_callback/signer.py
   - packages/worker/src/callback/callback-signer.ts
   - scripts/verify-product-identity.mjs
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
 ---
 
 # PLAN — copy the existing worker, do not rewrite the plane
@@ -56,6 +57,13 @@ Worker docs, parity ledger columns, `docs/README.md`,
 `implementation-status.json`, identity constants for Java/C++ header
 names, `pnpm test:docs` + `pnpm test:identity`.
 
-## Phase 5 — verification
+## Phase 5 — Orchestrator↔Java loopback
+
+Copy the Python loopback: NDJSON fixture, first callback 500 then 204,
+safe-integer boundaries, unsafe output → `AGENT_OUTPUT_INVALID`, raw
+unsafe input 400 then same invocation ID still runs. Gate on
+`TENVYR_JAVA_EXECUTABLE`. Exclude from default Orchestrator Jest.
+
+## Phase 6 — verification
 
 Commands in [VERIFY.md](VERIFY.md). Do not claim an unrun gate.

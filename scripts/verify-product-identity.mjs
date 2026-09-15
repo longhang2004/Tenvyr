@@ -203,6 +203,7 @@ const wireProtocolPaths = new Set([
   "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
   "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts",
   "services/orchestrator/src/agent-adapters/http-python-worker.integration.spec.ts",
+  "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts",
   "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts",
   "packages/worker/test/callback.spec.ts",
   "services/local-executor-host/integration/local-executor-host.integration.spec.ts",

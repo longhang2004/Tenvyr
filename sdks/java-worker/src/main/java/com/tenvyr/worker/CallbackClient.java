@@ -14,10 +14,10 @@ final class CallbackClient {
   private final HttpClient http =
       HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(10)).build();
 
-  void deliver(String url, String keyId, String secret, byte[] body, int maxAttempts) {
+  void deliver(String url, String keyId, String secret, byte[] body, WorkerConfig config) {
     String deliveryId = UUID.randomUUID().toString();
     RuntimeException last = new RuntimeException("callback was not attempted");
-    for (int attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    for (int attempt = 1; attempt <= config.callbackMaxAttempts; attempt += 1) {
       String timestamp = Long.toString(Instant.now().getEpochSecond());
       String signature = Hmac.sign(secret, timestamp, deliveryId, body);
       HttpRequest request =
@@ -48,7 +48,7 @@ final class CallbackClient {
       } catch (Exception error) {
         last = error instanceof RuntimeException runtime ? runtime : new IllegalStateException(error);
       }
-      sleep(attempt);
+      sleep(attempt, config.callbackRetryDelayMs, config.callbackMaxRetryDelayMs);
     }
     throw last;
   }
@@ -57,9 +57,13 @@ final class CallbackClient {
     return status == 408 || status == 429 || status >= 500;
   }
 
-  private static void sleep(int attempt) {
+  private static void sleep(int attempt, int delayMs, int maxDelayMs) {
+    long waitMs = Math.min((long) delayMs * attempt, maxDelayMs);
+    if (waitMs <= 0) {
+      return;
+    }
     try {
-      Thread.sleep(Math.min(250L * attempt, 1_000L));
+      Thread.sleep(waitMs);
     } catch (InterruptedException error) {
       Thread.currentThread().interrupt();
     }

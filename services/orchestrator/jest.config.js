@@ -4,6 +4,6 @@ module.exports = {
   testEnvironment: "node",
   rootDir: "src",
   testRegex:
-    "^(?!.*http-python-worker\\.integration\\.spec\\.ts$).*\\.spec\\.ts$",
+    "^(?!.*http-(?:python|java)-worker\\.integration\\.spec\\.ts$).*\\.spec\\.ts$",
   moduleFileExtensions: ["ts", "js", "json"],
 };

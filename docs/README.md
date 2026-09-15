@@ -12,6 +12,7 @@ sources:
   - docs/architecture/workers/java-worker-sdk.md
   - docs/architecture/workers/cpp-worker.md
   - docs/plans/active/polyglot-http-workers/GOAL.md
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
 ---
 
 # Tenvyr Documentation

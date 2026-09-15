@@ -61,6 +61,10 @@ Integers at every protocol boundary stay inside
 - Package `com.tenvyr.worker`, artifact `tenvyr-worker`, JDK 17.
 - Dependencies: Jackson Databind + JUnit 5 (test). JDK `HttpServer`.
 - Public surface: `TenvyrWorker`, `WorkerConfig`, `Hmac`.
+- Unsafe handler output maps to `AGENT_OUTPUT_INVALID` /
+  `Agent output validation failed` / `retryable: false`.
+- Loopback fixture: `OrchestratorLoopbackWorker` (test sources), gated
+  `pnpm --filter orchestrator test:java-worker-loopback`.
 - Process-local idempotency and queue. Events: not implemented.
 
 ## C++ worker

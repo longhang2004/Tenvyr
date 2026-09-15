@@ -139,8 +139,18 @@
       "java_status": "passed-local-mock",
       "cpp_status": "n/a",
       "shared_test_or_fixture": "sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java",
-      "intentional_difference": "AgentEvents are not implemented; Orchestrator loopback is not gated.",
-      "reason": "In-process HttpServer plus mock callback server proved 202, HMAC headers, idempotent retry, 401, and unsafe-integer 400."
+      "intentional_difference": "AgentEvents are not implemented.",
+      "reason": "In-process HttpServer plus mock callback server proved 202, HMAC headers, idempotent retry, 401, unsafe-integer 400, and unsafe handler output → AGENT_OUTPUT_INVALID."
+    },
+    {
+      "feature": "Java HTTP Worker Orchestrator loopback",
+      "typescript_status": "n/a",
+      "python_status": "n/a",
+      "java_status": "gated-on-TENVYR_JAVA_EXECUTABLE",
+      "cpp_status": "n/a",
+      "shared_test_or_fixture": "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts",
+      "intentional_difference": "Excluded from default orchestrator Jest; requires compiled test-classes and TENVYR_JAVA_EXECUTABLE.",
+      "reason": "Same three loopback cases as Python: callback retry with stable delivery ID, safe-integer boundaries plus AGENT_OUTPUT_INVALID, raw unsafe input 400 then reuse of the invocation ID."
     },
     {
       "feature": "C++ HTTP Worker protocol (mock)",

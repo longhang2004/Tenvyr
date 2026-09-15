@@ -15,6 +15,8 @@ public final class WorkerConfig {
   public final int executionConcurrency;
   public final int maxQueuedRuns;
   public final int callbackMaxAttempts;
+  public final int callbackRetryDelayMs;
+  public final int callbackMaxRetryDelayMs;
   public final int maxRequestBytes;
   public final Function<JsonNode, JsonNode> execute;
 
@@ -27,6 +29,8 @@ public final class WorkerConfig {
     this.executionConcurrency = builder.executionConcurrency;
     this.maxQueuedRuns = builder.maxQueuedRuns;
     this.callbackMaxAttempts = builder.callbackMaxAttempts;
+    this.callbackRetryDelayMs = builder.callbackRetryDelayMs;
+    this.callbackMaxRetryDelayMs = builder.callbackMaxRetryDelayMs;
     this.maxRequestBytes = builder.maxRequestBytes;
     this.execute = builder.execute;
   }
@@ -44,6 +48,8 @@ public final class WorkerConfig {
     private int executionConcurrency = 4;
     private int maxQueuedRuns = 100;
     private int callbackMaxAttempts = 8;
+    private int callbackRetryDelayMs = 250;
+    private int callbackMaxRetryDelayMs = 1000;
     private int maxRequestBytes = 1024 * 1024;
     private Function<JsonNode, JsonNode> execute = input -> input;
 
@@ -87,6 +93,16 @@ public final class WorkerConfig {
       return this;
     }
 
+    public Builder callbackRetryDelayMs(int callbackRetryDelayMs) {
+      this.callbackRetryDelayMs = callbackRetryDelayMs;
+      return this;
+    }
+
+    public Builder callbackMaxRetryDelayMs(int callbackMaxRetryDelayMs) {
+      this.callbackMaxRetryDelayMs = callbackMaxRetryDelayMs;
+      return this;
+    }
+
     public Builder maxRequestBytes(int maxRequestBytes) {
       this.maxRequestBytes = maxRequestBytes;
       return this;
@@ -106,7 +122,12 @@ public final class WorkerConfig {
       if (allowedCallbackOrigins.isEmpty()) {
         throw new IllegalArgumentException("allowedCallbackOrigins");
       }
-      if (executionConcurrency < 1 || maxQueuedRuns < 0 || callbackMaxAttempts < 1 || maxRequestBytes < 1) {
+      if (executionConcurrency < 1
+          || maxQueuedRuns < 0
+          || callbackMaxAttempts < 1
+          || callbackRetryDelayMs < 0
+          || callbackMaxRetryDelayMs < 0
+          || maxRequestBytes < 1) {
         throw new IllegalArgumentException("bounds");
       }
       return new WorkerConfig(this);

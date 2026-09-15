@@ -287,24 +287,35 @@ public final class TenvyrWorker {
     result.put("stepExecutionId", text(invocation, "stepExecutionId"));
     try {
       JsonNode output = config.execute.apply(invocation.get("input"));
-      JsonCompat.assertSafe(output, "$.output");
-      result.put("status", "succeeded");
-      result.put("completedAt", Instant.now().toString());
-      result.set("output", output == null || output.isMissingNode() ? JSON.nullNode() : output);
+      try {
+        JsonCompat.assertSafe(output, "$.output");
+        result.put("status", "succeeded");
+        result.put("completedAt", Instant.now().toString());
+        result.set("output", output == null || output.isMissingNode() ? JSON.nullNode() : output);
+      } catch (ProtocolException error) {
+        fail(result, "AGENT_OUTPUT_INVALID", "Agent output validation failed");
+      }
     } catch (Exception error) {
-      result.put("status", "failed");
-      result.put("completedAt", Instant.now().toString());
-      ObjectNode failure = result.putObject("error");
-      failure.put("code", "AGENT_FAILED");
-      failure.put("message", error.getMessage() == null ? "agent failed" : error.getMessage());
-      failure.put("retryable", false);
+      fail(
+          result,
+          "AGENT_FAILED",
+          error.getMessage() == null ? "agent failed" : error.getMessage());
     }
     try {
       byte[] payload = JSON.writeValueAsBytes(result);
-      callbacks.deliver(callbackUrl, keyId, secret, payload, config.callbackMaxAttempts);
+      callbacks.deliver(callbackUrl, keyId, secret, payload, config);
     } catch (Exception error) {
       System.err.println("callback delivery failed: " + error.getMessage());
     }
+  }
+
+  private static void fail(ObjectNode result, String code, String message) {
+    result.put("status", "failed");
+    result.put("completedAt", Instant.now().toString());
+    ObjectNode failure = result.putObject("error");
+    failure.put("code", code);
+    failure.put("message", message);
+    failure.put("retryable", false);
   }
 
   private boolean authenticate(String header) {

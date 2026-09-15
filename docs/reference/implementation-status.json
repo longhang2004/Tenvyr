@@ -97,15 +97,16 @@
    "tests": [
     "sdks/java-worker/src/test/java/com/tenvyr/worker/HmacTest.java",
     "sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java",
-    "sdks/java-worker/src/test/java/com/tenvyr/worker/SchemaResourceTest.java"
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/SchemaResourceTest.java",
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/OrchestratorLoopbackWorker.java",
+    "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts"
    ],
    "docs": [
     "docs/architecture/workers/java-worker-sdk.md"
    ],
    "limitations": [
     "Queue and idempotency are process-local",
-    "AgentEvents are not implemented",
-    "Orchestrator loopback is not gated; mock callback tests only"
+    "AgentEvents are not implemented"
    ]
   },
   {

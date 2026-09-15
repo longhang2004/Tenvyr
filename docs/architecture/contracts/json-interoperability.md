@@ -15,6 +15,7 @@ sources:
   - sdks/python-worker/tests/test_schema_protocol.py
   - sdks/python-worker/tests/test_canonical_json.py
   - sdks/java-worker/src/main/java/com/tenvyr/worker/JsonCompat.java
+  - sdks/java-worker/src/main/java/com/tenvyr/worker/TenvyrWorker.java
   - sdks/cpp-worker/src/json.cpp
   - contracts/conformance/json-numbers
 ---

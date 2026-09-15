@@ -127,7 +127,7 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 - **Purpose:** Hosts JDK 17 agents through `com.tenvyr:tenvyr-worker` using Jackson and `com.sun.net.httpserver.HttpServer`. Same HTTP Worker protocol as TypeScript/Python.
 - **Interfaces:** `POST /v1/runs`, `GET /health/live`, `GET /health/ready`. HMAC constants live in `Hmac.java`.
 - **Rules:** Do not add Spring. Do not rewrite Orchestrator. Keep the four protocol-v1 HMAC header constants in `Hmac.java`. Bundle five schema resources; `scripts/sync-java-worker-schemas.py check` must pass. AgentEvents are out of scope until a later slice.
-- **Verification:** `python3 scripts/sync-java-worker-schemas.py check`; `mvn -B -f sdks/java-worker/pom.xml test`.
+- **Verification:** `python3 scripts/sync-java-worker-schemas.py check`; `mvn -B -f sdks/java-worker/pom.xml test`; `TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback`. Never claim the loopback passed unless that command was run.
 
 ### C++ HTTP Worker
 

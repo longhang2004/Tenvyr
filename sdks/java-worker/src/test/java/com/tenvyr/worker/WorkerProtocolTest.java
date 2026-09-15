@@ -91,6 +91,50 @@ class WorkerProtocolTest {
   }
 
   @Test
+  void unsafeHandlerOutputBecomesAgentOutputInvalid() throws Exception {
+    CountDownLatch delivered = new CountDownLatch(1);
+    AtomicReference<byte[]> callbackBody = new AtomicReference<>();
+    HttpServer orchestrator = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    orchestrator.createContext(
+        "/internal/agent-callbacks/http/echo-agent",
+        exchange -> {
+          callbackBody.set(exchange.getRequestBody().readAllBytes());
+          exchange.sendResponseHeaders(204, -1);
+          exchange.close();
+          delivered.countDown();
+        });
+    orchestrator.start();
+    String origin = "http://127.0.0.1:" + orchestrator.getAddress().getPort();
+    worker =
+        new TenvyrWorker(
+            WorkerConfig.builder()
+                .agentName("echo-agent")
+                .bearerToken("token")
+                .callbackKeys(Map.of("conformance-v1", "secret"))
+                .allowedCallbackOrigins(List.of(origin))
+                .allowInsecureHttp(true)
+                .callbackMaxAttempts(1)
+                .execute(
+                    input -> {
+                      ObjectNode output = JSON.createObjectNode();
+                      output.put("unsafe", 9_007_199_254_740_993L);
+                      return output;
+                    })
+                .build());
+    worker.start("127.0.0.1", 0);
+    HttpResponse<String> accepted =
+        postRun(runRequest("invocation-unsafe-output", origin + "/internal/agent-callbacks/http/echo-agent", JSON.nullNode()));
+    assertEquals(202, accepted.statusCode());
+    assertTrue(delivered.await(5, TimeUnit.SECONDS), "callback was not delivered");
+    JsonNode result = JSON.readTree(callbackBody.get());
+    assertEquals("failed", result.get("status").asText());
+    assertEquals("AGENT_OUTPUT_INVALID", result.get("error").get("code").asText());
+    assertEquals("Agent output validation failed", result.get("error").get("message").asText());
+    assertEquals(false, result.get("error").get("retryable").asBoolean());
+    orchestrator.stop(0);
+  }
+
+  @Test
   void unauthorizedWithoutBearer() throws Exception {
     worker =
         new TenvyrWorker(

@@ -44,6 +44,7 @@ pnpm test:identity
 pnpm verify:identity
 pnpm test:executor-host-rs
 pnpm test:java-worker
+TENVYR_JAVA_EXECUTABLE=java pnpm test:java-worker-loopback
 pnpm test:cpp-worker
 ```
 

@@ -9,6 +9,8 @@ sources:
   - sdks/java-worker/src/main/java/com/tenvyr/worker/TenvyrWorker.java
   - sdks/java-worker/src/test/java/com/tenvyr/worker/HmacTest.java
   - sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java
+  - sdks/java-worker/src/test/java/com/tenvyr/worker/OrchestratorLoopbackWorker.java
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
   - scripts/sync-java-worker-schemas.py
   - contracts/conformance/callback-signatures/vectors.json
 ---
@@ -41,12 +43,16 @@ in sync with `python3 scripts/sync-java-worker-schemas.py check`.
 ## Limits versus TypeScript/Python
 
 Process-local idempotency and queue. AgentEvents are not implemented;
-the canonical result remains terminal authority. No Orchestrator
-loopback gate in this slice (mock callback server only).
+the canonical result remains terminal authority. Unsafe handler output
+becomes `AGENT_OUTPUT_INVALID` with message
+`Agent output validation failed` and `retryable: false`. The Orchestrator
+loopback is gated on `TENVYR_JAVA_EXECUTABLE` and a compiled classpath;
+it is excluded from default `pnpm --filter orchestrator test`.
 
 ## Verification
 
 ```bash
 python3 scripts/sync-java-worker-schemas.py check
 mvn -B -f sdks/java-worker/pom.xml test
+TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback
 ```

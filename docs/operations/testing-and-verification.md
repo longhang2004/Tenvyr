@@ -8,6 +8,7 @@ sources:
   - package.json
   - packages/worker/package.json
   - services/orchestrator/package.json
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
   - services/agent-runner/pom.xml
   - sdks/python-worker/pyproject.toml
   - sdks/java-worker/pom.xml
@@ -72,6 +73,7 @@ The repository workflow declares Python 3.11, 3.12, 3.13, and 3.14 jobs. Do not 
 
 ```bash
 TENVYR_PYTHON_EXECUTABLE=/absolute/path/to/python pnpm --filter orchestrator test:python-worker-loopback
+TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback
 pnpm test:identity
 pnpm verify:identity
 pnpm test:docs
@@ -82,7 +84,7 @@ python scripts/sync-python-worker-schemas.py check
 pnpm test:executor-host-rs
 ```
 
-The Python loopback intentionally fails when `TENVYR_PYTHON_EXECUTABLE` is absent. Identity and documentation tests exercise their verifiers with adversarial fixtures; the verifier commands audit the real repository.
+The Python loopback intentionally fails when `TENVYR_PYTHON_EXECUTABLE` is absent. The Java loopback intentionally fails when `TENVYR_JAVA_EXECUTABLE` is absent or the Worker classpath has not been compiled. Identity and documentation tests exercise their verifiers with adversarial fixtures; the verifier commands audit the real repository.
 
 Run Java assertions separately:
 
@@ -106,7 +108,11 @@ mvn -B -f sdks/java-worker/pom.xml test
 
 HMAC tests load `contracts/conformance/callback-signatures/vectors.json`.
 The protocol suite uses an in-process mock orchestrator callback server.
-Do not report an Orchestrator loopback as passed.
+The Orchestrator loopback is a separate gate:
+
+```bash
+TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback
+```
 
 ## C++ HTTP Worker
 
