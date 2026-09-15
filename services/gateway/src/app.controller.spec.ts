@@ -126,4 +126,11 @@ describe('workbench surface', () => {
       "/workbench/commands/executions/execution-1/cancel",
     );
   });
+
+  it("forwards the attention projection to the orchestrator", async () => {
+    await controller.getWorkbenchAttention();
+    const calls = (global as any).fetch.mock.calls;
+    expect(calls[0][0]).toContain("/workbench/attention");
+    expect(calls[0][1].method).toBe("GET");
+  });
 });

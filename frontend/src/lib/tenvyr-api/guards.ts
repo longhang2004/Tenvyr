@@ -158,11 +158,11 @@ export function parseConnectionTestResult(
  * Strict parse of the audited Workbench COMMAND envelope that the gateway
  * passes through verbatim: `{ action, idempotencyKey, outcome, result? }`.
  *
- * The gateway/orchestrator response is `{ success, data: <envelope> }`;
- * consumers MUST parse `data` with this guard — the previous class of bug
- * read `outcome` at the wrong nesting level and fell into the error branch
- * for every command (the AUTH_REQUIRED -> READY pattern). A malformed
- * envelope is an error, never an optimistic default.
+ * Live Gateway forwards orchestrator command JSON unwrapped. TenvyrApiClient
+ * exposes that envelope as `{ success, data }` so consumers parse `data`.
+ * Reading `outcome` on the client return value's top level is undefined by
+ * construction (the AUTH_REQUIRED -> READY pattern). A malformed envelope
+ * is an error, never an optimistic default.
  */
 export function parseWorkbenchCommandResult<T = unknown>(
   value: unknown,
