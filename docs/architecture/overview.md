@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-08-10
+last_verified: 2026-09-15
 sources:
   - services/gateway/src/app.controller.ts
   - services/gateway/src/socket.gateway.ts
@@ -15,6 +15,8 @@ sources:
   - services/orchestrator/src/agent-adapters/agent-adapter.router.ts
   - frontend/src/app/dashboard/page.tsx
   - services/orchestrator/src/services/engine.service.spec.ts
+  - docs/architecture/workers/java-worker-sdk.md
+  - docs/architecture/workers/cpp-worker.md
 ---
 
 # System Architecture Overview
@@ -33,7 +35,7 @@ flowchart LR
     KAFKA --> AGENTS["Code Reviewer and Observability agents"]
     AGENTS --> RUNNER["Java Agent Runner HTTP API"]
     ROUTER --> HTTP["HTTP Agent Adapter v1"]
-    HTTP --> WORKERS["TypeScript or Python Worker"]
+    HTTP --> WORKERS["TypeScript, Python, Java, or C++ Worker"]
     WORKERS --> CALLBACK["Signed Orchestrator callback"]
     CALLBACK --> ORCH
 ```

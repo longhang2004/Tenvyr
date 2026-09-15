@@ -4,12 +4,13 @@ status: current
 audience:
   - product
   - developer
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - docs/reference/implementation-status.json
   - services
   - packages
   - contracts
+  - sdks
 ---
 
 # Implementation status
@@ -26,7 +27,7 @@ contracts.
 | --------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------- |
 | Contracts v1, JSON numeric interoperability               | implemented | Schema version 1; post-v1 negotiation is not implemented                                      |
 | Kafka and HTTP agent adapters                             | implemented | HTTP callback replay/dispatch state remains process-local                                     |
-| TypeScript and Python Worker SDKs                         | implemented | Runtime queues/idempotency are process-local; Python cancellation is cooperative              |
+| TypeScript, Python, Java, and C++ HTTP Workers            | implemented | TS/Python are full SDKs; Java/C++ cover submit/HMAC/callback with mock tests; events remain TS/Python-only; queues/idempotency are process-local |
 | Java runner and example agents                            | implemented | Example/runtime packages, not a general framework integration layer                           |
 | Gateway, frontend, readiness, showcase                    | implemented | General external APIs remain behind the open production-exposure gate; local boundary hardened post-PP1: loopback default bind, bounded CORS_ORIGIN allow-list shared by HTTP and WebSocket, literal `*` rejected fail-closed |
 | AgentEvents and deterministic supervision                 | implemented | Events are evidence/liveness input, never execution authority                                 |

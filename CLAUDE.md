@@ -43,6 +43,8 @@ pnpm verify:package-packs
 pnpm test:identity
 pnpm verify:identity
 pnpm test:executor-host-rs
+pnpm test:java-worker
+pnpm test:cpp-worker
 ```
 
 Optional local CodeGraph, skills, persistent-memory, and output-compression tools

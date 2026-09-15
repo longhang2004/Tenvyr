@@ -6,8 +6,9 @@ use crate::config::{
 use crate::output::{adapt_native_runtime_output, NativeOutput};
 use crate::protocol::{
     authenticate_bearer, compact_json, create_callback_signature, failed_result, parse_run_request,
-    request_fingerprint, rfc3339_now, succeeded_result, validate_callback_url, ProtocolError,
-    HEADER_DELIVERY_ID, HEADER_KEY_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP, MAX_REQUEST_BYTES,
+    request_fingerprint, rfc3339_after_ms, rfc3339_now, succeeded_result, validate_callback_url,
+    ProtocolError, HEADER_DELIVERY_ID, HEADER_KEY_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+    MAX_REQUEST_BYTES,
 };
 use crate::state::{clear_run_state, terminate_orphan, write_run_state, RunState};
 use crate::supervisor::supervise_process;
@@ -347,7 +348,7 @@ async fn run_once(app: &App, request: &crate::protocol::RunRequest) -> serde_jso
                         .to_string(),
                     pid,
                     started_at: started_at.clone(),
-                    kill_at: rfc3339_now(),
+                    kill_at: rfc3339_after_ms(profile.wall_time_ms),
                 },
             );
         },

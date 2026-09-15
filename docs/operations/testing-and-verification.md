@@ -3,13 +3,15 @@ title: Testing and Verification
 status: current
 audience:
   - developer
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - package.json
   - packages/worker/package.json
   - services/orchestrator/package.json
   - services/agent-runner/pom.xml
   - sdks/python-worker/pyproject.toml
+  - sdks/java-worker/pom.xml
+  - sdks/cpp-worker/CMakeLists.txt
   - .github/workflows/release-ci.yml
   - scripts/verify-product-identity.mjs
   - scripts/verify-package-packs.mjs
@@ -94,6 +96,27 @@ mock/OpenAI/Anthropic/Ollama selection, required configuration, explicit
 `fail|mock` behavior, metadata, and safe logging; they do not call live models.
 The checked-in Mockito subclass mock maker avoids inline-mock self-attachment
 and keeps this JDK 17 path deterministic.
+
+## Java Worker SDK
+
+```bash
+python3 scripts/sync-java-worker-schemas.py check
+mvn -B -f sdks/java-worker/pom.xml test
+```
+
+HMAC tests load `contracts/conformance/callback-signatures/vectors.json`.
+The protocol suite uses an in-process mock orchestrator callback server.
+Do not report an Orchestrator loopback as passed.
+
+## C++ HTTP Worker
+
+```bash
+cmake -S sdks/cpp-worker -B sdks/cpp-worker/build
+cmake --build sdks/cpp-worker/build
+ctest --test-dir sdks/cpp-worker/build --output-on-failure
+```
+
+Requires a C++17 compiler and OpenSSL. Same HMAC fixture as Java.
 
 ## Frontend and showcase
 

@@ -3,7 +3,7 @@ title: Agent Rules and Mechanics
 status: current
 audience:
   - developer
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - AGENTS.md
   - CLAUDE.md
@@ -12,6 +12,8 @@ sources:
   - scripts/install-skills.sh
   - scripts/rtk-compress.sh
   - services/local-executor-host-rs/Cargo.toml
+  - sdks/java-worker/pom.xml
+  - sdks/cpp-worker/CMakeLists.txt
 ---
 
 # Agent rules and mechanics
@@ -119,6 +121,20 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 - **Rules:** Keep runtime dependencies limited to `aiohttp` and `jsonschema[format-nongpl]`; load the five tracked schemas only with `importlib.resources`; preserve exact-origin callback policy, finite JSON, FIFO capacity, duplicate-before-capacity behavior, serialized-once callback bytes, and one terminal result. The SDK installs no signal handlers. Threads and cancellation-suppressing coroutines may outlive Worker ownership but must never send a late callback.
 - **Packaging:** Version `0.1.0` is MIT-licensed, private, and must not be uploaded to PyPI. Wheels and sdists use explicit allowlists, include the license text, `py.typed`, and exactly five schemas, and must rebuild outside the monorepo without reading `../../contracts`.
 - **Verification:** Run the four pytest categories, Ruff, strict mypy, `scripts/sync-python-worker-schemas.py check`, `scripts/verify-python-worker-package.py`, the example smoke, and the explicit Orchestrator loopback with `TENVYR_PYTHON_EXECUTABLE`. Never claim Python-version or loopback results that were not run.
+
+### Java Worker SDK
+
+- **Purpose:** Hosts JDK 17 agents through `com.tenvyr:tenvyr-worker` using Jackson and `com.sun.net.httpserver.HttpServer`. Same HTTP Worker protocol as TypeScript/Python.
+- **Interfaces:** `POST /v1/runs`, `GET /health/live`, `GET /health/ready`. HMAC constants live in `Hmac.java`.
+- **Rules:** Do not add Spring. Do not rewrite Orchestrator. Keep `X-AgentWeave-*` header names. Bundle five schema resources; `scripts/sync-java-worker-schemas.py check` must pass. AgentEvents are out of scope until a later slice.
+- **Verification:** `python3 scripts/sync-java-worker-schemas.py check`; `mvn -B -f sdks/java-worker/pom.xml test`.
+
+### C++ HTTP Worker
+
+- **Purpose:** C++17 HTTP worker for the same submit/callback contract. OpenSSL HMAC; POSIX HTTP/1.1 Content-Length subset.
+- **Interfaces:** `POST /v1/runs`, `GET /health/live`, `GET /health/ready`. HMAC constants live in `include/tenvyr/hmac.hpp`.
+- **Rules:** Do not invent routes or `X-Tenvyr-*` aliases. Do not claim chunked-encoding or AgentEvent support.
+- **Verification:** `cmake -S sdks/cpp-worker -B sdks/cpp-worker/build && cmake --build sdks/cpp-worker/build && ctest --test-dir sdks/cpp-worker/build --output-on-failure`.
 
 ### Product Identity and Observability Roadmap
 

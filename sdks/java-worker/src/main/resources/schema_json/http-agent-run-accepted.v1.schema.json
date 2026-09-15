@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:tenvyr:schema:http-agent-run-accepted:v1",
+  "title": "HttpAgentRunAcceptedV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "invocationId",
+    "runId",
+    "status",
+    "acceptedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "invocationId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "status": { "const": "accepted" },
+    "acceptedAt": { "type": "string", "format": "date-time" }
+  }
+}

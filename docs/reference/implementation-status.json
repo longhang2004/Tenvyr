@@ -89,6 +89,46 @@
    ]
   },
   {
+   "id": "java-worker-sdk",
+   "status": "implemented",
+   "sources": [
+    "sdks/java-worker/src/main/java/com/tenvyr/worker"
+   ],
+   "tests": [
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/HmacTest.java",
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java",
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/SchemaResourceTest.java"
+   ],
+   "docs": [
+    "docs/architecture/workers/java-worker-sdk.md"
+   ],
+   "limitations": [
+    "Queue and idempotency are process-local",
+    "AgentEvents are not implemented",
+    "Orchestrator loopback is not gated; mock callback tests only"
+   ]
+  },
+  {
+   "id": "cpp-http-worker",
+   "status": "implemented",
+   "sources": [
+    "sdks/cpp-worker/src",
+    "sdks/cpp-worker/include/tenvyr"
+   ],
+   "tests": [
+    "sdks/cpp-worker/tests/test_hmac.cpp",
+    "sdks/cpp-worker/tests/test_worker.cpp"
+   ],
+   "docs": [
+    "docs/architecture/workers/cpp-worker.md"
+   ],
+   "limitations": [
+    "HTTP/1.1 Content-Length subset; no chunked encoding",
+    "AgentEvents are not implemented",
+    "Orchestrator loopback is not gated; mock callback tests only"
+   ]
+  },
+  {
    "id": "json-numeric-interoperability",
    "status": "implemented",
    "sources": [
