@@ -95,6 +95,58 @@ describe("TenvyrApiClient", () => {
     }
   });
 
+  test("wraps a top-level command envelope so callers can parse res.data", async () => {
+    // Live gateway forwards orchestrator command JSON verbatim (the HTML
+    // Workbench page reads data.outcome at the top level). Next.js pages
+    // parse res.data. The client must expose the envelope under data
+    // without requiring a second wrap from the gateway.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          action: "compare-executions",
+          idempotencyKey: "e2e-compare-1",
+          outcome: "executed",
+          result: { comparison: { schemaVersion: "1" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    try {
+      const client = new TenvyrApiClient(fakeBaseUrl);
+      const res = await client.compareExecutions("exec-a", "exec-b", "e2e-compare-1");
+      const command = parseWorkbenchCommandResult(res.data);
+      assert.equal(command.action, "compare-executions");
+      assert.equal(command.outcome, "executed");
+      assert.equal(command.result?.comparison?.schemaVersion, "1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("getAttention keeps the projection at the top level", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock.fn(async (url) => {
+      assert.equal(url, `${fakeBaseUrl}/api/workbench/attention`);
+      return new Response(
+        JSON.stringify({ items: [], serverTime: "2026-09-15T14:43:29.160Z" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    try {
+      const client = new TenvyrApiClient(fakeBaseUrl);
+      const res = await client.getAttention();
+      assert.equal(Array.isArray(res.items), true);
+      assert.equal(res.items.length, 0);
+      assert.equal(res.serverTime, "2026-09-15T14:43:29.160Z");
+      assert.equal("success" in res, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("normalizes HTTP error responses into TenvyrApiError", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock.fn(async () => {
