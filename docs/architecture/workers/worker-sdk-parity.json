@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-28",
+  "updatedAt": "2026-09-15",
   "features": [
     {
       "feature": "HTTP routes and response status mapping",
@@ -86,6 +86,8 @@
       "feature": "HMAC-SHA256 callback signatures",
       "typescript_status": "passed-local-8-of-8",
       "python_status": "passed-local-8-of-8",
+      "java_status": "passed-local-8-of-8",
+      "cpp_status": "passed-local-8-of-8",
       "shared_test_or_fixture": "callback-signatures/vectors.json",
       "intentional_difference": null,
       "reason": "All eight shared vectors use the same timestamp, delivery ID, and raw body construction."
@@ -129,6 +131,36 @@
       "shared_test_or_fixture": "packages/worker/test/events.spec.ts; sdks/python-worker/tests/test_events.py",
       "intentional_difference": "heartbeatIntervalMs (ms) vs event_heartbeat_interval_seconds (seconds); config spelling is snake_case in Python",
       "reason": "Per-invocation monotonic sequence, deterministic eventId invocationId:sequence, opt-in events.enabled, lifecycle accepted/heartbeat/completed/failed after the result callback, restricted public progress/log/artifact API, HMAC delivery with bounded retries, event failure isolated from the terminal result"
+    },
+    {
+      "feature": "Java HTTP Worker protocol (mock)",
+      "typescript_status": "n/a",
+      "python_status": "n/a",
+      "java_status": "passed-local-mock",
+      "cpp_status": "n/a",
+      "shared_test_or_fixture": "sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java",
+      "intentional_difference": "AgentEvents are not implemented.",
+      "reason": "In-process HttpServer plus mock callback server proved 202, HMAC headers, idempotent retry, 401, unsafe-integer 400, and unsafe handler output → AGENT_OUTPUT_INVALID."
+    },
+    {
+      "feature": "Java HTTP Worker Orchestrator loopback",
+      "typescript_status": "n/a",
+      "python_status": "n/a",
+      "java_status": "gated-on-TENVYR_JAVA_EXECUTABLE",
+      "cpp_status": "n/a",
+      "shared_test_or_fixture": "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts",
+      "intentional_difference": "Excluded from default orchestrator Jest; requires compiled test-classes and TENVYR_JAVA_EXECUTABLE.",
+      "reason": "Same three loopback cases as Python: callback retry with stable delivery ID, safe-integer boundaries plus AGENT_OUTPUT_INVALID, raw unsafe input 400 then reuse of the invocation ID."
+    },
+    {
+      "feature": "C++ HTTP Worker protocol (mock)",
+      "typescript_status": "n/a",
+      "python_status": "n/a",
+      "java_status": "n/a",
+      "cpp_status": "passed-local-mock",
+      "shared_test_or_fixture": "sdks/cpp-worker/tests/test_worker.cpp",
+      "intentional_difference": "HTTP/1.1 Content-Length subset; AgentEvents are not implemented.",
+      "reason": "In-process POSIX server plus mock callback server proved 202, HMAC headers, idempotent retry, 401, and unsafe-integer 400."
     }
   ],
   "sharedConformanceCaseCount": 73,

@@ -43,6 +43,9 @@ pnpm verify:package-packs
 pnpm test:identity
 pnpm verify:identity
 pnpm test:executor-host-rs
+pnpm test:java-worker
+TENVYR_JAVA_EXECUTABLE=java pnpm test:java-worker-loopback
+pnpm test:cpp-worker
 ```
 
 Optional local CodeGraph, skills, persistent-memory, and output-compression tools

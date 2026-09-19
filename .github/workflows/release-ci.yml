@@ -175,6 +175,59 @@ jobs:
       - name: Java Runner tests
         run: mvn -B -f services/agent-runner/pom.xml test
 
+  java-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Java Worker schema sync and tests
+        run: |
+          python3 scripts/sync-java-worker-schemas.py check
+          mvn -B -f sdks/java-worker/pom.xml test
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace for loopback
+        run: pnpm install --frozen-lockfile
+
+      - name: Real Orchestrator to Java loopback
+        env:
+          TENVYR_JAVA_EXECUTABLE: java
+        run: pnpm --filter orchestrator test:java-worker-loopback
+
+  cpp-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: C++ Worker mock tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libssl-dev
+          cmake -S sdks/cpp-worker -B sdks/cpp-worker/build -DCMAKE_CXX_COMPILER=g++
+          cmake --build sdks/cpp-worker/build
+          ctest --test-dir sdks/cpp-worker/build --output-on-failure
+
+  rust-executor-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust local executor host tests
+        run: cargo test --manifest-path services/local-executor-host-rs/Cargo.toml
+
   postgres-integration:
     runs-on: ubuntu-latest
     services:

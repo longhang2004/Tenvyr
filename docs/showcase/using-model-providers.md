@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-07-28
+last_verified: 2026-09-15
 sources:
   - services/agent-runner/src/main/java
   - services/agent-runner/src/test/java
@@ -35,10 +35,36 @@ unset LLM_FAILURE_MODE
 mvn spring-boot:run
 ```
 
+OpenAI-compatible servers (vLLM, LM Studio, LiteLLM, Azure OpenAI with a
+`/v1` prefix) use the same provider and set `OPENAI_BASE_URL` to that
+prefix. The runner POSTs `{OPENAI_BASE_URL}/chat/completions`.
+
+```bash
+export LLM_PROVIDER=openai
+export OPENAI_BASE_URL='http://127.0.0.1:4000/v1'
+export OPENAI_API_KEY='<key-or-placeholder-accepted-by-the-proxy>'
+export OPENAI_MODEL='<model-id>'
+unset LLM_FAILURE_MODE
+mvn spring-boot:run
+```
+
 ```bash
 export LLM_PROVIDER=anthropic
 export ANTHROPIC_API_KEY='<your-key>'
 export ANTHROPIC_MODEL='<model-id-available-to-your-account>'
+unset LLM_FAILURE_MODE
+mvn spring-boot:run
+```
+
+Anthropic-compatible servers use the same provider and set
+`ANTHROPIC_BASE_URL` to the origin (no `/v1`). The runner POSTs
+`{ANTHROPIC_BASE_URL}/v1/messages`.
+
+```bash
+export LLM_PROVIDER=anthropic
+export ANTHROPIC_BASE_URL='http://127.0.0.1:4000'
+export ANTHROPIC_API_KEY='<key-or-placeholder-accepted-by-the-proxy>'
+export ANTHROPIC_MODEL='<model-id>'
 unset LLM_FAILURE_MODE
 mvn spring-boot:run
 ```
@@ -121,6 +147,6 @@ application, avoid blocking the event loop by using an async client or a thread
 boundary for synchronous SDK calls.
 
 Gemini, Azure OpenAI, Bedrock, Vertex AI, vLLM, LM Studio, OpenRouter, and
-OpenAI-compatible endpoints follow the same application pattern. They are not
-first-class automated v0.1.0 integrations; authentication, error mapping,
-cancellation, and metadata remain the application's responsibility.
+OpenAI-compatible endpoints can also be called from a Worker. The Java
+Runner already accepts `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` for
+compatible HTTP APIs. Worker SDKs still own their own client configuration.

@@ -34,6 +34,29 @@ export const GATEWAY_API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" ? "" : "http://127.0.0.1:3000");
 
+/** Gateway command JSON is unwrapped; Next.js pages parse res.data. */
+function asCommandApiResponse(data: unknown): unknown {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return data;
+  }
+  const body = data as Record<string, unknown>;
+  if (body.success === true && typeof body.data === "object" && body.data !== null) {
+    return data;
+  }
+  if (
+    typeof body.action === "string" &&
+    body.action.length > 0 &&
+    typeof body.idempotencyKey === "string" &&
+    body.idempotencyKey.length > 0 &&
+    (body.outcome === "executed" ||
+      body.outcome === "duplicate" ||
+      body.outcome === "rejected")
+  ) {
+    return { success: true, data };
+  }
+  return data;
+}
+
 export class TenvyrApiClient {
   private baseUrl: string;
 
@@ -92,7 +115,7 @@ export class TenvyrApiClient {
       throw TenvyrApiError.fromResponse(response.status, data);
     }
 
-    return data as T;
+    return asCommandApiResponse(data) as T;
   }
 
   // Health

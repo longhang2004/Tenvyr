@@ -121,6 +121,11 @@ export class AppController {
     return this.forwardToOrchestrator("/workbench/connections");
   }
 
+  @Get("api/workbench/attention")
+  async getWorkbenchAttention() {
+    return this.forwardToOrchestrator("/workbench/attention");
+  }
+
   @Get("api/workbench/onboarding/:runtimeKind")
   async getWorkbenchOnboarding(@Param("runtimeKind") runtimeKind: string) {
     return this.forwardToOrchestrator(

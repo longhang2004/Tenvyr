@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - .env.example
   - docker-compose.yml
@@ -158,6 +158,8 @@ Kafka topic, consumer-group, client-ID, database, Docker network, and Java packa
 | `LLM_FAILURE_MODE`                    | Optional; `fail` or `mock`. Defaults to `mock` for mock provider and `fail` for a selected real provider.     |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | Required and checked for placeholders when their provider is selected; empty by default.                      |
 | `OPENAI_MODEL`, `ANTHROPIC_MODEL`     | Required nonblank model identifier for the selected provider. Source defaults exist but should be overridden. |
+| `OPENAI_BASE_URL`                     | Optional; default `https://api.openai.com/v1`. Runner POSTs `{base}/chat/completions`. http/https only.       |
+| `ANTHROPIC_BASE_URL`                  | Optional; default `https://api.anthropic.com`. Runner POSTs `{base}/v1/messages`. http/https only.            |
 | `OLLAMA_API_URL`                      | Optional; source default `http://localhost:11434`; Compose uses the host bridge by default.                   |
 | `OLLAMA_MODEL`                        | Required nonblank model identifier when Ollama is selected.                                                   |
 

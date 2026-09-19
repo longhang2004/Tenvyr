@@ -4,13 +4,14 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - services/orchestrator/src/services/workbench-projection.service.ts
   - services/orchestrator/src/services/workbench-command.service.ts
   - services/orchestrator/src/services/workbench-release-workspace.ts
   - services/orchestrator/src/workbench.controller.ts
   - services/gateway/src/app.controller.ts
+  - frontend/src/lib/tenvyr-api/client.ts
   - services/orchestrator/src/services/runtime-connection.service.ts
 ---
 
@@ -51,7 +52,7 @@ logs, chain of thought, or artifact bytes.
   action + hash, outcome), bounded attempt summaries (never raw snapshots
   or results), approval counts, bounded artifact references, and declared
   bounds.
-- Gateway proxies `api/workbench/*` to the orchestrator.
+- Gateway proxies Workbench reads and commands under `api/workbench/*`, including `GET /api/workbench/attention` → orchestrator `GET /workbench/attention`. Command JSON stays unwrapped at the Gateway (the HTML Workbench page reads `outcome` at the top level); the Next.js client wraps a command envelope as `{ success, data }` so pages parse `res.data`.
 
 ## Implemented (slice 1 — read projections)
 
@@ -70,7 +71,7 @@ logs, chain of thought, or artifact bytes.
   action + hash, outcome), bounded attempt summaries (never raw snapshots
   or results), approval counts, bounded artifact references, and declared
   bounds.
-- Gateway proxies `api/workbench/*` to the orchestrator.
+- Gateway proxies Workbench reads and commands under `api/workbench/*`, including `GET /api/workbench/attention` → orchestrator `GET /workbench/attention`. Command JSON stays unwrapped at the Gateway (the HTML Workbench page reads `outcome` at the top level); the Next.js client wraps a command envelope as `{ success, data }` so pages parse `res.data`.
 
 ## Implemented (slice 2 — command surface)
 

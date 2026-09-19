@@ -3,7 +3,7 @@ title: JSON Interoperability
 status: current
 audience:
   - developer
-last_verified: 2026-07-28
+last_verified: 2026-09-15
 sources:
   - packages/contracts/src/validation.ts
   - packages/contracts/test/json-numbers.spec.ts
@@ -14,6 +14,9 @@ sources:
   - sdks/python-worker/src/tenvyr_worker/_runtime/canonical_json.py
   - sdks/python-worker/tests/test_schema_protocol.py
   - sdks/python-worker/tests/test_canonical_json.py
+  - sdks/java-worker/src/main/java/com/tenvyr/worker/JsonCompat.java
+  - sdks/java-worker/src/main/java/com/tenvyr/worker/TenvyrWorker.java
+  - sdks/cpp-worker/src/json.cpp
   - contracts/conformance/json-numbers
 ---
 
@@ -59,9 +62,10 @@ request may reuse the same invocation ID. An unsafe agent result source is
 converted to a failed result with `AGENT_OUTPUT_INVALID`, a static message, and
 `retryable: false`; unsafe failure details are not copied into the callback.
 
-The TypeScript and Python SDKs may serialize safe values differently for their
-process-local fingerprints. Their required observable behavior is the same:
-unsafe integral numbers are rejected before acceptance or callback delivery.
+The TypeScript, Python, Java, and C++ workers may serialize safe values
+differently for their process-local fingerprints. Their required observable
+behavior is the same: unsafe integral numbers are rejected before acceptance
+or callback delivery.
 
 ## Executable fixtures
 
