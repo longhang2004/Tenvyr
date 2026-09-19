@@ -34,6 +34,7 @@ import { handoffBundleHash, type HandoffBundleV1 } from "./domain/handoff";
 import {
   PROCESS_INSTANCE_ID,
   WorkbenchCommandService,
+  getActiveReleaseTokens,
 } from "./services/workbench-command.service";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -3235,21 +3236,24 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
     } as any;
     resetRemoveInvocationCount();
     const keyB = `marker-fail-dirty-B-${Date.now()}-${Math.random()}`;
-    const errB = await workbenchB.releaseExecutionWorkspace({ idempotencyKey: keyB, workspaceExecutionId: leaseId }).catch((e) => e);
-    // After B: terminal persistence failed, recoverable marker write failed, B's exact token no longer active
-    const wsAfterB = await dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: leaseId } as any });
-    expect(wsAfterB?.state).toBe("RELEASE_REQUESTED");
-    expect(wsAfterB?.releaseOperationId).toBe(opAId);
-    const lockAfterB: any = await dataSource.query(`SELECT "releaseOperationId" FROM "workspace_release_locks" WHERE "workspaceExecutionId" = $1`, [leaseId]);
-    expect((Array.isArray(lockAfterB) ? lockAfterB[0]?.releaseOperationId : lockAfterB?.rows?.[0]?.releaseOperationId)).toBe(opAId);
-    const opAAfterB = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { id: opAId } });
-    expect((opAAfterB?.outcome as any)?.pending).toBe(true);
-    // Marker write failed, so recoverable marker may be absent, but B's token is unregistered, so A is still recoverable via inactive-token orphan
-    const tokenB = (opAAfterB?.outcome as any)?.ownerToken;
-    const isActiveB = tokenB ? (workbenchB as any).isActiveToken(opAId, tokenB) : false;
-    expect(isActiveB).toBe(false);
-    (dataSource.getRepository(OperatorActionEntity) as any).createQueryBuilder = origCreateQB;
-    (service as any).setTerminalShouldFail(false);
+    try {
+      await workbenchB.releaseExecutionWorkspace({ idempotencyKey: keyB, workspaceExecutionId: leaseId }).catch((e) => e);
+      // After B: terminal persistence failed, recoverable marker write failed, B's exact token no longer active
+      const wsAfterB = await dataSource.getRepository(WorkspaceExecutionEntity).findOne({ where: { id: leaseId } as any });
+      expect(wsAfterB?.state).toBe("RELEASE_REQUESTED");
+      expect(wsAfterB?.releaseOperationId).toBe(opAId);
+      const lockAfterB: any = await dataSource.query(`SELECT "releaseOperationId" FROM "workspace_release_locks" WHERE "workspaceExecutionId" = $1`, [leaseId]);
+      expect((Array.isArray(lockAfterB) ? lockAfterB[0]?.releaseOperationId : lockAfterB?.rows?.[0]?.releaseOperationId)).toBe(opAId);
+      const opAAfterB = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { id: opAId } });
+      expect((opAAfterB?.outcome as any)?.pending).toBe(true);
+      // Marker write failed, so recoverable marker may be absent, but B's token is unregistered, so A is still recoverable via inactive-token orphan
+      const tokenB = (opAAfterB?.outcome as any)?.ownerToken;
+      const isActiveB = tokenB ? getActiveReleaseTokens().has(`${opAId}:${tokenB}`) : false;
+      expect(isActiveB).toBe(false);
+    } finally {
+      (dataSource.getRepository(OperatorActionEntity) as any).createQueryBuilder = origCreateQB;
+      (service as any).setTerminalShouldFail(false);
+    }
     // C new UUID in same process must reclaim exact A and converge to PRESERVED WORKTREE_DIRTY
     resetRemoveInvocationCount();
     const workbenchC = new WorkbenchCommandService(dataSource, undefined, undefined, undefined, undefined, undefined, undefined, undefined, service);
@@ -3333,11 +3337,14 @@ describeWithPostgres("PostgreSQL Workspace Allocation Barrier Concurrency", () =
     } as any;
     resetRemoveInvocationCount();
     const keyB = `marker-fail-unknown-B-${Date.now()}-${Math.random()}`;
-    await workbenchB.releaseExecutionWorkspace({ idempotencyKey: keyB, workspaceExecutionId: leaseId }).catch(() => {});
-    const opAAfterB = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { id: opAId } });
-    expect((opAAfterB?.outcome as any)?.pending).toBe(true);
-    (dataSource.getRepository(OperatorActionEntity) as any).createQueryBuilder = origCreateQB2;
-    (service as any).setTerminalShouldFail(false);
+    try {
+      await workbenchB.releaseExecutionWorkspace({ idempotencyKey: keyB, workspaceExecutionId: leaseId }).catch(() => {});
+      const opAAfterB = await dataSource.getRepository(OperatorActionEntity).findOne({ where: { id: opAId } });
+      expect((opAAfterB?.outcome as any)?.pending).toBe(true);
+    } finally {
+      (dataSource.getRepository(OperatorActionEntity) as any).createQueryBuilder = origCreateQB2;
+      (service as any).setTerminalShouldFail(false);
+    }
     setGitRunner(null as any);
     resetRemoveInvocationCount();
     const workbenchC = new WorkbenchCommandService(dataSource, undefined, undefined, undefined, undefined, undefined, undefined, undefined, service);

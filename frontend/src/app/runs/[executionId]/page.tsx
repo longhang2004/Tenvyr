@@ -754,4 +754,3 @@ export default function RunDetailPage() {
     </div>
   );
 }
-

@@ -276,7 +276,7 @@ export async function releaseExecutionWorkspace(
       } catch {}
       if (isStale || isSamePidRecoverable) {
         await tryRecoverStaleOperation(deps, ownerOp).catch(() => {});
-        const observed = await observeRecoveredRelease(deps, 
+        const observed = await observeRecoveredRelease(deps,
           auditRow.id,
           key,
           ownerOp,
@@ -370,7 +370,7 @@ export async function releaseExecutionWorkspace(
     .getMany();
   for (const stale of stalePendingForTarget) {
     await tryRecoverStaleOperation(deps, stale.id).catch(() => {});
-    const observed = await observeRecoveredRelease(deps, 
+    const observed = await observeRecoveredRelease(deps,
       auditRow.id,
       key,
       stale.id,
@@ -518,7 +518,7 @@ export async function releaseExecutionWorkspace(
       if (curOutcome?.pending === true) {
         throw error;
       }
-      const truthful = await truthfulReleaseRefusalOutcome(deps, 
+      const truthful = await truthfulReleaseRefusalOutcome(deps,
         input.workspaceExecutionId,
         code,
         error.message,
