@@ -89,6 +89,47 @@
    ]
   },
   {
+   "id": "java-worker-sdk",
+   "status": "implemented",
+   "sources": [
+    "sdks/java-worker/src/main/java/com/tenvyr/worker"
+   ],
+   "tests": [
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/HmacTest.java",
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java",
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/SchemaResourceTest.java",
+    "sdks/java-worker/src/test/java/com/tenvyr/worker/OrchestratorLoopbackWorker.java",
+    "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts"
+   ],
+   "docs": [
+    "docs/architecture/workers/java-worker-sdk.md"
+   ],
+   "limitations": [
+    "Queue and idempotency are process-local",
+    "AgentEvents are not implemented"
+   ]
+  },
+  {
+   "id": "cpp-http-worker",
+   "status": "implemented",
+   "sources": [
+    "sdks/cpp-worker/src",
+    "sdks/cpp-worker/include/tenvyr"
+   ],
+   "tests": [
+    "sdks/cpp-worker/tests/test_hmac.cpp",
+    "sdks/cpp-worker/tests/test_worker.cpp"
+   ],
+   "docs": [
+    "docs/architecture/workers/cpp-worker.md"
+   ],
+   "limitations": [
+    "HTTP/1.1 Content-Length subset; no chunked encoding",
+    "AgentEvents are not implemented",
+    "Orchestrator loopback is not gated; mock callback tests only"
+   ]
+  },
+  {
    "id": "json-numeric-interoperability",
    "status": "implemented",
    "sources": [
@@ -206,7 +247,8 @@
    ],
    "limitations": [
     "Provider HTTP is unit-tested with mocks; live APIs are not called in CI",
-    "Token usage is estimated and labeled usageSource=estimated"
+    "Token usage is estimated and labeled usageSource=estimated",
+    "Compatible OpenAI/Anthropic base URLs are unit-tested with a mock HTTP client; live proxy APIs are not CI gates"
    ]
   },
   {
@@ -842,6 +884,7 @@
     "services/gateway/src/app.controller.ts"
    ],
    "tests": [
+    "services/gateway/src/app.controller.spec.ts",
     "services/orchestrator/src/services/workbench-projection.service.spec.ts",
     "services/orchestrator/src/services/workbench-command.service.spec.ts",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
@@ -1124,14 +1167,18 @@
     "services/orchestrator/src/domain/attention.ts",
     "services/orchestrator/src/services/attention.service.ts",
     "services/orchestrator/src/workbench.controller.ts",
+    "services/gateway/src/app.controller.ts",
     "frontend/src/app/attention/page.tsx",
     "frontend/src/app/dashboard/page.tsx",
-    "frontend/src/components/app-shell/AppShell.tsx"
+    "frontend/src/components/app-shell/AppShell.tsx",
+    "frontend/src/lib/tenvyr-api/client.ts"
    ],
    "tests": [
     "services/orchestrator/src/domain/attention.spec.ts",
     "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
-    "services/orchestrator/src/workspace-execution-recovery.spec.ts"
+    "services/orchestrator/src/workspace-execution-recovery.spec.ts",
+    "services/gateway/src/app.controller.spec.ts",
+    "frontend/src/lib/tenvyr-api/client.test.mjs"
    ],
    "docs": [
     "docs/architecture/attention.md"

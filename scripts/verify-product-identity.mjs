@@ -203,6 +203,7 @@ const wireProtocolPaths = new Set([
   "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
   "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts",
   "services/orchestrator/src/agent-adapters/http-python-worker.integration.spec.ts",
+  "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts",
   "services/orchestrator/src/agent-adapters/http-worker.integration.spec.ts",
   "packages/worker/test/callback.spec.ts",
   "services/local-executor-host/integration/local-executor-host.integration.spec.ts",
@@ -211,6 +212,13 @@ const wireProtocolPaths = new Set([
   "sdks/python-worker/README.md",
   "sdks/python-worker/CONFORMANCE.md",
   "sdks/python-worker/tests/test_events.py",
+  "sdks/java-worker/src/main/java/com/tenvyr/worker/Hmac.java",
+  "sdks/cpp-worker/include/tenvyr/hmac.hpp",
+  "docs/architecture/workers/java-worker-sdk.md",
+  "docs/architecture/workers/cpp-worker.md",
+  "docs/plans/active/polyglot-http-workers/SPEC.md",
+  "docs/plans/active/polyglot-http-workers/PLAN.md",
+  "docs/plans/active/polyglot-http-workers/VERIFY.md",
 ]);
 const kafkaPathRules = new Map([
   [`${legacyLower}-dev`, new Set([".env.example"])],
@@ -440,6 +448,24 @@ export const requiredLegacyIdentifiers = Object.freeze([
           "m",
         ),
         `pub const HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]}: &str = "${header}";`,
+      ),
+      requiredPattern(
+        `java-worker-sends-${header}`,
+        "sdks/java-worker/src/main/java/com/tenvyr/worker/Hmac.java",
+        new RegExp(
+          `^[\\t ]*public static final String HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]}[\\t ]*=[\\t ]*(["'])${escapeRegExp(header)}\\1;[\\t ]*$`,
+          "m",
+        ),
+        `public static final String HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]} = "${header}";`,
+      ),
+      requiredPattern(
+        `cpp-worker-sends-${header}`,
+        "sdks/cpp-worker/include/tenvyr/hmac.hpp",
+        new RegExp(
+          `^[\\t ]*inline constexpr char HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]}\\[\\][\\t ]*=[\\t ]*(["'])${escapeRegExp(header)}\\1;[\\t ]*$`,
+          "m",
+        ),
+        `inline constexpr char HEADER_${["KEY_ID", "TIMESTAMP", "DELIVERY_ID", "SIGNATURE"][index]}[] = "${header}";`,
       ),
     ];
   }),
@@ -1284,7 +1310,7 @@ function stripComments(text, path) {
   let stripped = text
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/<!--[\s\S]*?-->/g, "");
-  if (/\.(?:[cm]?[jt]sx?|java)$/.test(path)) {
+  if (/\.(?:[cm]?[jt]sx?|java|hpp|h|cpp|rs)$/.test(path)) {
     stripped = stripped.replace(/^[\t ]*\/\/.*$/gm, "");
   }
   if (path.endsWith(".py")) {

@@ -18,8 +18,11 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import org.mockito.ArgumentCaptor;
+
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(OutputCaptureExtension.class)
@@ -89,6 +92,8 @@ class LlmServiceTest {
 
         assertThat(response.getOutput()).isEqualTo("openai output");
         assertMetadata(response, "openai", "openai-test-model", false);
+        assertThat(capturedUri(fixture.httpClient()))
+            .isEqualTo("https://api.openai.com/v1/chat/completions");
     }
 
     @Test
@@ -100,6 +105,8 @@ class LlmServiceTest {
 
         assertThat(response.getOutput()).isEqualTo("anthropic output");
         assertMetadata(response, "anthropic", "anthropic-test-model", false);
+        assertThat(capturedUri(fixture.httpClient()))
+            .isEqualTo("https://api.anthropic.com/v1/messages");
     }
 
     @Test
@@ -111,6 +118,44 @@ class LlmServiceTest {
 
         assertThat(response.getOutput()).isEqualTo("ollama output");
         assertMetadata(response, "ollama", "ollama-test-model", false);
+    }
+
+    @Test
+    void openaiCompatibleBaseUrlIsJoinedAndTrailingSlashStripped() throws Exception {
+        ServiceFixture fixture = service("openai", "fail");
+        ReflectionTestUtils.setField(fixture.service(), "openaiBaseUrl", "http://127.0.0.1:4000/v1/");
+        respond(fixture.httpClient(), 200, "{\"choices\":[{\"message\":{\"content\":\"compat output\"}}]}");
+
+        RunResponse response = fixture.service().execute(sampleRequest());
+
+        assertThat(response.getOutput()).isEqualTo("compat output");
+        assertThat(capturedUri(fixture.httpClient()))
+            .isEqualTo("http://127.0.0.1:4000/v1/chat/completions");
+    }
+
+    @Test
+    void anthropicCompatibleBaseUrlIsJoined() throws Exception {
+        ServiceFixture fixture = service("anthropic", "fail");
+        ReflectionTestUtils.setField(fixture.service(), "anthropicBaseUrl", "http://127.0.0.1:4000");
+        respond(fixture.httpClient(), 200, "{\"content\":[{\"text\":\"compat output\"}]}");
+
+        RunResponse response = fixture.service().execute(sampleRequest());
+
+        assertThat(response.getOutput()).isEqualTo("compat output");
+        assertThat(capturedUri(fixture.httpClient()))
+            .isEqualTo("http://127.0.0.1:4000/v1/messages");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"file:///tmp", "https://user:pass@api.example/v1"})
+    void rejectsNonHttpOrUserinfoOpenAiBaseUrl(String baseUrl) {
+        ServiceFixture fixture = service("openai", "fail");
+        ReflectionTestUtils.setField(fixture.service(), "openaiBaseUrl", baseUrl);
+
+        assertThatThrownBy(() -> fixture.service().execute(sampleRequest()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageStartingWith("OPENAI_BASE_URL ");
+        verifyNoInteractions(fixture.httpClient());
     }
 
     @Test
@@ -194,6 +239,12 @@ class LlmServiceTest {
         assertThat(output.getAll())
             .contains("LLM provider call failed for openai")
             .doesNotContain("TOP_SECRET_KEY", "TOP_SECRET_RESPONSE_BODY");
+    }
+
+    private String capturedUri(HttpClient client) throws Exception {
+        ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(client).send(captor.capture(), any(HttpResponse.BodyHandler.class));
+        return captor.getValue().uri().toString();
     }
 
     private record ServiceFixture(LlmService service, HttpClient httpClient) {}

@@ -208,7 +208,7 @@ describe("parseWorkbenchCommandResult (P2 closure envelope)", () => {
   });
 
   test("top-level outcome reads are undefined by construction (the bug class)", () => {
-    // The gateway passes { success, data: <envelope> } through verbatim —
+    // The Next.js client exposes { success, data: <envelope> } —
     // a consumer reading res.outcome at the top level always gets
     // undefined and must fall into the error branch, never a fake success.
     const gatewayBody = { success: true, data: envelope() };

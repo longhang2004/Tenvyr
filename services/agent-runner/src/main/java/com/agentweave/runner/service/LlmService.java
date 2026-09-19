@@ -36,11 +36,17 @@ public class LlmService {
     @Value("${OPENAI_MODEL:gpt-4o-mini}")
     private String openaiModel;
 
+    @Value("${OPENAI_BASE_URL:https://api.openai.com/v1}")
+    private String openaiBaseUrl;
+
     @Value("${ANTHROPIC_API_KEY:}")
     private String anthropicApiKey;
 
     @Value("${ANTHROPIC_MODEL:claude-3-5-haiku-latest}")
     private String anthropicModel;
+
+    @Value("${ANTHROPIC_BASE_URL:https://api.anthropic.com}")
+    private String anthropicBaseUrl;
 
     @Value("${OLLAMA_API_URL:http://localhost:11434}")
     private String ollamaApiUrl;
@@ -90,6 +96,8 @@ public class LlmService {
             }
             requireModel(ollamaModel, "OLLAMA_MODEL", provider);
             return realExecution(callOllama(prompt), provider, ollamaModel);
+        } catch (IllegalArgumentException error) {
+            throw error;
         } catch (Exception ex) {
             if ("mock".equals(failureMode)) {
                 System.err.println("LLM provider call failed for " + provider + "; using deterministic mock output.");
@@ -107,7 +115,7 @@ public class LlmService {
         );
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.openai.com/v1/chat/completions"))
+                .uri(URI.create(endpointUrl(openaiBaseUrl, "https://api.openai.com/v1", "/chat/completions", "OPENAI_BASE_URL")))
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + openaiApiKey)
@@ -130,7 +138,7 @@ public class LlmService {
         );
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.anthropic.com/v1/messages"))
+                .uri(URI.create(endpointUrl(anthropicBaseUrl, "https://api.anthropic.com", "/v1/messages", "ANTHROPIC_BASE_URL")))
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json")
                 .header("x-api-key", anthropicApiKey)
@@ -167,6 +175,28 @@ public class LlmService {
             throw new IllegalStateException("Ollama response did not include generated text");
         }
         return response.asText();
+    }
+
+    private static String endpointUrl(String configured, String fallback, String path, String variable) {
+        String base = configured == null || configured.isBlank() ? fallback : configured.trim();
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        URI uri;
+        try {
+            uri = URI.create(base);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException(variable + " is not a valid URL");
+        }
+        String scheme = uri.getScheme();
+        if (scheme == null
+                || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+            throw new IllegalArgumentException(variable + " must be http or https");
+        }
+        if (uri.getRawUserInfo() != null) {
+            throw new IllegalArgumentException(variable + " must not contain userinfo");
+        }
+        return base + path;
     }
 
     private JsonNode sendJsonRequest(HttpRequest request) throws Exception {

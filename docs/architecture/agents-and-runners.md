@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-07-28
+last_verified: 2026-09-15
 sources:
   - services/agent-code-reviewer/src/kafka.service.ts
   - services/agent-code-reviewer/src/kafka.service.spec.ts
@@ -57,8 +57,12 @@ context map, plus `/health`. It resolves `{{path}}` placeholders, then selects
 the configured provider:
 
 - deterministic local output when `LLM_PROVIDER=mock`;
-- OpenAI when `LLM_PROVIDER=openai` and a non-placeholder API key exists;
-- Anthropic when selected with a non-placeholder API key;
+- OpenAI when `LLM_PROVIDER=openai` and a non-placeholder API key exists
+  (`OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`; compatible
+  proxies set the `/v1` prefix);
+- Anthropic when selected with a non-placeholder API key
+  (`ANTHROPIC_BASE_URL` defaults to `https://api.anthropic.com`; compatible
+  proxies set the origin);
 - Ollama when selected, using its configured local URL.
 
 Unsupported providers and failure modes are rejected. A real provider defaults
@@ -80,7 +84,9 @@ results, invalid-input isolation, safe logging, and provider metadata
 propagation. Java tests cover default mock, each provider selection, unsupported
 configuration, missing credentials, both failure modes, metadata, and the
 absence of credential values in logs. Provider HTTP responses are mocked; live
-OpenAI, Anthropic, and Ollama calls are not CI release gates.
+OpenAI, Anthropic, and Ollama calls are not CI release gates. Compatible
+`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` values are unit-tested against a
+mock HTTP client; they are not live gates.
 
 The Runner uses approximate token counts, has no model-routing policy engine,
 and retains the compatibility Java namespace documented in the

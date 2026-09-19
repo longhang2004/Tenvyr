@@ -5,10 +5,14 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-08-11
+last_verified: 2026-09-15
 sources:
   - package.json
   - docs/reference/implementation-status.json
+  - docs/architecture/workers/java-worker-sdk.md
+  - docs/architecture/workers/cpp-worker.md
+  - docs/plans/active/polyglot-http-workers/GOAL.md
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
 ---
 
 # Tenvyr Documentation
@@ -52,7 +56,9 @@ prose. The conflict must still be corrected rather than ignored.
   and the
   [invocation efficiency / context projection baseline](architecture/executors/invocation-efficiency.md)
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
-  [Python](architecture/workers/python-worker-sdk.md), and the
+  [Python](architecture/workers/python-worker-sdk.md),
+  [Java](architecture/workers/java-worker-sdk.md),
+  [C++](architecture/workers/cpp-worker.md), and the
   [machine parity ledger](architecture/workers/worker-sdk-parity.json)
 
 ## Operations
@@ -96,6 +102,9 @@ Developer tooling is not a Tenvyr production runtime feature.
   the [P2 runtime model sources + model selection slice](plans/active/tenvyr-productization-roadmap/P2-runtime-model-sources/GOAL.md),
   the [PP1 coding-agent wedge slice](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md) ([report](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/IMPLEMENTATION_REPORT.md)),
   the [P3 runtime harness optimization + context efficiency slice (implemented; plan archived)](archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/GOAL.md),
+  the [polyglot HTTP workers slice](plans/active/polyglot-http-workers/GOAL.md)
+  (Java Worker SDK, C++ worker, truthful Rust host — TypeScript control
+  plane stays),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take

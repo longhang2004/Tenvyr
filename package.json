@@ -41,6 +41,9 @@
     "dev:verbose": "TENVYR_LOG_LEVEL=verbose node scripts/dev.mjs",
     "test:dev-ux": "node --test scripts/dev-ux.test.mjs",
     "test:executor-host-rs": "cargo test --manifest-path services/local-executor-host-rs/Cargo.toml",
+    "test:java-worker": "mvn -B -f sdks/java-worker/pom.xml test",
+    "test:java-worker-loopback": "pnpm --filter orchestrator test:java-worker-loopback",
+    "test:cpp-worker": "cmake -S sdks/cpp-worker -B sdks/cpp-worker/build -DCMAKE_CXX_COMPILER=g++ && cmake --build sdks/cpp-worker/build && ctest --test-dir sdks/cpp-worker/build --output-on-failure",
     "test": "node --test scripts/dev-ux.test.mjs"
   },
   "devDependencies": {

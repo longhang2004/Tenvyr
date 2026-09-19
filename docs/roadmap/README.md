@@ -4,10 +4,11 @@ status: current
 audience:
   - developer
   - product
-last_verified: 2026-08-17
+last_verified: 2026-09-15
 sources:
   - docs/plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md
   - docs/plans/active/tenvyr-productization-roadmap/ROADMAP.md
+  - docs/plans/active/polyglot-http-workers/GOAL.md
   - docs/reference/implementation-status.md
 ---
 
@@ -42,6 +43,8 @@ Product Pivot 1
 
 Planned/next work after the deterministic vertical:
 - [PP1 slice documents](../plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md)
+- [Polyglot HTTP workers](../plans/active/polyglot-http-workers/GOAL.md)
+  (Java SDK + C++ worker + truthful Rust host; TypeScript control plane stays)
 - real-runtime manual dogfood (Codex / Claude Code / OpenCode; opt-in, no
   paid credentials in CI) — the Technical Lead selects the next feature
   only after that measured evidence.

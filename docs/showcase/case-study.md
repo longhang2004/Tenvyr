@@ -4,10 +4,12 @@ status: current
 audience:
   - product
   - developer
-last_verified: 2026-07-28
+last_verified: 2026-09-15
 sources:
   - docs/architecture/overview.md
   - docs/architecture/control-plane.md
+  - docs/architecture/workers/java-worker-sdk.md
+  - docs/architecture/workers/cpp-worker.md
   - docs/reference/implementation-status.json
 ---
 
@@ -29,8 +31,8 @@ reason; Tenvyr supervises their containing process as a persisted workflow step.
 The Gateway exposes a small HTTP/WebSocket surface. The Orchestrator persists
 pipelines and executions, dispatches work, and correlates results. Agents run
 outside it, either as Kafka-specialized services or isolated HTTP Workers. The
-same versioned invocation and result contracts cross Python, TypeScript, and
-Java-backed paths.
+same versioned invocation and result contracts cross Python, TypeScript,
+Java, and C++ HTTP workers.
 
 This boundary keeps model providers and agent frameworks out of core. A Worker
 can call OpenAI, Anthropic, Ollama, a local model, or native subagents without a
@@ -53,6 +55,11 @@ and size limits form the trust boundary. Compatibility identifiers remain fixed
 because renaming a wire protocol is a migration, not cosmetic cleanup.
 
 ## Cross-language lessons
+
+The same versioned invocation and result contracts cross Python, TypeScript,
+Java, and C++ HTTP workers. TypeScript, Python, and Java have Orchestrator
+loopback gates; C++ currently proves the wire with a mock callback server and
+the shared HMAC vectors.
 
 The Python and TypeScript runtimes exposed edge cases that single-language tests
 miss: JSON integer safety, canonical serialization, retry timing, callback

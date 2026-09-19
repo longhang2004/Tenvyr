@@ -412,6 +412,11 @@ pub fn rfc3339_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+pub fn rfc3339_after_ms(ms: u64) -> String {
+    (chrono::Utc::now() + chrono::Duration::milliseconds(ms as i64))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 pub fn succeeded_result(invocation: &Value, output: Value) -> Map<String, Value> {
     result_envelope(invocation, "succeeded", Some(output), None)
 }
@@ -501,6 +506,16 @@ mod tests {
     fn bearer_rejects_wrong_token() {
         assert!(!authenticate_bearer(Some("Bearer nope"), "token"));
         assert!(authenticate_bearer(Some("Bearer token"), "token"));
+    }
+
+    #[test]
+    fn kill_at_is_after_started_at_by_wall_time() {
+        let started = rfc3339_now();
+        let kill = rfc3339_after_ms(5_000);
+        assert!(
+            kill > started,
+            "persisted kill_at must be startedAt + wallTimeMs, got started={started} kill={kill}"
+        );
     }
 
     #[test]

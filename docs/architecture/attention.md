@@ -4,12 +4,14 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - services/orchestrator/src/domain/attention.ts
   - services/orchestrator/src/services/attention.service.ts
   - services/orchestrator/src/workbench.controller.ts
+  - services/gateway/src/app.controller.ts
   - frontend/src/app/attention/page.tsx
+  - frontend/src/lib/tenvyr-api/client.ts
 ---
 
 # Attention Queue
@@ -51,7 +53,8 @@ explicit lifecycle/recovery mechanism, not in the read projection.
 
 ## Surfaces
 
-- `GET /workbench/attention` → `{ items, serverTime }` (bounded ≤ 200).
+- Orchestrator `GET /workbench/attention` → `{ items, serverTime }` (bounded ≤ 200).
+- Gateway `GET /api/workbench/attention` proxies that projection (the Next.js `/attention` page and dashboard banner call this path).
 - `/attention` page: NEEDS YOU first (critical), then warnings, then
   workspace follow-up, with inline Approve & Continue / Deny for run-level
   waits and Review links for everything else.

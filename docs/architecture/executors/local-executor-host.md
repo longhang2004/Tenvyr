@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - services/local-executor-host/src/config.ts
   - services/local-executor-host/src/supervisor.ts
@@ -103,7 +103,8 @@ cargo test --manifest-path services/local-executor-host-rs/Cargo.toml
 Limitations versus the TypeScript host: AgentEvents/heartbeats are not
 emitted yet (the result callback remains terminal authority); Landlock,
 seccomp, and cgroup memory bounds are not wired; macOS has process-group
-kill + `env_clear` only.
+kill + `env_clear` only. Persisted `kill_at` is `startedAt + wallTimeMs`,
+matching the TypeScript host state file.
 
 ## Configuration
 

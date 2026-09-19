@@ -424,6 +424,18 @@ test("Python comments cannot satisfy required wire-header constants", () => {
   );
 });
 
+test("Java and C++ comments cannot satisfy required wire-header constants", () => {
+  for (const prefix of ["java-worker-sends-", "cpp-worker-sends-"]) {
+    const rule = requiredLegacyIdentifiers.find(({ id }) => id.startsWith(prefix));
+    assert(rule);
+    assert.deepEqual(
+      auditEntries([{ path: rule.path, text: `// ${rule.fixture}` }], [rule])
+        .missing,
+      [rule.id],
+    );
+  }
+});
+
 test("Kafka v1 event-topic allowlist is exact: near misses, invented suffixes, and wrong paths fail", () => {
   const audit = auditEntries(
     [

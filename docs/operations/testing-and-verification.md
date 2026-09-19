@@ -3,13 +3,16 @@ title: Testing and Verification
 status: current
 audience:
   - developer
-last_verified: 2026-09-10
+last_verified: 2026-09-15
 sources:
   - package.json
   - packages/worker/package.json
   - services/orchestrator/package.json
+  - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
   - services/agent-runner/pom.xml
   - sdks/python-worker/pyproject.toml
+  - sdks/java-worker/pom.xml
+  - sdks/cpp-worker/CMakeLists.txt
   - .github/workflows/release-ci.yml
   - scripts/verify-product-identity.mjs
   - scripts/verify-package-packs.mjs
@@ -70,6 +73,7 @@ The repository workflow declares Python 3.11, 3.12, 3.13, and 3.14 jobs. Do not 
 
 ```bash
 TENVYR_PYTHON_EXECUTABLE=/absolute/path/to/python pnpm --filter orchestrator test:python-worker-loopback
+TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback
 pnpm test:identity
 pnpm verify:identity
 pnpm test:docs
@@ -80,7 +84,7 @@ python scripts/sync-python-worker-schemas.py check
 pnpm test:executor-host-rs
 ```
 
-The Python loopback intentionally fails when `TENVYR_PYTHON_EXECUTABLE` is absent. Identity and documentation tests exercise their verifiers with adversarial fixtures; the verifier commands audit the real repository.
+The Python loopback intentionally fails when `TENVYR_PYTHON_EXECUTABLE` is absent. The Java loopback intentionally fails when `TENVYR_JAVA_EXECUTABLE` is absent or the Worker classpath has not been compiled. Identity and documentation tests exercise their verifiers with adversarial fixtures; the verifier commands audit the real repository.
 
 Run Java assertions separately:
 
@@ -90,10 +94,36 @@ mvn test
 ```
 
 The supported release path uses JDK 17. Java tests mock provider HTTP and cover
-mock/OpenAI/Anthropic/Ollama selection, required configuration, explicit
-`fail|mock` behavior, metadata, and safe logging; they do not call live models.
+mock/OpenAI/Anthropic/Ollama selection, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`
+compatible prefixes, required configuration, explicit `fail|mock` behavior,
+metadata, and safe logging; they do not call live models.
 The checked-in Mockito subclass mock maker avoids inline-mock self-attachment
 and keeps this JDK 17 path deterministic.
+
+## Java Worker SDK
+
+```bash
+python3 scripts/sync-java-worker-schemas.py check
+mvn -B -f sdks/java-worker/pom.xml test
+```
+
+HMAC tests load `contracts/conformance/callback-signatures/vectors.json`.
+The protocol suite uses an in-process mock orchestrator callback server.
+The Orchestrator loopback is a separate gate:
+
+```bash
+TENVYR_JAVA_EXECUTABLE=java pnpm --filter orchestrator test:java-worker-loopback
+```
+
+## C++ HTTP Worker
+
+```bash
+cmake -S sdks/cpp-worker -B sdks/cpp-worker/build -DCMAKE_CXX_COMPILER=g++
+cmake --build sdks/cpp-worker/build
+ctest --test-dir sdks/cpp-worker/build --output-on-failure
+```
+
+Requires a C++17 compiler and OpenSSL. Same HMAC fixture as Java.
 
 ## Frontend and showcase
 
