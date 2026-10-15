@@ -1,0 +1,2865 @@
+[
+  {
+    "table": "agent_event_conflicts",
+    "class": "AgentEventConflictEntity",
+    "source": "services/orchestrator/src/entities/agent-event-conflict.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "invocationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "eventId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sequence",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "conflictKind",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "payloadHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "sourceAdapter",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "sourceScope",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sourceMessageId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "agent_events",
+    "class": "AgentEventEntity",
+    "source": "services/orchestrator/src/entities/agent-event.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "invocationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "logicalStepId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "eventId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sequence",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "type",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "metadata",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "trace",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "payloadHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "occurredAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "sourceAdapter",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "sourceScope",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sourceMessageId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "approval_requests",
+    "class": "ApprovalRequestEntity",
+    "source": "services/orchestrator/src/entities/approval-request.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "proposalId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "proposalHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "actionType",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "executionId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "logicalStepId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "attemptNumber",
+        "type": "int",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "targetAgent",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "targetExecutor",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 16
+      },
+      {
+        "name": "expiresAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "decidedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "decisionNote",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "artifact_exposures",
+    "class": "ArtifactExposureEntity",
+    "source": "services/orchestrator/src/entities/artifact-exposure.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "artifactId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "artifacts",
+    "class": "ArtifactEntity",
+    "source": "services/orchestrator/src/entities/artifact.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "resultInboxId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "descriptorOrdinal",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "descriptorHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "budget_accounts",
+    "class": "BudgetAccountEntity",
+    "source": "services/orchestrator/src/entities/budget-account.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "scopeType",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "scopeId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "parentAccountId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "ceilings",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "softCeilings",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "budget_ledger_entries",
+    "class": "BudgetLedgerEntryEntity",
+    "source": "services/orchestrator/src/entities/budget-ledger-entry.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "accountId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "reservationId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "operation",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 16
+      },
+      {
+        "name": "dimension",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "amount",
+        "type": "bigint",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "delta",
+        "type": "bigint",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "source",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 16
+      },
+      {
+        "name": "confidence",
+        "type": "smallint",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "idempotencyKey",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "evidence",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "budget_reservations",
+    "class": "BudgetReservationEntity",
+    "source": "services/orchestrator/src/entities/budget-reservation.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "accountId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "idempotencyKey",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "dimension",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "amount",
+        "type": "bigint",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 16
+      },
+      {
+        "name": "actionRef",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "connection_revisions",
+    "class": "ConnectionRevisionEntity",
+    "source": "services/orchestrator/src/entities/connection-revision.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "connectionId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "revisionNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "profile",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "configHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "capabilities",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "coordination_iterations",
+    "class": "CoordinationIterationEntity",
+    "source": "services/orchestrator/src/entities/coordination-iteration.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "coordinationRunId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "iterationNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "plannerAttemptId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "plannerStepId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 100
+      },
+      {
+        "name": "plannerProposal",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "acceptedPlanRevisionId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "pendingPlanProposalId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "workerManifest",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "[]"
+      },
+      {
+        "name": "verifierStepId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 100
+      },
+      {
+        "name": "verifierAttemptId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "decision",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "decisionHash",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "outcome",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "coordination_runs",
+    "class": "CoordinationRunEntity",
+    "source": "services/orchestrator/src/entities/coordination-run.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "config",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "workspace",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "acceptanceEvidence",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "phase",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"PLANNING\""
+      },
+      {
+        "name": "currentIterationNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "cumulativeWorkers",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "loopDeadlineAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "activeIterationId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "waitReason",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "1"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "delegation_observation_conflicts",
+    "class": "DelegationObservationConflictEntity",
+    "source": "services/orchestrator/src/entities/delegation-observation-conflict.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "observationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 320
+      },
+      {
+        "name": "payloadHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "conflictKind",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "delegation_observations",
+    "class": "DelegationObservationEntity",
+    "source": "services/orchestrator/src/entities/delegation-observation.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "invocationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "observationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 320
+      },
+      {
+        "name": "provider",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "childId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "payloadHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "occurredAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "delegation_request_conflicts",
+    "class": "DelegationRequestConflictEntity",
+    "source": "services/orchestrator/src/entities/delegation-request-conflict.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "parentAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "requestId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "payloadHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "conflictKind",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "delegation_requests",
+    "class": "DelegationRequestEntity",
+    "source": "services/orchestrator/src/entities/delegation-request.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "parentExecutionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "parentAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "requestId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "requestedAgent",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "payloadHash",
+        "type": "char",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "childDepth",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "1"
+      },
+      {
+        "name": "childExecutionId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 20,
+        "defaultExpression": "\"PENDING\""
+      },
+      {
+        "name": "decisionNote",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "expiresAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "authorityDeadlineAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "decidedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      }
+    ]
+  },
+  {
+    "table": "dispatch_outbox",
+    "class": "DispatchOutboxEntity",
+    "source": "services/orchestrator/src/entities/dispatch-outbox.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "invocation",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"PENDING\""
+      },
+      {
+        "name": "nextDispatchAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "() => \"now()\""
+      },
+      {
+        "name": "leaseExpiresAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "leaseToken",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 36
+      },
+      {
+        "name": "dispatchCount",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "receipt",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "error",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "execution_exports",
+    "class": "ExecutionExportEntity",
+    "source": "services/orchestrator/src/entities/execution-export.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "capsuleHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "exporter",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"operator\""
+      },
+      {
+        "name": "note",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "execution_plan_revisions",
+    "class": "ExecutionPlanRevisionEntity",
+    "source": "services/orchestrator/src/entities/execution-plan-revision.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "revisionNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "parentRevisionId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "baseRevision",
+        "type": "integer",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "plan",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "planHash",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "source",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"pipeline\""
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "validationResult",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "execution_replays",
+    "class": "ExecutionReplayEntity",
+    "source": "services/orchestrator/src/entities/execution-replay.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "sourceExecutionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "sourceCapsuleHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "targetExecutionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "requester",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"operator\""
+      },
+      {
+        "name": "note",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "executions",
+    "class": "ExecutionEntity",
+    "source": "services/orchestrator/src/entities/execution.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "pipelineId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"PENDING\""
+      },
+      {
+        "name": "input",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "pipelineVersion",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "pipelineHash",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "configurationSnapshot",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "activePlanRevisionId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "terminationReason",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "output",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "executionState",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "{"
+      },
+      {
+        "name": "executionStateVersion",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "executionStateUpdatedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "startTime",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "endTime",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "authorityDeadlineAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      },
+      {
+        "name": "rowVersion",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "VersionColumn",
+        "defaultExpression": "1"
+      }
+    ]
+  },
+  {
+    "table": "handoffs",
+    "class": "HandoffEntity",
+    "source": "services/orchestrator/src/entities/handoff.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "sourceExecutionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "sourceRunId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "bundleHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "bundle",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "destinationExecutionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "requester",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"operator\""
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "model_sources",
+    "class": "ModelSourceEntity",
+    "source": "services/orchestrator/src/entities/model-source.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "sourceId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 128
+      },
+      {
+        "name": "kind",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "displayName",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "baseUrl",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 2048
+      },
+      {
+        "name": "credentialEnvRef",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "statusState",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"UNKNOWN\""
+      },
+      {
+        "name": "statusReasonCode",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"none\""
+      },
+      {
+        "name": "statusTestedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "lastCatalogRefreshAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "modelCount",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "operator_actions",
+    "class": "OperatorActionEntity",
+    "source": "services/orchestrator/src/entities/operator-action.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "action",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "idempotencyKey",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 128
+      },
+      {
+        "name": "actor",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255,
+        "defaultExpression": "\"local-operator\""
+      },
+      {
+        "name": "targetId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "outcome",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "{"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "pipelines",
+    "class": "PipelineEntity",
+    "source": "services/orchestrator/src/entities/pipeline.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "name",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "version",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "steps",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "budget",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "schemaVersion",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "1"
+      },
+      {
+        "name": "contentHash",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "plan_proposals",
+    "class": "PlanProposalEntity",
+    "source": "services/orchestrator/src/entities/plan-proposal.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "proposalNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "baseRevision",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "proposal",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "proposalHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 20,
+        "defaultExpression": "\"PENDING\""
+      },
+      {
+        "name": "decisionReason",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "source",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"operator\""
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "decidedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      }
+    ]
+  },
+  {
+    "table": "policy_decisions",
+    "class": "PolicyDecisionEntity",
+    "source": "services/orchestrator/src/entities/policy-decision.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "proposalId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "actionType",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "executionId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "logicalStepId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "attemptNumber",
+        "type": "int",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "targetAgent",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "targetExecutor",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "proposalHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "policyVersion",
+        "type": "int",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "policyHash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "effect",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 16
+      },
+      {
+        "name": "reasons",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "policy_snapshots",
+    "class": "PolicySnapshotEntity",
+    "source": "services/orchestrator/src/entities/policy-snapshot.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "version",
+        "type": "int",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "hash",
+        "type": "char",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "rules",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "result_conflicts",
+    "class": "ResultConflictEntity",
+    "source": "services/orchestrator/src/entities/result-conflict.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "invocationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "resultInboxId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "payloadHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "sourceAdapter",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "sourceScope",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sourceMessageId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "() => \"now()\""
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "result_inbox",
+    "class": "ResultInboxEntity",
+    "source": "services/orchestrator/src/entities/result-inbox.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "invocationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "payloadHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "sourceAdapter",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "sourceScope",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sourceMessageId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"RECEIVED\""
+      },
+      {
+        "name": "receivedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "() => \"now()\""
+      },
+      {
+        "name": "appliedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "lastApplicationError",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "runtime_connections",
+    "class": "RuntimeConnectionEntity",
+    "source": "services/orchestrator/src/entities/runtime-connection.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "connectionId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "name",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "runtimeKind",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50
+      },
+      {
+        "name": "executorId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "version",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 128
+      },
+      {
+        "name": "currentRevisionNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "statusState",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"DRAFT\""
+      },
+      {
+        "name": "statusReasonCode",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"none\""
+      },
+      {
+        "name": "statusTestedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "statusTestedVersion",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 128
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "state_write_evidence",
+    "class": "StateWriteEvidenceEntity",
+    "source": "services/orchestrator/src/entities/state-write-evidence.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "stepAttemptId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "resultInboxId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "priorVersion",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "resultVersion",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "disposition",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 16
+      },
+      {
+        "name": "mappingHash",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "rejectionCode",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "step_attempts",
+    "class": "StepAttemptEntity",
+    "source": "services/orchestrator/src/entities/step-attempt.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "logicalStepId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "planRevisionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "attemptNumber",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "invocationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "frozenSpecHash",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "inputSnapshot",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "contextSnapshot",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "efficiency",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "executorSnapshot",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"CREATED\""
+      },
+      {
+        "name": "dispatchedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "startTime",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "deadlineAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "terminalAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "acceptedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "lastEventReceivedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "lastHeartbeatReceivedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "lastProgressReceivedAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "result",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "error",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "terminationReason",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "step_executions",
+    "class": "LogicalStepEntity",
+    "source": "services/orchestrator/src/entities/step-execution.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "executionId",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "stepId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 100
+      },
+      {
+        "name": "agent",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 100
+      },
+      {
+        "name": "status",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 50,
+        "defaultExpression": "\"PENDING\""
+      },
+      {
+        "name": "input",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "output",
+        "type": "jsonb",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "error",
+        "type": "text",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "attempt",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "maxAttempts",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "0"
+      },
+      {
+        "name": "frozenSpecHash",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "frozenAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "conditionResult",
+        "type": "boolean",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "eligibleAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "nextAttemptAt",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "startTime",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "endTime",
+        "type": "timestamp",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      },
+      {
+        "name": "rowVersion",
+        "type": "integer",
+        "nullable": false,
+        "sourceDecorator": "VersionColumn",
+        "defaultExpression": "1"
+      }
+    ]
+  },
+  {
+    "table": "workspace_executions",
+    "class": "WorkspaceExecutionEntity",
+    "source": "services/orchestrator/src/entities/workspace-execution.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "sourceWorkspaceId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "sourcePath",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 4096
+      },
+      {
+        "name": "mode",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32
+      },
+      {
+        "name": "executionPath",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 4096
+      },
+      {
+        "name": "baseBranch",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "baseHeadSha",
+        "type": "char",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 40
+      },
+      {
+        "name": "ownerRunId",
+        "type": "uuid",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "allocationKey",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "state",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 32,
+        "defaultExpression": "\"ALLOCATING\""
+      },
+      {
+        "name": "failureCode",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 64
+      },
+      {
+        "name": "hasUncommittedWork",
+        "type": "boolean",
+        "nullable": true,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "releaseOperationId",
+        "type": "varchar",
+        "nullable": true,
+        "sourceDecorator": "Column",
+        "length": 36
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  },
+  {
+    "table": "workspace_release_locks",
+    "class": "WorkspaceReleaseLockEntity",
+    "source": "services/orchestrator/src/entities/workspace-release-lock.entity.ts",
+    "columns": [
+      {
+        "name": "releaseOperationId",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 36
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "defaultExpression": "() => \"now()\""
+      }
+    ]
+  },
+  {
+    "table": "workspaces",
+    "class": "WorkspaceEntity",
+    "source": "services/orchestrator/src/entities/workspace.entity.ts",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "sourceDecorator": "PrimaryGeneratedColumn",
+        "primary": true,
+        "generated": true
+      },
+      {
+        "name": "name",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 255
+      },
+      {
+        "name": "path",
+        "type": "varchar",
+        "nullable": false,
+        "sourceDecorator": "Column",
+        "length": 4096
+      },
+      {
+        "name": "snapshot",
+        "type": "jsonb",
+        "nullable": false,
+        "sourceDecorator": "Column"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "CreateDateColumn"
+      },
+      {
+        "name": "updatedAt",
+        "type": "timestamp",
+        "nullable": false,
+        "sourceDecorator": "UpdateDateColumn"
+      }
+    ]
+  }
+]

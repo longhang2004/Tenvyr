@@ -1,0 +1,3 @@
+[
+  "\n      CREATE TABLE IF NOT EXISTS \"operator_actions\" (\n        \"id\" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),\n        \"action\" varchar(64) NOT NULL,\n        \"idempotencyKey\" varchar(128) NOT NULL,\n        \"actor\" varchar(255) NOT NULL DEFAULT 'local-operator',\n        \"targetId\" varchar(255),\n        \"payload\" jsonb,\n        \"outcome\" jsonb NOT NULL DEFAULT '{}'::jsonb,\n        \"createdAt\" timestamp NOT NULL DEFAULT now(),\n        CONSTRAINT \"UQ_operator_action_idempotency\"\n          UNIQUE (\"action\", \"idempotencyKey\")\n      );\n      CREATE INDEX IF NOT EXISTS \"IDX_operator_action_target\"\n        ON \"operator_actions\" (\"action\", \"targetId\");\n    "
+]

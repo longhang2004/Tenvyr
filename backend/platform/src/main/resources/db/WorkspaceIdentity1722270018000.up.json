@@ -1,0 +1,5 @@
+[
+  "\n      CREATE TABLE IF NOT EXISTS \"workspaces\" (\n        \"id\" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),\n        \"name\" varchar(255) NOT NULL,\n        \"path\" varchar(4096) NOT NULL,\n        \"snapshot\" jsonb NOT NULL,\n        \"createdAt\" timestamp NOT NULL DEFAULT now(),\n        \"updatedAt\" timestamp NOT NULL DEFAULT now()\n      )\n    ",
+  "\n      ALTER TABLE \"coordination_runs\"\n        ADD COLUMN IF NOT EXISTS \"workspace\" jsonb\n    ",
+  "\n      ALTER TABLE \"coordination_runs\"\n        ADD COLUMN IF NOT EXISTS \"acceptanceEvidence\" jsonb\n    "
+]

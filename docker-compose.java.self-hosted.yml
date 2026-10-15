@@ -1,0 +1,73 @@
+# Additive Java candidate. Production defaults change only after the full parity gates pass.
+name: tenvyr-java-self-hosted
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-postgres
+    environment:
+      POSTGRES_USER: tenvyr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD at deploy time}
+      POSTGRES_DB: tenvyr
+    ports:
+      - "127.0.0.1:${TENVYR_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - "${TENVYR_POSTGRES_VOLUME:-tenvyr_java_postgres_data}:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenvyr -d tenvyr"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  orchestrator:
+    image: tenvyr-orchestrator:${TENVYR_VERSION:?set TENVYR_VERSION at deploy time}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: control-plane
+    container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-orchestrator
+    environment:
+      ORCHESTRATOR_HOST: "0.0.0.0"
+      ORCHESTRATOR_PORT: "3001"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: tenvyr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD at deploy time}
+      POSTGRES_DB: tenvyr
+      HTTP_AGENT_CALLBACK_BASE_URL: ${HTTP_AGENT_CALLBACK_BASE_URL:?set callback base URL}
+      HTTP_AGENT_CALLBACK_KEYS: ${HTTP_AGENT_CALLBACK_KEYS:?set callback keys}
+      HTTP_AGENT_ALLOW_INSECURE: ${HTTP_AGENT_ALLOW_INSECURE:-true}
+      ORCHESTRATOR_SUPERVISION_CONFIG: ${ORCHESTRATOR_SUPERVISION_CONFIG:-{}}
+      GATEWAY_URL: http://gateway:3000
+    ports:
+      - "127.0.0.1:${TENVYR_ORCHESTRATOR_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3001/health | grep -q '\"ready\":true'"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+  gateway:
+    image: tenvyr-gateway:${TENVYR_VERSION}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: gateway
+    container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-gateway
+    environment:
+      GATEWAY_HOST: "0.0.0.0"
+      GATEWAY_PORT: "3000"
+      ORCHESTRATOR_URL: http://orchestrator:3001
+    ports:
+      - "127.0.0.1:${TENVYR_GATEWAY_PORT:-3000}:3000"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health | grep -q UP"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+volumes:
+  tenvyr_java_postgres_data:
+  java_recovery_e2e_postgres_data:

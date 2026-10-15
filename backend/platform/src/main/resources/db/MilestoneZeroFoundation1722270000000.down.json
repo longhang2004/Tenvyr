@@ -1,0 +1,22 @@
+[
+  "DROP TABLE IF EXISTS \"result_conflicts\"",
+  "DROP TABLE IF EXISTS \"result_inbox\"",
+  "DROP TABLE IF EXISTS \"dispatch_outbox\"",
+  "DROP TABLE IF EXISTS \"step_attempts\"",
+  "DROP TABLE IF EXISTS \"execution_plan_revisions\"",
+  "DROP INDEX IF EXISTS \"IDX_logical_step_scheduler\"",
+  "ALTER TABLE \"step_executions\" DROP COLUMN IF EXISTS \"nextAttemptAt\"",
+  "ALTER TABLE \"step_executions\" DROP COLUMN IF EXISTS \"eligibleAt\"",
+  "ALTER TABLE \"step_executions\" DROP COLUMN IF EXISTS \"conditionResult\"",
+  "ALTER TABLE \"step_executions\" DROP COLUMN IF EXISTS \"frozenAt\"",
+  "ALTER TABLE \"step_executions\" DROP COLUMN IF EXISTS \"frozenSpecHash\"",
+  "ALTER TABLE \"step_executions\" DROP COLUMN IF EXISTS \"rowVersion\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"terminationReason\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"activePlanRevisionId\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"configurationSnapshot\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"pipelineHash\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"pipelineVersion\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"rowVersion\"",
+  "ALTER TABLE \"pipelines\" DROP COLUMN IF EXISTS \"contentHash\"",
+  "ALTER TABLE \"pipelines\" DROP COLUMN IF EXISTS \"schemaVersion\""
+]

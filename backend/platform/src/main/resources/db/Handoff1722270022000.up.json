@@ -1,0 +1,3 @@
+[
+  "\n      CREATE TABLE IF NOT EXISTS \"handoffs\" (\n        \"id\" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),\n        \"sourceExecutionId\" uuid NOT NULL,\n        \"sourceRunId\" uuid,\n        \"bundleHash\" char(64) NOT NULL,\n        \"bundle\" jsonb NOT NULL,\n        \"destinationExecutionId\" uuid NOT NULL,\n        \"requester\" varchar(50) NOT NULL DEFAULT 'operator',\n        \"createdAt\" timestamp NOT NULL DEFAULT now(),\n        CONSTRAINT \"UQ_handoff_source_bundle\" UNIQUE (\"sourceExecutionId\", \"bundleHash\")\n      );\n      CREATE INDEX IF NOT EXISTS \"IDX_handoff_destination\"\n        ON \"handoffs\" (\"destinationExecutionId\");\n    "
+]

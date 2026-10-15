@@ -1,0 +1,5 @@
+[
+  "ALTER TABLE \"executions\" ADD COLUMN IF NOT EXISTS \"executionState\" jsonb NOT NULL DEFAULT '{}'::jsonb",
+  "ALTER TABLE \"executions\" ADD COLUMN IF NOT EXISTS \"executionStateVersion\" integer NOT NULL DEFAULT 0",
+  "ALTER TABLE \"executions\" ADD COLUMN IF NOT EXISTS \"executionStateUpdatedAt\" timestamp"
+]

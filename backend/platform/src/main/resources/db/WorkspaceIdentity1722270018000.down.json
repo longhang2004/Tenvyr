@@ -1,0 +1,5 @@
+[
+  "\n      ALTER TABLE \"coordination_runs\"\n        DROP COLUMN IF EXISTS \"acceptanceEvidence\"\n    ",
+  "\n      ALTER TABLE \"coordination_runs\"\n        DROP COLUMN IF EXISTS \"workspace\"\n    ",
+  "DROP TABLE IF EXISTS \"workspaces\""
+]

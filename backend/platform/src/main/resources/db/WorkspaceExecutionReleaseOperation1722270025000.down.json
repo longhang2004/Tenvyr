@@ -1,0 +1,3 @@
+[
+  "\n      DROP INDEX IF EXISTS \"IDX_workspace_execution_release_op\";\n      ALTER TABLE \"workspace_executions\"\n        DROP COLUMN IF EXISTS \"releaseOperationId\";\n    "
+]

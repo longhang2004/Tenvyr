@@ -1,0 +1,6 @@
+[
+  "ALTER TABLE \"pipelines\" DROP COLUMN IF EXISTS \"budget\"",
+  "DROP TABLE IF EXISTS \"budget_ledger_entries\"",
+  "DROP TABLE IF EXISTS \"budget_reservations\"",
+  "DROP TABLE IF EXISTS \"budget_accounts\""
+]

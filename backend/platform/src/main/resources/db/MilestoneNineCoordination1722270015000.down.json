@@ -1,0 +1,3 @@
+[
+  "\n      DROP INDEX IF EXISTS \"UQ_coordination_iteration_verifier\";\n      DROP TABLE IF EXISTS \"coordination_iterations\";\n      DROP TABLE IF EXISTS \"coordination_runs\";\n    "
+]

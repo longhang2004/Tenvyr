@@ -1,0 +1,4 @@
+[
+  "DROP TABLE IF EXISTS \"delegation_observation_conflicts\"",
+  "DROP TABLE IF EXISTS \"delegation_observations\""
+]
