@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { statSync,
+  utimesSync,
+  mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +32,11 @@ const env = {
   GATEWAY_URL: "http://127.0.0.1:53020",
 };
 delete env.TENVYR_BACKEND;
+delete env.TENVYR_DEV_WATCH;
+delete env.TENVYR_DEV_WATCH_CHILD;
 env.TENVYR_EXECUTOR_HOST = "java";
+const watchedSource = join(root, "backend/gateway/src/main/java/io/tenvyr/gateway/GatewayRoutes.java");
+const originalTimes = statSync(watchedSource);
 let child,
   output = "",
   exited;
@@ -112,6 +118,8 @@ try {
     );
   }
   assert.ok(output.includes("Building Java/Go backend"));
+  utimesSync(watchedSource, new Date(), new Date());
+  await waitFor(() => (output.match(/Tenvyr is ready\./g) || []).length >= 2, 180000, "backend source change rebuild and restart");
   child.kill("SIGINT");
   await waitFor(
     () => exited !== undefined,
@@ -127,7 +135,7 @@ try {
     );
   }
   console.log(
-    "Default development launcher PASS: clean Java/Go build, PostgreSQL/Kafka infrastructure, Java control/gateway/native host, real frontend readiness and SIGINT teardown",
+    "Default development launcher PASS: clean Java/Go build, PostgreSQL/Kafka infrastructure, Java control/gateway/native host, real frontend readiness, source-change rebuild/restart and SIGINT teardown",
   );
 } catch (error) {
   process.stderr.write(output);
@@ -145,5 +153,6 @@ try {
     const result = docker(["compose", "down", "-v", "--remove-orphans"]);
     assert.equal(result.status, 0, result.stderr);
   }
+  utimesSync(watchedSource, originalTimes.atime, originalTimes.mtime);
   rmSync(directory, { recursive: true, force: true });
 }

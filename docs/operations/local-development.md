@@ -104,8 +104,11 @@ because a host-run Kafka client cannot reach the Compose broker (it advertises i
 docker-internal hostname). Run those agents inside the full Compose stack
 (`pnpm dev:infra`).
 
-Java source/resource changes require a rebuild and restart of host-run services.
-For automatic container rebuilds, use Compose Watch (frontend HMR is retained):
+`pnpm dev` watches backend sources, resources, Maven/Go configuration and skill
+prompts. A change gracefully stops the stack, rebuilds Java/Go and restarts it;
+frontend HMR remains active. Build outputs are excluded to prevent restart loops.
+Use `TENVYR_DEV_WATCH=0 pnpm dev` for a single supervised run. For automatic
+container rebuilds, use Compose Watch:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch

@@ -28,7 +28,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { parseEnv } from "node:util";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -750,8 +750,26 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (process.env.POSTGRES_PORT === undefined) {
     process.env.POSTGRES_PORT = process.env.TENVYR_POSTGRES_PORT ?? "5432";
   }
-  const manifest = buildManifest();
-  runLauncher(manifest).then(({ exitCode }) => {
-    process.exitCode = exitCode;
-  });
+  if ((process.env.TENVYR_BACKEND ?? "java") === "java" && process.env.TENVYR_DEV_WATCH !== "0" && !process.env.TENVYR_DEV_WATCH_CHILD) {
+    const modules = ["platform", "control-plane", "gateway", "agents", "worker", "executor-host", "operations"];
+    const native = "backend/executor-host/native";
+    const paths = ["backend/pom.xml", "scripts/dev.mjs", "scripts/backend-build.sh", "scripts/java-backend.sh", "skills",
+      ...modules.flatMap((module) => [`backend/${module}/pom.xml`, `backend/${module}/src/main`]),
+      ...readdirSync(join(ROOT, native)).filter((file) => file.endsWith(".go") || file === "go.mod").map((file) => `${native}/${file}`)];
+    // Native Node watch waits for the launcher's graceful teardown before rebuilding.
+    // Only source paths are watched: target/output changes must never restart a build.
+    let child;
+    const interrupt = () => child?.kill("SIGINT");
+    const terminate = () => child?.kill("SIGTERM");
+    const cleanup = () => { process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", terminate); };
+    process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
+    child = spawn(process.execPath, ["--watch", "--watch-preserve-output", ...paths.map((path) => `--watch-path=${join(ROOT, path)}`), fileURLToPath(import.meta.url)], {
+      cwd: ROOT, stdio: "inherit", env: { ...process.env, TENVYR_DEV_WATCH_CHILD: "1" },
+    });
+    child.once("error", (error) => { cleanup(); console.error(error.message); process.exitCode = 1; });
+    child.once("exit", (code, signal) => { cleanup(); process.exitCode = code ?? (["SIGINT", "SIGTERM"].includes(signal) ? 0 : 1); });
+  } else {
+    const manifest = buildManifest();
+    runLauncher(manifest).then(({ exitCode }) => { process.exitCode = exitCode; });
+  }
 }

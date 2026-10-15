@@ -21,7 +21,8 @@ sources:
 
 # Backend migration verification
 
-Default launch/deployment files select Java/Go. PR #7 remains draft until
+Default launch/deployment files select Java/Go. The complete 21-program suite
+and all 17 Docker recovery cases passed again on these defaults. PR #7 remains draft until
 committed-source cutover, source-build upgrade and remote CI are verified.
 No external production installation has been changed.
 
@@ -70,7 +71,7 @@ counted as passing evidence.
 ## Pending verification
 
 - Clean committed-source default showcase cutover and original-to-Java upgrade.
-- Complete runner on the final default files, final repository verifiers and remote CI.
+- Automatic development source rebuild/restart, final repository verifiers and remote CI.
 
 Native tests use actual supervised fixture CLI processes, not installed paid
 model agents. Live paid model calls and interactive account authentication were
