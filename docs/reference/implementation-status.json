@@ -1278,7 +1278,7 @@
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "real integration and cutover gates; latest published tree verified by required CI"
+    "verification": "real coordinator/restart/worktree checks passed five consecutive runs; quiescent completion-hold PostgreSQL regression; required CI repeats acceptance"
    }
   },
   {

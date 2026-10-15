@@ -73,6 +73,12 @@ handlers and the recovery executor now drain before shutdown returns, and all
 owned resources are closed even if another close fails. The regression holds
 a real PostgreSQL lock across shutdown, then proves completion after release.
 The signal-test fixture now writes its PID before publishing readiness.
+CI then exposed a completion-held execution reporting progress without a state
+change, repeatedly running all 100 reconciliation passes. The hold now yields
+unless state advanced; this preserves human approval authority and lets
+shutdown drain. All 38 real PostgreSQL engine checks passed, and the complete
+26-check coordinator/restart/handoff/worktree program passed five consecutive
+runs after this correction. No shutdown timeout was increased.
 
 Earlier Docker runs encountered a full host disk, damaged build caches and a
 stopped daemon. Subsequent runs passed after the host recovered. Harness fixes
