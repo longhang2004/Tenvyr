@@ -436,10 +436,12 @@
    "id": "setup-readiness-check",
    "status": "implemented",
    "sources": [
-    "scripts/setup-check.mjs"
+    "scripts/setup-check.mjs",
+    "scripts/dev.mjs"
    ],
    "tests": [
-    "scripts/setup-check.mjs"
+    "scripts/setup-check.mjs",
+    "scripts/dev-ux.test.mjs"
    ],
    "docs": [
     "docs/operations/local-development.md"
@@ -449,7 +451,11 @@
    ],
    "java_go": {
     "disposition": "retained-original-scope",
-    "verification": "retained scope; public SDK loopbacks and showcase passed where applicable"
+    "verification": "default Java launcher, source reload and interrupt-during-reload passed",
+    "checks": [
+     "scripts/backend-dev-check.mjs",
+     "scripts/dev-ux.test.mjs"
+    ]
    }
   },
   {

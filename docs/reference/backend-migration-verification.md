@@ -34,7 +34,7 @@ No external production installation has been changed.
 | `sh scripts/backend-checks.sh --integration` with disposable PostgreSQL 15/Kafka and public SDK prerequisites | All 21 Java check programs passed, plus Node canonical/database comparison and actual Socket.IO gates; all 17 real Docker recovery cases passed.                                                                        |
 | `node scripts/backend-canonical-check.mjs 100000`                                                             | Additional differential: 100,000 binary64 values and 1,000 Unicode objects match original Node bytes/SHA-256. The normal runner uses 20,000 values plus the retained 5,018 goldens.                                     |
 | Expanded `ControlIntegrationCheck` and `NativeRuntimeIntegrationCheck`                                        | 71 and 23 checks passed respectively, including original production capsule/hash, connection cards, summaries, execution projection and Attention comparisons on the same settled PostgreSQL rows.                      |
-| `node scripts/backend-dev-check.mjs`                                                                          | Default launcher passed actual Java/Go build, PostgreSQL/Kafka startup, control/gateway/native host/frontend readiness on configured ports, and SIGINT teardown.                                                        |
+| `node scripts/backend-dev-check.mjs`                                                                          | Default launcher passed Java/Go build, configured-port readiness, source-change rebuild/restart with the same PostgreSQL/Kafka containers, and SIGINT during reload with complete teardown.                             |
 | `node --test scripts/dev-ux.test.mjs`                                                                         | All 25 lifecycle/bridge/frontend-port regressions passed.                                                                                                                                                               |
 | `node scripts/backend-showcase-check.mjs`                                                                     | Full candidate Docker showcase passed: success/retry-once, Python HTTP Worker, Kafka, original Java runner using mock provider, frontend, all four actual Java backend processes, no Node executable in backend images. |
 | Docker `operations` target build, `docker --version`, `docker compose version`                                | Java maintenance image built; Docker 29.6.1 and Compose 5.2.0 execute inside it. Host Java maintenance performed the recovery tests.                                                                                    |
@@ -71,7 +71,7 @@ counted as passing evidence.
 ## Pending verification
 
 - Clean committed-source default showcase cutover and original-to-Java upgrade.
-- Automatic development source rebuild/restart, final repository verifiers and remote CI.
+- Final repository verifiers and latest remote CI.
 
 Native tests use actual supervised fixture CLI processes, not installed paid
 model agents. Live paid model calls and interactive account authentication were

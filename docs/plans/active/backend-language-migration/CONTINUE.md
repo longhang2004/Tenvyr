@@ -44,7 +44,8 @@ planner/worker/verifier run. The default launcher passed real configured-port
 startup and SIGINT teardown; all 25 launcher regressions and 42 self-hosted
 contract tests pass. Default files now select Java/Go.
 
-The complete suite is rerunning on the final defaults. An actual original-to-
+The complete suite passed again on the final defaults, including all 17 Docker
+recovery cases. Source reload and interrupt-during-reload checks also passed. An actual original-to-
 Java upgrade, committed-source cutover, remote CI and PR publication remain
 unfinished. Keep the PR draft. Docker recovered after the disk-full incident;
 use task-owned disposable stacks and run heavy builds/tests sequentially.

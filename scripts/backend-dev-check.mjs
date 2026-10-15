@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { statSync,
+import {
+  statSync,
   utimesSync,
-  mkdtempSync, writeFileSync, rmSync } from "node:fs";
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +39,10 @@ delete env.TENVYR_BACKEND;
 delete env.TENVYR_DEV_WATCH;
 delete env.TENVYR_DEV_WATCH_CHILD;
 env.TENVYR_EXECUTOR_HOST = "java";
-const watchedSource = join(root, "backend/gateway/src/main/java/io/tenvyr/gateway/GatewayRoutes.java");
+const watchedSource = join(
+  root,
+  "backend/gateway/src/main/java/io/tenvyr/gateway/GatewayRoutes.java",
+);
 const originalTimes = statSync(watchedSource);
 let child,
   output = "",
@@ -90,9 +97,11 @@ try {
   });
   child.stdout.on("data", (value) => {
     output += value;
+    process.stdout.write(value);
   });
   child.stderr.on("data", (value) => {
     output += value;
+    process.stderr.write(value);
   });
   child.on("exit", (code) => {
     exited = code ?? 1;
@@ -118,8 +127,28 @@ try {
     );
   }
   assert.ok(output.includes("Building Java/Go backend"));
+  const infrastructure = docker(["compose", "ps", "-q", "postgres", "kafka"]);
+  assert.equal(infrastructure.status, 0);
+  assert.equal(infrastructure.stdout.trim().split("\n").length, 2);
   utimesSync(watchedSource, new Date(), new Date());
-  await waitFor(() => (output.match(/Tenvyr is ready\./g) || []).length >= 2, 180000, "backend source change rebuild and restart");
+  await waitFor(
+    () => (output.match(/Tenvyr is ready\./g) || []).length >= 2,
+    180000,
+    "backend source change rebuild and restart",
+  );
+  const afterReload = docker(["compose", "ps", "-q", "postgres", "kafka"]);
+  assert.equal(afterReload.status, 0);
+  assert.equal(
+    afterReload.stdout,
+    infrastructure.stdout,
+    "source reload must retain the same PostgreSQL/Kafka containers",
+  );
+  utimesSync(watchedSource, new Date(), new Date());
+  await waitFor(
+    () => (output.match(/Backend source changed/g) || []).length >= 2,
+    10000,
+    "second source change admission",
+  );
   child.kill("SIGINT");
   await waitFor(
     () => exited !== undefined,
@@ -128,6 +157,13 @@ try {
   );
   assert.equal(exited, 0, output);
   assert.match(output, /Tenvyr stopped cleanly/);
+  const stoppedInfrastructure = docker(["compose", "ps", "-q"]);
+  assert.equal(stoppedInfrastructure.status, 0);
+  assert.equal(
+    stoppedInfrastructure.stdout.trim(),
+    "",
+    "Ctrl-C during reload must stop retained infrastructure",
+  );
   for (const port of [53021, 53020, 53022, 54000]) {
     await assert.rejects(
       fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) }),

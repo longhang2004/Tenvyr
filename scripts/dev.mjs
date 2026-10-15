@@ -27,8 +27,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { readFileSync, readdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { readFileSync, readdirSync, statSync, watch } from "node:fs";
 import { parseEnv } from "node:util";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -423,6 +423,7 @@ export async function runLauncher(
   let failed = false;
   let terminationSignal = null;
   let shutdownStarted = false;
+  let retainInfrastructure = false;
   const children = [];
   const states = new Map();
   const serviceByName = new Map(manifest.services.map((s) => [s.name, s]));
@@ -474,7 +475,7 @@ export async function runLauncher(
       }
     }
     // Infra teardown (parity with the legacy dev.sh).
-    if ((manifest.infraServices ?? []).length > 0) {
+    if (!retainInfrastructure && (manifest.infraServices ?? []).length > 0) {
       spawnSync("docker", ["compose", "down"], { cwd: manifest.root, stdio: "ignore", timeout: 60_000 });
     }
     io.write(
@@ -504,6 +505,8 @@ export async function runLauncher(
   const onSignal = (signal) => {
     void requestShutdown("user", signal);
   };
+  const onReload = () => { retainInfrastructure = true; void requestShutdown("reload"); };
+  process.on("SIGUSR2", onReload);
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
@@ -739,6 +742,7 @@ export async function runLauncher(
 
     return { exitCode: exitCodeFor(), ready: state === "ready" && !failed };
   } finally {
+    process.removeListener("SIGUSR2", onReload);
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
   }
@@ -756,18 +760,57 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const paths = ["backend/pom.xml", "scripts/dev.mjs", "scripts/backend-build.sh", "scripts/java-backend.sh", "skills",
       ...modules.flatMap((module) => [`backend/${module}/pom.xml`, `backend/${module}/src/main`]),
       ...readdirSync(join(ROOT, native)).filter((file) => file.endsWith(".go") || file === "go.mod").map((file) => `${native}/${file}`)];
-    // Native Node watch waits for the launcher's graceful teardown before rebuilding.
-    // Only source paths are watched: target/output changes must never restart a build.
-    let child;
-    const interrupt = () => child?.kill("SIGINT");
-    const terminate = () => child?.kill("SIGTERM");
-    const cleanup = () => { process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", terminate); };
+    let child, timer, restarting = false, stopping = false;
+    const watchers = [];
+    let cleaned = false;
+    const closeWatchers = () => { clearTimeout(timer); for (const watcher of watchers) watcher.close(); };
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      closeWatchers(); process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", terminate);
+      // A user can stop during the gap between reload children, when the old
+      // child deliberately retained infrastructure. Final cleanup always owns it.
+      spawnSync("docker", ["compose", "down"], { cwd: ROOT, stdio: "ignore", timeout: 60_000 });
+    };
+    const launch = () => {
+      child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: ROOT, stdio: "inherit", env: { ...process.env, TENVYR_DEV_WATCH_CHILD: "1" },
+      });
+      child.once("error", (error) => { cleanup(); console.error(error.message); process.exitCode = 1; });
+      child.once("exit", (code, signal) => {
+        child = undefined;
+        if (!stopping && restarting) { clearTimeout(timer); restarting = false; launch(); }
+        else { cleanup(); process.exitCode = code ?? (["SIGINT", "SIGTERM"].includes(signal) ? 0 : 1); }
+      });
+    };
+    const changed = () => {
+      if (stopping) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        restarting = true;
+        console.log("Backend source changed; rebuilding after graceful service shutdown...");
+        if (child) child.kill("SIGUSR2");
+        else { restarting = false; launch(); }
+      }, 250);
+    };
+    const interrupt = () => { stopping = true; closeWatchers(); child?.kill("SIGINT"); };
+    const terminate = () => { stopping = true; closeWatchers(); child?.kill("SIGTERM"); };
+    // File watches on macOS can report neighboring build activity. Require a
+    // changed timestamp/size, and watch parents so atomic editor saves stay visible.
+    for (const path of paths.map((path) => join(ROOT, path))) {
+      if (statSync(path).isDirectory()) watchers.push(watch(path, { recursive: true }, changed));
+      else {
+        const stamp = () => { try { const value = statSync(path); return `${value.mtimeMs}:${value.size}`; } catch { return "missing"; } };
+        let previous = stamp();
+        watchers.push(watch(dirname(path), (_event, file) => {
+          if (file !== null && String(file) !== basename(path)) return;
+          const next = stamp();
+          if (next !== previous) { previous = next; changed(); }
+        }));
+      }
+    }
     process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
-    child = spawn(process.execPath, ["--watch", "--watch-preserve-output", ...paths.map((path) => `--watch-path=${join(ROOT, path)}`), fileURLToPath(import.meta.url)], {
-      cwd: ROOT, stdio: "inherit", env: { ...process.env, TENVYR_DEV_WATCH_CHILD: "1" },
-    });
-    child.once("error", (error) => { cleanup(); console.error(error.message); process.exitCode = 1; });
-    child.once("exit", (code, signal) => { cleanup(); process.exitCode = code ?? (["SIGINT", "SIGTERM"].includes(signal) ? 0 : 1); });
+    launch();
   } else {
     const manifest = buildManifest();
     runLauncher(manifest).then(({ exitCode }) => { process.exitCode = exitCode; });

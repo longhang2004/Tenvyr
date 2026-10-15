@@ -143,8 +143,8 @@ node scripts/backend-upgrade-check.mjs
 
 The development check boots the actual launcher, frontend and Java services on
 disposable ports, touches a source timestamp to prove automatic rebuild/restart,
-and proves SIGINT teardown. Node's built-in watch mode supervises development
-only; production Java services do not invoke Node. The showcase cutover gate requires
+and proves SIGINT teardown. Node filesystem watches supervise development
+only, retaining PostgreSQL/Kafka containers through application reload; production Java services do not invoke Node. The showcase cutover gate requires
 a clean committed tree, uses default Compose files, runs success/retry flows,
 and checks Java-only processes plus every backend's source revision. The
 upgrade gate creates its own clean clone and local-only release tag, starts the

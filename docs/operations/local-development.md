@@ -105,7 +105,8 @@ docker-internal hostname). Run those agents inside the full Compose stack
 (`pnpm dev:infra`).
 
 `pnpm dev` watches backend sources, resources, Maven/Go configuration and skill
-prompts. A change gracefully stops the stack, rebuilds Java/Go and restarts it;
+prompts. A change gracefully stops application services, rebuilds Java/Go and restarts them;
+PostgreSQL/Kafka containers remain running throughout reload.
 frontend HMR remains active. Build outputs are excluded to prevent restart loops.
 Use `TENVYR_DEV_WATCH=0 pnpm dev` for a single supervised run. For automatic
 container rebuilds, use Compose Watch:
