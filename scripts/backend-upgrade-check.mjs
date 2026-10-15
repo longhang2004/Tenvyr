@@ -135,8 +135,7 @@ try {
   const originalProcess = ok("docker", [
     "top",
     `${prefix}-orchestrator`,
-    "-eo",
-    "args",
+    "-eo", "pid,args",
   ]);
   assert.match(originalProcess, /node /);
   const pipeline = (
