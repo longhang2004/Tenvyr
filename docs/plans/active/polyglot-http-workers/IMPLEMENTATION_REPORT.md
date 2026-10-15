@@ -14,6 +14,11 @@ sources:
 
 # Implementation report — polyglot HTTP workers
 
+> Runtime update: statements below about keeping TypeScript as the default
+> describe this slice's original scope. The later Java/Go backend migration
+> owns current default backend/host selection; see
+> [backend development](../../../development/java-backend.md).
+
 Provisional implementer report. Not independent closure.
 
 ## Implemented

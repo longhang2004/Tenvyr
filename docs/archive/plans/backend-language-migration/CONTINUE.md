@@ -1,9 +1,12 @@
 ---
 title: Backend language migration continuation briefing
-status: planned
+status: historical
 audience:
   - developer
-last_verified: 2026-10-15
+last_verified: 2026-10-16
+superseded_by:
+  - docs/development/java-backend.md
+  - docs/reference/backend-migration-verification.md
 sources:
   - AGENTS.md
   - CLAUDE.md
@@ -19,46 +22,32 @@ sources:
   - docs/reference/implementation-status.json
 ---
 
-# Continue the backend language migration
+# Backend migration closure and original handoff
 
-## Continuation checkpoint — 2026-10-15
+## Implementation and local cutover checkpoint
 
-The shared HTTP boundary now defaults to IPv4 loopback and exact configured
-CORS origins. ICU4J 78.2 replaces the approximate JDK collator; the normal
-foundation runner now checks all 5,018 retained canonical strings **and** hashes.
-`io.tenvyr.control.Main` now composes the Java services and owns lifecycle and
-recovery. The runner forwards `--integration` and has concrete implementations
-of the formerly missing check programs. Fresh builds clean the reactor first.
+The Java/Go backend now owns default launch, deployment and maintenance paths.
+Shared security, exact canonical hashing, composition, test runner, runtime
+binding, coordinator/workspace behavior and maintenance recovery were fixed and
+verified through real infrastructure. Local default deployment and original-to-
+Java upgrade passed from clean source `12f3a665de921a6f5aece3da1a861f5354fdc222`.
+The original ledger, frozen plans, capsule hashes, protocols and approval/recovery
+boundaries were preserved. A subsequent CI shutdown race was fixed with explicit
+HTTP/recovery draining and a real PostgreSQL lock regression; all four SDKs,
+workspace tests and development reload/interruption checks passed afterward.
 
-The complete integration runner passed all 21 Java check programs plus the
-Node differential and real Socket.IO gates. This includes PostgreSQL/Kafka,
-all four public Worker SDKs, native processes, coordinator restart and handoff,
-Git workspace preservation/release, and all 17 Docker recovery cases. The
-100,000-number/1,000-Unicode-object differential also passed against Node.
-The genuine Java maintenance image builds and its Docker CLI/Compose execute.
+The [current verification record](../../../reference/backend-migration-verification.md)
+contains actual runs and limitations. Latest required CI on
+[PR #7](https://github.com/longhang2004/Tenvyr/pull/7/checks) remains the final
+publication gate. No live paid model/OAuth calls or external production
+installation change is claimed. Existing partial/planned/public-release approval
+boundaries are unchanged.
 
-The full Docker candidate gate passed success/retry flows, Python Worker,
-Kafka, original Java runner and frontend, and Java-only backend processes.
-Both expanded original-service read-model oracles passed, including the native
-planner/worker/verifier run. The default launcher passed real configured-port
-startup and SIGINT teardown; all 25 launcher regressions and 42 self-hosted
-contract tests pass. Default files now select Java/Go.
+## Original handoff (historical context)
 
-The complete suite passed again on the final defaults, including all 17 Docker
-recovery cases. Source reload and interrupt-during-reload checks also passed. An actual original-to-
-Java upgrade, committed-source cutover, remote CI and PR publication remain
-unfinished. Keep the PR draft. Docker recovered after the disk-full incident;
-use task-owned disposable stacks and run heavy builds/tests sequentially.
-
-See [current candidate mechanics](../../../development/java-backend.md) and the
-per-capability `java_go` entries in the implementation ledger. The earlier
-inspection findings below describe the original handoff and remain useful as
-historical context; re-read current source before applying them.
-
-Generated 2026-10-15. This is a briefing for fresh local agents and an explicit
-record of unfinished work. The PR is a **draft**, not a completed migration or a
-cutover approval. `last_verified` describes this source inspection, not passing
-runtime acceptance gates.
+The findings and continuation commands below describe the unfinished original
+handoff. They are retained for history, not current instructions or current
+runtime status. Use current architecture, operations and verification documents.
 
 ## Goal
 

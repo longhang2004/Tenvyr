@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-10-15
+last_verified: 2026-10-16
 sources:
   - backend/pom.xml
   - backend/Dockerfile
@@ -20,12 +20,13 @@ sources:
 
 # Java and Go backend
 
-Default `pnpm dev`, service launch commands, Docker Compose and self-hosted
-maintenance commands now select the genuine Java backend and Go process helper.
-The candidate integration and full showcase gates passed. Committed-source
-cutover and an original-to-Java upgrade must also pass before completion is
-recorded; see the [verification record](../reference/backend-migration-verification.md).
-PR #7 remains draft while those gates and remote CI are pending.
+Default development, generic workspace build/test, Docker Compose and
+self-hosted maintenance commands select the Java backend and Go process helper.
+Real compatibility, recovery, committed-source default cutover and an
+original-to-Java upgrade have passed. See the
+[verification record](../reference/backend-migration-verification.md) for exact
+runs, subsequent lifecycle regressions and scope. CI repeats the full gates for
+each PR commit; latest required jobs must pass before the draft is promoted.
 
 ## Build and launch
 
@@ -44,8 +45,8 @@ The control plane owns the actual Java engine, authority services, runtime
 services, HTTP/Kafka adapter router, provider-management sessions, workspace
 reconciliation, and recovery loop. Startup applies the retained TypeORM
 migrations before opening the API. Failed startup closes owned resources.
-Shutdown stops HTTP admission and recovery, closes transports and provider
-sessions, and preserves durable inbox/outbox authority for restart.
+Shutdown stops HTTP admission, drains handlers and active recovery work, closes
+all transports/provider sessions even when another close fails, and preserves durable inbox/outbox authority for restart.
 
 `ORCHESTRATOR_HOST` defaults to `127.0.0.1`; container configuration explicitly
 opts into `0.0.0.0`. The shared HTTP boundary enables credentialed CORS only for
@@ -158,5 +159,5 @@ installations. No external production installation or paid provider account is
 implied. Native tests execute actual supervised fixture CLIs; live paid model
 calls and interactive credential flows require an operator's configured account.
 
-See the [continuation briefing](../plans/active/backend-language-migration/CONTINUE.md)
+See the [archived migration handoff](../archive/plans/backend-language-migration/CONTINUE.md)
 and [implementation ledger](../reference/implementation-status.json).

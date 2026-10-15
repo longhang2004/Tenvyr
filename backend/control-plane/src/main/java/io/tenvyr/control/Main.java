@@ -65,9 +65,9 @@ public final class Main implements AutoCloseable {
     @Override public synchronized void close() throws Exception {
         if(closed)return;
         closed=true;
-        http.close();
-        recovery.close();
-        try {adapters.close();} finally {providers.close();db.close();}
+        Exception failure=null;
+        for(AutoCloseable resource:new AutoCloseable[]{http,recovery,adapters,providers,db})try{resource.close();}catch(Exception error){if(failure==null)failure=error;else failure.addSuppressed(error);}
+        if(failure!=null)throw failure;
     }
     public static void main(String[] args) throws Exception {
         Main control=new Main(Db.fromEnv(),System.getenv());

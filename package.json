@@ -14,13 +14,13 @@
     "dev:reviewer": "sh scripts/java-backend.sh agents code-reviewer",
     "dev:observability": "sh scripts/java-backend.sh agents observability",
     "dev:frontend": "pnpm --filter frontend run dev",
-    "build:all": "pnpm -r build",
+    "build:all": "pnpm backend:build && pnpm -r build",
     "backend:build": "sh scripts/backend-build.sh",
     "backend:test": "sh scripts/backend-checks.sh pure",
     "backend:integration": "sh scripts/backend-checks.sh --integration",
     "dev:java:orchestrator": "sh scripts/java-backend.sh control-plane",
     "dev:java:gateway": "sh scripts/java-backend.sh gateway",
-    "test:all": "pnpm -r --include-workspace-root test",
+    "test:all": "pnpm backend:build && pnpm backend:test && pnpm -r --include-workspace-root test",
     "setup:check": "node scripts/setup-check.mjs",
     "showcase:up": "export LLM_PROVIDER=\"${LLM_PROVIDER-mock}\" LLM_FAILURE_MODE=\"${LLM_FAILURE_MODE-}\"; docker compose -p tenvyr-showcase -f docker-compose.yml -f docker-compose.showcase.yml up -d --build && node scripts/smoke-e2e.mjs --health",
     "showcase:seed": "node scripts/smoke-e2e.mjs --seed",
@@ -53,7 +53,8 @@
     "test": "node --test scripts/dev-ux.test.mjs",
     "backend:showcase": "node scripts/backend-showcase-check.mjs --cutover",
     "backend:upgrade-check": "node scripts/backend-upgrade-check.mjs",
-    "backend:dev-check": "node scripts/backend-dev-check.mjs"
+    "backend:dev-check": "node scripts/backend-dev-check.mjs",
+    "dev:host": "sh scripts/java-backend.sh executor-host"
   },
   "devDependencies": {
     "prettier": "^3.0.0"

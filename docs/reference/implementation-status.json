@@ -5,10 +5,13 @@
    "id": "contracts-v1",
    "status": "implemented",
    "sources": [
+    "backend/platform/src/main",
     "contracts/schemas",
     "packages/contracts/src"
    ],
    "tests": [
+    "backend/platform/src/test/java/io/tenvyr/platform/FoundationCheck.java",
+    "scripts/backend-database-check.mjs",
     "packages/contracts/test",
     "contracts/conformance"
    ],
@@ -21,90 +24,80 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/platform/src/main"
-    ],
+    "sources": ["backend/platform/src/main"],
     "checks": [
      "backend/platform/src/test/java/io/tenvyr/platform/FoundationCheck.java",
      "scripts/backend-database-check.mjs"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "kafka-agent-adapter",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
     "services/orchestrator/src/services/kafka.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/agent-adapters/kafka-agent.adapter.spec.ts",
     "services/orchestrator/src/services/kafka.service.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/transports/kafka-runtime-v1.md"
-   ],
+   "docs": ["docs/architecture/transports/kafka-runtime-v1.md"],
    "limitations": [
     "Kafka v1 topics and consumer identities remain compatibility identifiers"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "http-agent-adapter",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/agent-adapters/http-agent.adapter.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
     "services/orchestrator/src/agent-adapters/http-agent.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/transports/http-agent-adapter-v1.md"
-   ],
+   "docs": ["docs/architecture/transports/http-agent-adapter-v1.md"],
    "limitations": [
     "Callback replay protection and dispatch state are process-local"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "typescript-worker-sdk",
    "status": "implemented",
-   "sources": [
-    "packages/worker/src"
-   ],
-   "tests": [
-    "packages/worker/test"
-   ],
-   "docs": [
-    "docs/architecture/workers/typescript-worker-sdk.md"
-   ],
-   "limitations": [
-    "Queue, idempotency, and callback state are process-local"
-   ],
+   "sources": ["packages/worker/src"],
+   "tests": ["packages/worker/test"],
+   "docs": ["docs/architecture/workers/typescript-worker-sdk.md"],
+   "limitations": ["Queue, idempotency, and callback state are process-local"],
    "java_go": {
     "disposition": "retained-original-scope",
     "verification": "retained scope; public SDK loopbacks and showcase passed where applicable"
@@ -113,15 +106,9 @@
   {
    "id": "python-worker-sdk",
    "status": "implemented",
-   "sources": [
-    "sdks/python-worker/src/tenvyr_worker"
-   ],
-   "tests": [
-    "sdks/python-worker/tests"
-   ],
-   "docs": [
-    "docs/architecture/workers/python-worker-sdk.md"
-   ],
+   "sources": ["sdks/python-worker/src/tenvyr_worker"],
+   "tests": ["sdks/python-worker/tests"],
+   "docs": ["docs/architecture/workers/python-worker-sdk.md"],
    "limitations": [
     "Queue, idempotency, and callback state are process-local",
     "Thread cancellation is cooperative"
@@ -134,9 +121,7 @@
   {
    "id": "java-worker-sdk",
    "status": "implemented",
-   "sources": [
-    "sdks/java-worker/src/main/java/com/tenvyr/worker"
-   ],
+   "sources": ["sdks/java-worker/src/main/java/com/tenvyr/worker"],
    "tests": [
     "sdks/java-worker/src/test/java/com/tenvyr/worker/HmacTest.java",
     "sdks/java-worker/src/test/java/com/tenvyr/worker/WorkerProtocolTest.java",
@@ -144,9 +129,7 @@
     "sdks/java-worker/src/test/java/com/tenvyr/worker/OrchestratorLoopbackWorker.java",
     "services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/workers/java-worker-sdk.md"
-   ],
+   "docs": ["docs/architecture/workers/java-worker-sdk.md"],
    "limitations": [
     "Queue and idempotency are process-local",
     "AgentEvents are not implemented"
@@ -159,17 +142,12 @@
   {
    "id": "cpp-http-worker",
    "status": "implemented",
-   "sources": [
-    "sdks/cpp-worker/src",
-    "sdks/cpp-worker/include/tenvyr"
-   ],
+   "sources": ["sdks/cpp-worker/src", "sdks/cpp-worker/include/tenvyr"],
    "tests": [
     "sdks/cpp-worker/tests/test_hmac.cpp",
     "sdks/cpp-worker/tests/test_worker.cpp"
    ],
-   "docs": [
-    "docs/architecture/workers/cpp-worker.md"
-   ],
+   "docs": ["docs/architecture/workers/cpp-worker.md"],
    "limitations": [
     "HTTP/1.1 Content-Length subset; no chunked encoding",
     "AgentEvents are not implemented",
@@ -184,38 +162,37 @@
    "id": "json-numeric-interoperability",
    "status": "implemented",
    "sources": [
+    "backend/platform/src/main",
     "packages/contracts/src/validation.ts",
     "sdks/python-worker/src/tenvyr_worker/_protocol/json_value.py"
    ],
    "tests": [
+    "backend/platform/src/test/java/io/tenvyr/platform/FoundationCheck.java",
+    "scripts/backend-database-check.mjs",
     "packages/contracts/test/json-numbers.spec.ts",
     "sdks/python-worker/tests/test_schema_protocol.py"
    ],
-   "docs": [
-    "docs/architecture/contracts/json-interoperability.md"
-   ],
+   "docs": ["docs/architecture/contracts/json-interoperability.md"],
    "limitations": [
     "Exact cross-language decimal equality is not guaranteed for non-integer floats"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/platform/src/main"
-    ],
+    "sources": ["backend/platform/src/main"],
     "checks": [
      "backend/platform/src/test/java/io/tenvyr/platform/FoundationCheck.java",
      "scripts/backend-database-check.mjs"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "gateway",
    "status": "implemented",
-   "sources": [
-    "services/gateway/src"
-   ],
+   "sources": ["backend/gateway/src/main", "services/gateway/src"],
    "tests": [
+    "backend/gateway/src/test/java/io/tenvyr/gateway/GatewayCheck.java",
+    "scripts/backend-socketio-check.mjs",
     "services/gateway/src/app.controller.spec.ts",
     "services/gateway/src/local-origin.spec.ts",
     "services/gateway/src/active-flow-proxy.spec.ts"
@@ -231,26 +208,28 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/gateway/src/main"
-    ],
+    "sources": ["backend/gateway/src/main"],
     "checks": [
      "backend/gateway/src/test/java/io/tenvyr/gateway/GatewayCheck.java",
      "scripts/backend-socketio-check.mjs"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "orchestrator-pipeline-engine",
    "status": "partial",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services",
     "services/orchestrator/src/entities",
     "services/orchestrator/src/database/data-source.ts",
     "services/orchestrator/src/database/migrations"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/services/engine.service.spec.ts",
     "services/orchestrator/src/services/agent-result.service.spec.ts",
     "services/orchestrator/src/services/result-inbox.service.spec.ts",
@@ -263,9 +242,7 @@
     "services/orchestrator/src/database/migrations/milestone-zero-foundation.spec.ts",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Execution plan snapshots and attempt history are durable",
     "Logical steps materialize unfrozen (PENDING, frozenSpecHash/frozenAt null) and freeze only when a claim or gate decision becomes authoritative; engine-level reconcileExecution is the single idempotent autonomous progression path and resumeAfterResult is a compatibility alias",
@@ -276,21 +253,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "agent-events-supervision",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services/agent-event.service.ts",
     "services/orchestrator/src/services/supervision.service.ts",
     "services/orchestrator/src/services/supervision-config.service.ts",
@@ -299,6 +275,9 @@
     "sdks/python-worker/src/tenvyr_worker/_runtime/worker.py"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/services/agent-event.service.spec.ts",
     "services/orchestrator/src/services/supervision.service.spec.ts",
     "services/orchestrator/src/services/supervision-config.service.spec.ts",
@@ -318,26 +297,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "java-agent-runner",
    "status": "implemented",
-   "sources": [
-    "services/agent-runner/src/main/java"
-   ],
-   "tests": [
-    "services/agent-runner/src/test/java"
-   ],
+   "sources": ["services/agent-runner/src/main/java"],
+   "tests": ["services/agent-runner/src/test/java"],
    "docs": [
     "docs/architecture/agents-and-runners.md",
     "docs/showcase/using-model-providers.md"
@@ -355,55 +328,45 @@
   {
    "id": "code-reviewer-agent",
    "status": "implemented",
-   "sources": [
-    "services/agent-code-reviewer/src"
-   ],
+   "sources": ["backend/agents/src/main", "services/agent-code-reviewer/src"],
    "tests": [
+    "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java",
     "services/agent-code-reviewer/src/app.controller.spec.ts",
     "services/agent-code-reviewer/src/kafka.service.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/agents-and-runners.md"
-   ],
+   "docs": ["docs/architecture/agents-and-runners.md"],
    "limitations": [
     "Kafka-specialized service; not a general framework integration"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/agents/src/main"
-    ],
+    "sources": ["backend/agents/src/main"],
     "checks": [
      "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "observability-agent",
    "status": "implemented",
-   "sources": [
-    "services/agent-observability/src"
-   ],
+   "sources": ["backend/agents/src/main", "services/agent-observability/src"],
    "tests": [
+    "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java",
     "services/agent-observability/src/app.controller.spec.ts",
     "services/agent-observability/src/kafka.service.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/agents-and-runners.md"
-   ],
+   "docs": ["docs/architecture/agents-and-runners.md"],
    "limitations": [
     "Diagnostic Kafka agent only; it is not OpenTelemetry instrumentation"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/agents/src/main"
-    ],
+    "sources": ["backend/agents/src/main"],
     "checks": [
      "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
@@ -435,27 +398,16 @@
   {
    "id": "setup-readiness-check",
    "status": "implemented",
-   "sources": [
-    "scripts/setup-check.mjs",
-    "scripts/dev.mjs"
-   ],
-   "tests": [
-    "scripts/setup-check.mjs",
-    "scripts/dev-ux.test.mjs"
-   ],
-   "docs": [
-    "docs/operations/local-development.md"
-   ],
+   "sources": ["scripts/setup-check.mjs", "scripts/dev.mjs"],
+   "tests": ["scripts/setup-check.mjs", "scripts/dev-ux.test.mjs"],
+   "docs": ["docs/operations/local-development.md"],
    "limitations": [
     "Reports machine state and actions but does not install or reconfigure prerequisites"
    ],
    "java_go": {
     "disposition": "retained-original-scope",
     "verification": "default Java launcher, source reload and interrupt-during-reload passed",
-    "checks": [
-     "scripts/backend-dev-check.mjs",
-     "scripts/dev-ux.test.mjs"
-    ]
+    "checks": ["scripts/backend-dev-check.mjs", "scripts/dev-ux.test.mjs"]
    }
   },
   {
@@ -469,14 +421,8 @@
     "services/agent-code-reviewer/Dockerfile",
     "services/agent-observability/Dockerfile"
    ],
-   "tests": [
-    "scripts/setup-check.test.mjs",
-    "scripts/smoke-e2e.test.mjs"
-   ],
-   "docs": [
-    "docs/showcase/demo-guide.md",
-    "docs/showcase/case-study.md"
-   ],
+   "tests": ["scripts/setup-check.test.mjs", "scripts/smoke-e2e.test.mjs"],
+   "docs": ["docs/showcase/demo-guide.md", "docs/showcase/case-study.md"],
    "limitations": [
     "Default seed exercises Python HTTP and Java-backed Kafka paths; the TypeScript Worker is verified separately",
     "Pinned Confluent 7.3 JVM services disable container support to avoid their bundled JDK cgroup v2 startup failure",
@@ -498,9 +444,7 @@
     "scripts/verify-package-packs.mjs",
     "scripts/verify-python-worker-package.py"
    ],
-   "docs": [
-    "docs/operations/package-verification.md"
-   ],
+   "docs": ["docs/operations/package-verification.md"],
    "limitations": [
     "Verification is local/private and does not authorize publication"
    ],
@@ -524,9 +468,7 @@
     "scripts/verify-package-packs.mjs",
     "scripts/verify-python-worker-package.py"
    ],
-   "docs": [
-    "docs/product/identity.md"
-   ],
+   "docs": ["docs/product/identity.md"],
    "limitations": [
     "External repository rename, registry reservation, legal review, and package publication remain owner-controlled"
    ],
@@ -539,9 +481,13 @@
    "id": "opentelemetry",
    "status": "partial",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services/execution-capsule.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
    "docs": [
@@ -554,51 +500,50 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "w3c-context-propagation",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/agent-adapters/http-agent.adapter.ts",
     "services/orchestrator/src/services/execution-capsule.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts",
     "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Outbound-only traceparent (no inbound trust); tracestate not propagated; OTLP exporter surface not wired"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "artifact-store",
    "status": "partial",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/entities/artifact.entity.ts",
     "services/orchestrator/src/entities/artifact-exposure.entity.ts",
     "services/orchestrator/src/database/migrations/1722270002000-MilestoneTwoArtifactIdentity.ts",
@@ -609,6 +554,9 @@
     "services/orchestrator/src/services/result-inbox.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/services/result-inbox.service.spec.ts",
     "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
     "services/orchestrator/src/domain/context-snapshot.spec.ts",
@@ -629,21 +577,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "execution-state",
    "status": "partial",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/execution-state.ts",
     "services/orchestrator/src/services/artifact-projection.resolver.ts",
     "services/orchestrator/src/entities/artifact-exposure.entity.ts",
@@ -661,6 +608,9 @@
     "services/orchestrator/src/services/result-inbox.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/execution-state.spec.ts",
     "services/orchestrator/src/services/artifact-projection.resolver.spec.ts",
     "services/orchestrator/src/domain/context-snapshot.spec.ts",
@@ -673,9 +623,7 @@
     "services/orchestrator/src/database/postgres.integration.spec.ts",
     "services/orchestrator/src/domain/state-writes.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Internal durable primitive only: no agent/result mutation authority and no AgentResultV1.statePatch",
     "Mutation evidence is not full event-sourced state history (no revision table)",
@@ -688,21 +636,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "policy-engine",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/policy.ts",
     "services/orchestrator/src/services/policy.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
@@ -711,27 +658,26 @@
     "services/orchestrator/src/services/delegation.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/policy.spec.ts",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Trusted configuration uses bounded deterministic exact-match rules, not a general policy language",
     "Operator/admin control surfaces remain service-level while the external exposure gate is open"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
@@ -739,12 +685,8 @@
    "status": "planned",
    "sources": [],
    "tests": [],
-   "docs": [
-    "docs/roadmap/README.md"
-   ],
-   "limitations": [
-    "No CLI transport adapter"
-   ],
+   "docs": ["docs/roadmap/README.md"],
+   "limitations": ["No CLI transport adapter"],
    "java_go": {
     "disposition": "retained-original-scope",
     "verification": "retained scope; public SDK loopbacks and showcase passed where applicable"
@@ -755,9 +697,7 @@
    "status": "planned",
    "sources": [],
    "tests": [],
-   "docs": [
-    "docs/roadmap/README.md"
-   ],
+   "docs": ["docs/roadmap/README.md"],
    "limitations": [
     "No LangGraph, OpenAI Agents SDK, CrewAI, or PydanticAI helper package"
    ],
@@ -771,9 +711,7 @@
    "status": "planned",
    "sources": [],
    "tests": [],
-   "docs": [
-    "docs/roadmap/README.md"
-   ],
+   "docs": ["docs/roadmap/README.md"],
    "limitations": [
     "Worker callback and idempotency records are lost on process restart"
    ],
@@ -787,9 +725,7 @@
    "status": "blocked",
    "sources": [],
    "tests": [],
-   "docs": [
-    "docs/product/identity.md"
-   ],
+   "docs": ["docs/product/identity.md"],
    "limitations": [
     "Blocked by registry, legal, repository, and explicit publication approval gates"
    ],
@@ -802,6 +738,7 @@
    "id": "local-executor-host",
    "status": "implemented",
    "sources": [
+    "backend/executor-host/src/main",
     "services/local-executor-host/src/config.ts",
     "services/local-executor-host/src/supervisor.ts",
     "services/local-executor-host/src/state.ts",
@@ -812,6 +749,8 @@
     "services/orchestrator/src/agent-adapters/local-executor-host.loopback.spec.ts"
    ],
    "tests": [
+    "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostCheck.java",
+    "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostIntegrationCheck.java",
     "services/local-executor-host/test/config.spec.ts",
     "services/local-executor-host/test/supervisor.spec.ts",
     "services/local-executor-host/test/state.spec.ts",
@@ -838,20 +777,19 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/executor-host/src/main"
-    ],
+    "sources": ["backend/executor-host/src/main"],
     "checks": [
      "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostCheck.java",
      "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "approvals-waiting",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/approval.ts",
     "services/orchestrator/src/entities/approval-request.entity.ts",
     "services/orchestrator/src/services/approval.service.ts",
@@ -861,40 +799,41 @@
     "services/orchestrator/src/services/runtime-recovery.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "No operator/admin approval API surface yet (external exposure gate open); transitions are service-level",
     "Approval expiry default is 7 days (bounded by config)"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "execution-capsule",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services/execution-capsule.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Export, replay, comparison, provenance, and telemetry projection are service-level while the external exposure gate is open",
     "The OTLP-shaped projection is not a wired exporter and has no real timings",
@@ -902,21 +841,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "supervised-delegation-requests",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/entities/delegation-request.entity.ts",
     "services/orchestrator/src/entities/delegation-request-conflict.entity.ts",
     "services/orchestrator/src/services/delegation.service.ts",
@@ -924,32 +862,32 @@
     "services/orchestrator/src/database/migrations/1722270013000-RoadmapLineageIntegrity.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Service-level request/decision only; runtimes without a durable pause/resume capability use explicit workflow child work outside a paused attempt",
     "No public delegation graph/control API while the external exposure gate is open"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "delegation-observed-evidence",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "contracts/schemas/agent-result.v1.schema.json",
     "services/orchestrator/src/entities/delegation-observation.entity.ts",
     "services/orchestrator/src/entities/delegation-observation-conflict.entity.ts",
@@ -957,151 +895,151 @@
     "services/orchestrator/src/database/migrations/1722270010000-MilestoneSixDelegationObservations.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Observed evidence remains a runtime assertion and never proves Tenvyr authority or semantic consumption",
     "Opaque runtime children intentionally create no lineage"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "plan-proposal-policy",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services/plan-proposal.service.ts",
     "services/orchestrator/src/services/approval.service.ts",
     "services/orchestrator/src/domain/policy.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Policy rules match actionType/agents/executors; growth is bounded structurally by candidate validation, not by policy rules"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "planner-trigger",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services/result-inbox.service.ts",
     "services/orchestrator/src/services/plan-proposal.service.ts",
     "services/orchestrator/src/services/pipeline-validation.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Explicit planner-step trigger only; Tenvyr does not implement a general autonomous planning framework"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "plan-proposals",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/entities/plan-proposal.entity.ts",
     "services/orchestrator/src/services/plan-proposal.service.ts",
     "services/orchestrator/src/database/migrations/1722270009000-MilestoneFivePlanProposals.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Proposal activation and approval are service-level while the external exposure gate is open"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "plan-patch",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/plan-patch.ts",
     "services/orchestrator/src/services/pipeline-validation.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/plan-patch.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Patch operations intentionally remain restricted to addStep and replaceUnfrozenStep"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "budget-hierarchy",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/budget.ts",
     "services/orchestrator/src/services/budget-ledger.service.ts",
     "services/orchestrator/src/services/execution.service.ts",
@@ -1109,32 +1047,32 @@
     "services/orchestrator/src/services/approval.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Adjust is not idempotency-keyed (explicit operator correction)",
     "Tenant/plan accounts are operator-created; no grant-rotation API beyond adjust"
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "policy-decision-boundary",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/policy.ts",
     "services/orchestrator/src/entities/policy-snapshot.entity.ts",
     "services/orchestrator/src/entities/policy-decision.entity.ts",
@@ -1144,12 +1082,13 @@
     "services/orchestrator/src/services/execution-claim.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/policy.spec.ts",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Interception is wired at dispatch, PlanPatch activation, and supervised delegation approval",
     "REQUIRE_APPROVAL produces the durable ApprovalRequest + WAITING flow for dispatch and PlanPatch; supervised delegation uses its explicit operator approval seam",
@@ -1158,21 +1097,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "budget-ledger",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/budget.ts",
     "services/orchestrator/src/entities/budget-account.entity.ts",
     "services/orchestrator/src/entities/budget-reservation.entity.ts",
@@ -1181,12 +1119,13 @@
     "services/orchestrator/src/database/migrations/1722270006000-MilestoneFourBudgetLedger.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/budget.spec.ts",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/control-plane.md"
-   ],
+   "docs": ["docs/architecture/control-plane.md"],
    "limitations": [
     "Enforcement is opt-in per pipeline budget declaration; un-budgeted pipelines run unchanged",
     "Supervised child accounts are linked to parent execution accounts and every child attempt reserve traverses the ancestor chain",
@@ -1196,21 +1135,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "single-owner-self-hosted",
    "status": "implemented",
    "sources": [
+    "backend/operations/src/main",
     "docker-compose.self-hosted.yml",
     ".env.self-hosted.example",
     "scripts/self-hosted/preflight.mjs",
@@ -1221,6 +1159,8 @@
     "services/orchestrator/src/services/execution-claim.ts"
    ],
    "tests": [
+    "backend/operations/src/test/java/io/tenvyr/operations/OperationsCheck.java",
+    "backend/operations/src/test/java/io/tenvyr/operations/OperationsIntegrationCheck.java",
     "scripts/self-hosted/contract.test.mjs",
     "services/orchestrator/src/database/postgres.integration.spec.ts",
     "services/orchestrator/src/app.controller.spec.ts"
@@ -1245,20 +1185,19 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/operations/src/main"
-    ],
+    "sources": ["backend/operations/src/main"],
     "checks": [
      "backend/operations/src/test/java/io/tenvyr/operations/OperationsCheck.java",
      "backend/operations/src/test/java/io/tenvyr/operations/OperationsIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "operator-workbench-projections",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/services/workbench-projection.service.ts",
     "services/orchestrator/src/workbench.controller.ts",
     "services/orchestrator/src/services/workbench-command.service.ts",
@@ -1268,14 +1207,15 @@
     "services/gateway/src/app.controller.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/gateway/src/app.controller.spec.ts",
     "services/orchestrator/src/services/workbench-projection.service.spec.ts",
     "services/orchestrator/src/services/workbench-command.service.spec.ts",
     "services/orchestrator/src/database/postgres.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/workbench.md"
-   ],
+   "docs": ["docs/architecture/workbench.md"],
    "limitations": [
     "M10 milestone implemented: bounded read projections, idempotent command surface with audit, accessible Workbench shell, inspection, deterministic offline demo, and full VERIFY (incl. live showcase smoke) are in place",
     "Milestone closure is Sol's decision; M10 accepted by independent Tech Lead review (Sol closure remains Sol's decision)",
@@ -1285,21 +1225,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "coordinator-loop-domain",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/coordination.ts",
     "services/orchestrator/src/services/runtime-coordination.service.ts",
     "services/orchestrator/src/entities/coordination-run.entity.ts",
@@ -1312,6 +1251,9 @@
     "services/orchestrator/src/services/engine.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/coordination.spec.ts",
     "services/orchestrator/src/services/runtime-coordination.service.spec.ts",
     "services/orchestrator/src/database/migrations/milestone-nine-coordination.spec.ts",
@@ -1319,9 +1261,7 @@
     "services/orchestrator/src/services/engine.service.spec.ts",
     "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/coordination-loop.md"
-   ],
+   "docs": ["docs/architecture/coordination-loop.md"],
    "limitations": [
     "M9 milestone implemented: pure semantics, durable run/iteration authority, Planner-to-batch over PlanPatch, fan-out/fan-in/decision loop, authority integration, and the deterministic real-HTTP team example are in place",
     "Closure hardening: executor allowlist enforced at batch admission (agent-kind tasks resolve to `agent:<name>`, connection-kind to the revision's executorId); connection-kind Planner/Verifier routing with claimability rechecks; pending PlanPatch proposal identity persisted and resumed exactly once (no approval storms); coordinator-owned failures terminalize run AND execution atomically; run-level delegation depth enforced by chain walk",
@@ -1332,21 +1272,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "executor-descriptor",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/executors/executor-descriptor.ts",
     "services/orchestrator/src/agent-adapters/agent-adapter.types.ts",
     "services/orchestrator/src/agent-adapters/agent-adapter.router.ts",
@@ -1358,6 +1297,9 @@
     "services/orchestrator/src/services/execution-claim.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/executors/executor-descriptor.spec.ts",
     "services/orchestrator/src/agent-adapters/agent-adapter.router.spec.ts",
     "services/orchestrator/src/agent-adapters/http-agent.adapter.spec.ts",
@@ -1366,9 +1308,7 @@
     "services/orchestrator/src/database/postgres.integration.spec.ts",
     "services/orchestrator/src/m8-cli-connections.e2e.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/transports/adapter-model.md"
-   ],
+   "docs": ["docs/architecture/transports/adapter-model.md"],
    "limitations": [
     "Executor kinds cover Kafka/HTTP transports plus the trusted-code-only local host; Codex/Claude stay inside runtime applications and A2A remains deferred",
     "Closure hardening: LocalExecutorProfileV1 freezes secret-free CLI execution data (command/argv/cwd/env REFERENCES \u2014 never values) into the attempt snapshot at claim for connection-selected steps",
@@ -1379,21 +1319,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "runtime-connection-domain",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/executors/runtime-connection.ts",
     "services/orchestrator/src/executors/runtime-profiles.ts",
     "services/orchestrator/src/services/runtime-connection.service.ts",
@@ -1410,6 +1349,9 @@
     "services/gateway/src/app.controller.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/executors/runtime-connection.spec.ts",
     "services/orchestrator/src/executors/runtime-profiles.spec.ts",
     "services/orchestrator/src/services/runtime-connection.service.spec.ts",
@@ -1437,21 +1379,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "runtime-target-model-selection",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "contracts/schemas/agent-invocation.v1.schema.json",
     "frontend/src/components/shared/RuntimeTargetPicker.tsx",
     "packages/contracts/src/types.ts",
@@ -1464,6 +1405,9 @@
     "services/orchestrator/src/services/runtime-coordination.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/coordination-p2-model-targets.spec.ts",
     "services/orchestrator/src/executors/executor-descriptor.spec.ts",
     "services/orchestrator/src/executors/runtime-profiles.spec.ts",
@@ -1484,21 +1428,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "model-sources",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/gateway/src/app.controller.ts",
     "services/orchestrator/src/database/migrations/1722270019000-ModelSources.ts",
     "services/orchestrator/src/entities/model-source.entity.ts",
@@ -1510,6 +1453,9 @@
     "services/orchestrator/src/services/workbench-command.service.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "frontend/src/lib/tenvyr-api/client.test.mjs",
     "frontend/src/lib/tenvyr-api/guards.test.mjs",
     "scripts/self-hosted/contract.test.mjs",
@@ -1521,9 +1467,7 @@
     "frontend/src/lib/tenvyr-api/picker-readiness.test.mjs",
     "services/orchestrator/src/reload-resume.gateway.integration.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/provider-connections.md"
-   ],
+   "docs": ["docs/architecture/provider-connections.md"],
    "limitations": [
     "model_sources is the GENERIC OpenAI-compatible catalog endpoint configuration only (advanced surface); provider state is RUNTIME-OWNED (STRUCTURED OpenCode Server API discovery \u2014 opencode serve GET /provider + /provider/auth, TUI output never parsed \u2014 plus codex login status, claude auth status) and never a source row",
     "9Router is NOT a first-class Tenvyr concept (it inspired the provider-management UX only); an existing instance connects as a generic OpenAI-compatible endpoint \u2014 Tenvyr contains no routing/fallback/quota/rotation/alias logic",
@@ -1533,21 +1477,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "runtime-harness-context-efficiency",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/context-bundle.ts",
     "services/orchestrator/src/executors/context-projection-cache.ts",
     "services/orchestrator/src/domain/context-snapshot.ts",
@@ -1564,6 +1507,9 @@
     "frontend/src/lib/tenvyr-api/types.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/context-bundle.spec.ts",
     "services/orchestrator/src/executors/context-projection-cache.spec.ts",
     "services/orchestrator/src/p3-context-dogfood.integration.spec.ts",
@@ -1571,9 +1517,7 @@
     "services/orchestrator/src/services/workbench-projection.service.spec.ts",
     "frontend/src/lib/tenvyr-api/client.test.mjs"
    ],
-   "docs": [
-    "docs/architecture/executors/invocation-efficiency.md"
-   ],
+   "docs": ["docs/architecture/executors/invocation-efficiency.md"],
    "limitations": [
     "Projection cache is process-local and disposable; restart starts empty (PostgreSQL attempts + Capsule remain the durable record)",
     "Artifact resolution still executes per claim (resolved references are a load-bearing fingerprint input)",
@@ -1584,21 +1528,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "workspace-execution-isolation",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/workspace-execution.ts",
     "services/orchestrator/src/services/workspace-execution.service.ts",
     "services/orchestrator/src/entities/workspace-execution.entity.ts",
@@ -1618,15 +1561,16 @@
     "frontend/src/app/runs/[executionId]/page.tsx"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/services/workspace-execution.service.spec.ts",
     "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
     "services/orchestrator/src/workspace-execution-recovery.spec.ts",
     "services/local-executor-host/test/config.spec.ts",
     "services/local-executor-host/test/native-output-adapter.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/workspace-execution.md"
-   ],
+   "docs": ["docs/architecture/workspace-execution.md"],
    "limitations": [
     "Trusted-code-only; not a sandbox and no snapshot isolation of the source tree in shared mode",
     "External git mutations are never transactional with PostgreSQL; the ALLOCATING-before-git lifecycle + reconciliation fail closed (never falsely READY)",
@@ -1636,21 +1580,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "attention-queue",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/attention.ts",
     "services/orchestrator/src/services/attention.service.ts",
     "services/orchestrator/src/workbench.controller.ts",
@@ -1661,15 +1604,16 @@
     "frontend/src/lib/tenvyr-api/client.ts"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/attention.spec.ts",
     "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
     "services/orchestrator/src/workspace-execution-recovery.spec.ts",
     "services/gateway/src/app.controller.spec.ts",
     "frontend/src/lib/tenvyr-api/client.test.mjs"
    ],
-   "docs": [
-    "docs/architecture/attention.md"
-   ],
+   "docs": ["docs/architecture/attention.md"],
    "limitations": [
     "Read projection only \u2014 items exist exactly while their durable source condition exists; resolution always uses the existing authority commands",
     "Classes are limited to what durable rows prove today (approval/FAILED/LIMIT_REACHED/preserved uncommitted workspace)",
@@ -1677,21 +1621,20 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   },
   {
    "id": "portable-handoff",
    "status": "implemented",
    "sources": [
+    "backend/control-plane/src/main",
     "services/orchestrator/src/domain/handoff.ts",
     "services/orchestrator/src/services/handoff.service.ts",
     "services/orchestrator/src/entities/handoff.entity.ts",
@@ -1703,13 +1646,14 @@
     "frontend/src/app/runs/new/page.tsx"
    ],
    "tests": [
+    "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java",
     "services/orchestrator/src/domain/handoff.spec.ts",
     "services/orchestrator/src/pivot1-workspace-dogfood.integration.spec.ts",
     "services/orchestrator/src/workspace-execution-recovery.spec.ts"
    ],
-   "docs": [
-    "docs/architecture/handoff.md"
-   ],
+   "docs": ["docs/architecture/handoff.md"],
    "limitations": [
     "Source run must be TERMINAL; preserved git-worktree transfer is exclusive (source lease TRANSFERRED, destination gets a NEW lease \u2014 concurrent continuation fails closed)",
     "Bundle is a bounded projection of durable truth (references only); it is not session migration, chat-history copying, or deterministic replay",
@@ -1717,24 +1661,24 @@
    ],
    "java_go": {
     "disposition": "migrated",
-    "sources": [
-     "backend/control-plane/src/main"
-    ],
+    "sources": ["backend/control-plane/src/main"],
     "checks": [
      "backend/control-plane/src/test/java/io/tenvyr/control/engine/EngineIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java",
      "backend/control-plane/src/test/java/io/tenvyr/control/RuntimeIntegrationCheck.java"
     ],
-    "verification": "integration-passed; committed-source-cutover-pending"
+    "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
   }
  ],
  "backend_migration": {
-  "status": "cutover-verification",
+  "status": "implemented",
   "default_runtime": "java-go",
-  "cutover_verified": false,
+  "cutover_verified": true,
   "documentation": "docs/development/java-backend.md",
-  "continuation": "docs/plans/active/backend-language-migration/CONTINUE.md",
-  "verification": "docs/reference/backend-migration-verification.md"
+  "verification": "docs/reference/backend-migration-verification.md",
+  "local_cutover_baseline_revision": "12f3a665de921a6f5aece3da1a861f5354fdc222",
+  "handoff_record": "docs/archive/plans/backend-language-migration/CONTINUE.md",
+  "ci_checks": "https://github.com/longhang2004/Tenvyr/pull/7/checks"
  }
 }

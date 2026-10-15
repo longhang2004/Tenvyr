@@ -57,5 +57,5 @@ public final class Http implements AutoCloseable {
     public static Response json(int status,Object body){return new Response(status,Json.stringify(Json.value(body)).getBytes(StandardCharsets.UTF_8),"application/json; charset=utf-8");}
     public static Response error(int status,String code,String message){return json(status,Json.object("statusCode",status,"error",code,"message",message));}
     private static Map<String,String> parseQuery(String query){Map<String,String> out=new LinkedHashMap<>();if(query!=null)for(String part:query.split("&")){String[] bits=part.split("=",2);out.put(URLDecoder.decode(bits[0],StandardCharsets.UTF_8),bits.length>1?URLDecoder.decode(bits[1],StandardCharsets.UTF_8):"");}return Map.copyOf(out);}
-    @Override public void close(){server.stop(1);executor.shutdownNow();}
+    @Override public void close(){server.stop(1);executor.shutdown();try{if(!executor.awaitTermination(10,TimeUnit.SECONDS)){executor.shutdownNow();throw new IllegalStateException("HTTP handlers did not drain before shutdown");}}catch(InterruptedException interrupted){executor.shutdownNow();Thread.currentThread().interrupt();throw new IllegalStateException("HTTP shutdown interrupted",interrupted);}}
 }

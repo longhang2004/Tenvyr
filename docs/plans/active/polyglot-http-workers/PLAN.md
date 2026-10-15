@@ -14,6 +14,11 @@ sources:
 
 # PLAN — copy the existing worker, do not rewrite the plane
 
+> Runtime update: statements below about keeping TypeScript as the default
+> describe this slice's original scope. The later Java/Go backend migration
+> owns current default backend/host selection; see
+> [backend development](../../../development/java-backend.md).
+
 ## Phase 0 — locked (discovery)
 
 Allowed APIs: HMAC formula in

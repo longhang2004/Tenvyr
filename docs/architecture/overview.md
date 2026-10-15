@@ -4,8 +4,11 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-15
+last_verified: 2026-10-16
 sources:
+  - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
+  - backend/gateway/src/main/java/io/tenvyr/gateway/Gateway.java
+  - backend/executor-host/src/main
   - services/gateway/src/app.controller.ts
   - services/gateway/src/socket.gateway.ts
   - services/orchestrator/src/services/engine.service.ts
@@ -20,6 +23,11 @@ sources:
 ---
 
 # System Architecture Overview
+
+Default backend services run Java 17; Go provides native process session and
+signal operations. The retained Node implementation supplies compatibility
+references. Public Worker SDKs and frontend keep their existing languages.
+See [backend development](../development/java-backend.md).
 
 Tenvyr is a framework-neutral execution control plane. The Orchestrator owns
 pipeline state and dispatches versioned agent invocations through a

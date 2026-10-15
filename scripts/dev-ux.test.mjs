@@ -363,8 +363,8 @@ const waitUntil = async (predicate, timeoutMs, label) => {
 /** Long-running fake service: writes its pid, never serves health. */
 const lingerChild = (markerFile, pidFile) =>
   `const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(markerFile)}, "up");
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+fs.writeFileSync(${JSON.stringify(markerFile)}, "up");
 setInterval(() => {}, 1000);`;
 
 /** Fake service with a health server that stays up. */

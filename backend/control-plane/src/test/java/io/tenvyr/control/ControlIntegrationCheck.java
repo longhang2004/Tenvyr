@@ -80,6 +80,27 @@ public final class ControlIntegrationCheck {
                     check(calls.get()==2,"restart does not reexecute accepted work");
                     worker.stop().join(); // Drain final events before comparing point-in-time captures.
                     assertOriginalReadModels(fixture,id,Path.of(args.length>0?args[0]:"."));
+                    Main closingControl=control;
+                    var closer=java.util.concurrent.Executors.newSingleThreadExecutor();
+                    java.util.concurrent.atomic.AtomicReference<Future<?>> closed=new java.util.concurrent.atomic.AtomicReference<>();
+                    long attemptsTable=fixture.db.one("SELECT 'step_attempts'::regclass::oid AS id").path("id").asLong();
+                    try{
+                        fixture.db.transaction(tx->{
+                            tx.execute("LOCK TABLE step_attempts IN ACCESS EXCLUSIVE MODE");
+                            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+                            while(!fixture.db.exists("SELECT 1 FROM pg_locks WHERE relation=?::oid AND mode='AccessShareLock' AND NOT granted",attemptsTable)&&System.nanoTime()<deadline)Thread.sleep(25);
+                            check(fixture.db.exists("SELECT 1 FROM pg_locks WHERE relation=?::oid AND mode='AccessShareLock' AND NOT granted",attemptsTable),"real recovery query is blocked before shutdown");
+                            CountDownLatch started=new CountDownLatch(1);
+                            closed.set(closer.submit(()->{started.countDown();closingControl.close();return null;}));
+                            check(started.await(2,TimeUnit.SECONDS),"shutdown task started");
+                            Thread.sleep(1500);
+                            check(!closed.get().isDone(),"shutdown waits for the active database recovery transaction");
+                            return null;
+                        });
+                        closed.get().get(10,TimeUnit.SECONDS);
+                        check(true,"shutdown drains recovery before schema teardown");
+                    }finally{closer.shutdownNow();}
+
                 } finally {released.complete(Json.object());control.close();}
             }
         }
