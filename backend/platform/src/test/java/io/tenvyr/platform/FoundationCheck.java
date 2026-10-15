@@ -28,7 +28,10 @@ public final class FoundationCheck {
         check(Approval.approvalExpiry(Instant.EPOCH,1).equals(Instant.ofEpochMilli(1)),"approval expiry");rejects(()->Approval.assertApprovalTransition("APPROVED","DENIED"),"approval terminal transition");
         check(Workspace.parseAcceptanceEvidence(Json.object("extra",1))==null,"acceptance evidence actual source ignores extra keys");check(WorkspaceExecution.executionWorkspaceIdentityFromRow(Json.object("state","FAILED","executionPath","/tmp"))==null,"workspace failed identity");rejects(()->WorkspaceExecution.parseExecutionWorkspaceIdentity(Json.object("schemaVersion",1,"path","/tmp","mode","shared","workspaceExecutionId","x","sourceWorkspaceId","x","extra",1)),"workspace closed identity");
         check(TransportIdentity.boundedKafkaScope("x".repeat(256)).equals("kafka-sha256:"+Json.sha256("x".repeat(256))),"bounded transport hashing");check(Entities.tables().size()==36,"entity inventory");check(Migrator.ledger().size()==27,"migration inventory");
-        if(args.length>1){JsonNode vectors=Json.parse(Files.readString(Path.of(args[1])));int failures=0;for(JsonNode vector:vectors){String actual=Json.canonical(vector.get("value")),expected=vector.path("canonical").asText();if(!actual.equals(expected)){failures++;if(failures<=12)System.err.println("Canonical mismatch "+vector.path("name").asText()+": expected "+expected+" actual "+actual);}else checks++;}check(failures==0,"canonical Node golden failures: "+failures);}
+        Path goldens=args.length>1?Path.of(args[1]):root.resolve("backend/platform/src/test/resources/node-canonical-goldens.json");
+        JsonNode vectors=Json.parse(Files.readString(goldens));int failures=0;
+        for(JsonNode vector:vectors){String actual=Json.canonical(vector.get("value")),expected=vector.path("canonical").asText();if(!actual.equals(expected)||!Json.hash(vector.get("value")).equals(vector.path("hash").asText())){failures++;if(failures<=12)System.err.println("Canonical/hash mismatch "+vector.path("name").asText()+": expected "+expected+" actual "+actual);}else checks++;}
+        check(failures==0,"canonical Node golden failures: "+failures);
         System.out.println("FoundationCheck: "+checks+" checks passed");
     }
 }

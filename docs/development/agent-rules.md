@@ -77,6 +77,22 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 
 ## Registered Mechanics
 
+### Java and Go backend
+
+- The Java control-plane composition root owns adapters, recovery, provider
+  sessions and workspace reconciliation. The Go helper owns native session and
+  process-group operations; no Node backend is launched behind Java wrappers.
+- Run `scripts/backend-build.sh` for a clean reactor, build the Go launcher, and
+  execute `scripts/backend-checks.sh`. Integration mode requires real disposable
+  PostgreSQL/Kafka, all four public SDKs, Socket.IO v4, native processes and
+  Docker maintenance. Missing infrastructure or check classes must fail.
+- Keep ICU/canonical bytes, the TypeORM ledger, UTC timestamp behavior and
+  capsule Date/hash compatibility pinned to executable comparison checks.
+  Default services run Java; keep the PR draft until compatibility/cutover
+  gates pass and record the exact evidence in the implementation ledger.
+- See [Java backend development](java-backend.md) for prerequisites and the
+  distinction between Node reference test tooling and Java production services.
+
 ### Event-Driven Pipeline Runtime
 
 - **Purpose:** The orchestrator persists pipeline definitions/executions in PostgreSQL, dispatches step tasks to Kafka topics, consumes agent result topics, and pushes execution updates to the Gateway webhook for Socket.IO broadcast.

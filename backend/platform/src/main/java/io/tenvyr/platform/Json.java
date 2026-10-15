@@ -5,13 +5,15 @@ import com.fasterxml.jackson.databind.node.*;
 import java.math.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
-import java.text.Collator;
+import com.ibm.icu.text.Collator;
+import com.ibm.icu.util.ULocale;
 import java.util.*;
 
 /** The one JSON representation used at transport, domain and persistence boundaries. */
 public final class Json {
     public static final ObjectMapper MAPPER = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-    private static final ThreadLocal<Collator> COLLATOR=ThreadLocal.withInitial(()->{Collator c=Collator.getInstance(Locale.US);c.setStrength(Collator.TERTIARY);c.setDecomposition(Collator.CANONICAL_DECOMPOSITION);return c;});
+    // Persisted v1 identities use Node's en-US ICU 78.2 collation, never the host JDK locale data.
+    private static final ThreadLocal<Collator> COLLATOR=ThreadLocal.withInitial(()->{Collator c=Collator.getInstance(ULocale.US);c.setStrength(Collator.TERTIARY);c.setDecomposition(Collator.CANONICAL_DECOMPOSITION);return c;});
     private Json() {}
     public static JsonNode parse(String text) {
         try { JsonNode out=MAPPER.readTree(text);if(out==null||out.isMissingNode())throw new IllegalArgumentException("JSON text is empty");return out; } catch (Exception e) { throw new IllegalArgumentException("Invalid JSON", e); }

@@ -26,3 +26,6 @@ add_test(NAME hmac COMMAND test_hmac)
 add_executable(test_worker tests/test_worker.cpp)
 target_link_libraries(test_worker PRIVATE tenvyr_worker)
 add_test(NAME worker COMMAND test_worker)
+
+add_executable(orchestrator_loopback_worker tests/orchestrator_loopback_worker.cpp)
+target_link_libraries(orchestrator_loopback_worker PRIVATE tenvyr_worker)

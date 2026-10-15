@@ -8,10 +8,11 @@ TENVYR_CHECK_COUNT=0
 run_check() {
   TENVYR_CHECK_MODULE=$1
   TENVYR_CHECK_CLASS=$2
+  shift 2
   TENVYR_CHECK_PATH=$(echo "$TENVYR_CHECK_CLASS" | tr . /)
   test -f "backend/$TENVYR_CHECK_MODULE/target/test-classes/$TENVYR_CHECK_PATH.class" || { echo "Required check missing: $TENVYR_CHECK_CLASS. Run scripts/backend-build.sh." >&2; exit 1; }
   test -d "backend/$TENVYR_CHECK_MODULE/target/dependency" || { echo "Runtime dependencies missing: $TENVYR_CHECK_MODULE" >&2; exit 1; }
-  "${TENVYR_JAVA_EXECUTABLE:-java}" -ea -cp "backend/$TENVYR_CHECK_MODULE/target/test-classes:backend/$TENVYR_CHECK_MODULE/target/classes:backend/$TENVYR_CHECK_MODULE/target/dependency/*" "$TENVYR_CHECK_CLASS" "$TENVYR_SCRIPT_ROOT"
+  "${TENVYR_JAVA_EXECUTABLE:-java}" -ea -cp "backend/$TENVYR_CHECK_MODULE/target/test-classes:backend/$TENVYR_CHECK_MODULE/target/classes:backend/$TENVYR_CHECK_MODULE/target/dependency/*:backend/worker/target/classes:backend/agents/target/classes:backend/executor-host/target/classes" "$TENVYR_CHECK_CLASS" "$TENVYR_SCRIPT_ROOT" "$@"
   TENVYR_CHECK_COUNT=$((TENVYR_CHECK_COUNT + 1))
 }
 run_check platform io.tenvyr.platform.FoundationCheck
@@ -25,9 +26,16 @@ run_check executor-host io.tenvyr.executorhost.ExecutorHostCheck
 run_check operations io.tenvyr.operations.OperationsCheck
 if [ "$TENVYR_CHECK_MODE" = --integration ]; then
   run_check platform io.tenvyr.platform.FoundationIntegrationCheck
-  run_check control-plane io.tenvyr.control.engine.EngineIntegrationCheck
+  node scripts/backend-canonical-check.mjs
+  node scripts/backend-database-check.mjs
+  run_check control-plane io.tenvyr.control.engine.EngineIntegrationCheck --integration
   run_check control-plane io.tenvyr.control.ControlIntegrationCheck
+  run_check control-plane io.tenvyr.control.ControlKafkaIntegrationCheck
+  run_check control-plane io.tenvyr.control.RuntimeIntegrationCheck
+  UNCONFIGURED_PARENT_SECRET=must-not-inherit run_check control-plane io.tenvyr.control.NativeRuntimeIntegrationCheck
+  run_check control-plane io.tenvyr.control.WorkerSdkIntegrationCheck
   run_check gateway io.tenvyr.gateway.GatewayCheck
+  node scripts/backend-socketio-check.mjs
   run_check agents io.tenvyr.agents.AgentIntegrationCheck
   run_check worker io.tenvyr.worker.WorkerIntegrationCheck
   run_check executor-host io.tenvyr.executorhost.ExecutorHostIntegrationCheck

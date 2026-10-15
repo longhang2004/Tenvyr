@@ -19,14 +19,14 @@ public final class Db implements AutoCloseable {
     private static String env(String k,String d) { return System.getenv().getOrDefault(k,d); }
     public <T> T transaction(Work<T> work) {
         if(pinned!=null) { try { return work.run(this); } catch(RuntimeException e) {throw e;} catch(Exception e) {throw new Failure(e);} }
-        try(Connection c=DriverManager.getConnection(url,user,password)) {
+        try(Connection c=openConnection()) {
             c.setAutoCommit(false); try { T result=work.run(new Db(url,user,password,c)); c.commit(); return result; }
             catch(Exception e) { try {c.rollback();} catch(SQLException rollback) {e.addSuppressed(rollback);} if(e instanceof RuntimeException r) throw r; throw new Failure(e); }
         } catch(SQLException e) {throw new Failure(e);}
     }
     public List<ObjectNode> query(String sql,Object... parameters) { return withConnection(c->{try(PreparedStatement p=prepare(c,sql,parameters);ResultSet r=p.executeQuery()) {List<ObjectNode> rows=new ArrayList<>();while(r.next()) rows.add(row(r));return rows;}}); }
     public ObjectNode one(String sql,Object... parameters) { List<ObjectNode> rows=query(sql,parameters); return rows.isEmpty()?null:rows.get(0); }
-    public int execute(String sql,Object... parameters) { return withConnection(c->{try(PreparedStatement p=prepare(c,sql,parameters)){return p.executeUpdate();}}); }
+    public int execute(String sql,Object... parameters) { return withConnection(c->{try(PreparedStatement p=prepare(c,sql,parameters)){p.execute();return p.getUpdateCount();}}); }
     public boolean exists(String sql,Object... parameters) {return one(sql,parameters)!=null;}
     public static String identifier(String name) { if(!name.matches("[A-Za-z_][A-Za-z0-9_]*")) throw new IllegalArgumentException("Unsafe SQL identifier"); return "\""+name+"\""; }
     public ObjectNode insert(String table,ObjectNode fields) {
@@ -37,16 +37,18 @@ public final class Db implements AutoCloseable {
         List<String> keys=Json.keys(fields); List<Object> values=new ArrayList<>();keys.forEach(k->values.add(fieldValue(table,k,fields.get(k))));values.add(UUID.fromString(id));
         return one("UPDATE "+identifier(table)+" SET "+String.join(",",keys.stream().map(k->identifier(k)+"=?").toList())+" WHERE \"id\"=? RETURNING *",values.toArray());
     }
-    private <T> T withConnection(SqlWork<T> work) {try {if(pinned!=null)return work.run(pinned);try(Connection c=DriverManager.getConnection(url,user,password)){return work.run(c);}}catch(SQLException e){throw new Failure(e);}}
+    private Connection openConnection()throws SQLException {Connection c=DriverManager.getConnection(url,user,password);try(var statement=c.createStatement()){statement.execute("SET TIME ZONE 'UTC'");return c;}catch(SQLException e){c.close();throw e;}}
+    private <T> T withConnection(SqlWork<T> work) {try {if(pinned!=null)return work.run(pinned);try(Connection c=openConnection()){return work.run(c);}}catch(SQLException e){throw new Failure(e);}}
     @FunctionalInterface private interface SqlWork<T>{T run(Connection c)throws SQLException;}
     private static Object fieldValue(String table,String key,JsonNode value) {JsonNode column=Entities.column(table,key);if(column!=null&&Set.of("json","jsonb").contains(Json.text(column,"type"))&&(value!=null&&!value.isNull()||!Json.bool(column,"nullable",false))) {try{PGobject json=new PGobject();json.setType(Json.text(column,"type"));json.setValue(Json.stringify(value));return json;}catch(SQLException e){throw new Failure(e);}}return value;}
     private static PreparedStatement prepare(Connection c,String sql,Object[] params)throws SQLException {
         PreparedStatement p=c.prepareStatement(sql);
         for(int i=0;i<params.length;i++) {Object v=params[i]; if(v instanceof JsonNode n) {
             if(n.isNull()) v=null; else if(n.isTextual()) v=n.asText(); else if(n.isBoolean())v=n.asBoolean(); else if(n.isIntegralNumber())v=n.longValue();else if(n.isNumber())v=n.doubleValue();else {PGobject json=new PGobject();json.setType("jsonb");json.setValue(Json.stringify(n));v=json;}
-        } if(v instanceof Instant instant)v=Timestamp.from(instant);if(v instanceof String)p.setObject(i+1,v,Types.OTHER);else p.setObject(i+1,v); } return p;
+        } if(v instanceof Instant instant)p.setTimestamp(i+1,Timestamp.from(instant),utc());else if(v instanceof String)p.setObject(i+1,v,Types.OTHER);else p.setObject(i+1,v); } return p;
     }
-    private static ObjectNode row(ResultSet r)throws SQLException {ObjectNode out=Json.object();ResultSetMetaData m=r.getMetaData();for(int i=1;i<=m.getColumnCount();i++){Object v=r.getObject(i);if(v instanceof PGobject p && ("json".equals(p.getType())||"jsonb".equals(p.getType())))out.set(m.getColumnLabel(i),Json.parse(p.getValue()));else if(v instanceof Timestamp t)out.put(m.getColumnLabel(i),t.toInstant().toString());else if(v instanceof java.sql.Array a)out.set(m.getColumnLabel(i),Json.value(a.getArray()));else out.set(m.getColumnLabel(i),Json.value(v instanceof UUID?v.toString():v));}return out;}
+    private static Calendar utc(){return Calendar.getInstance(TimeZone.getTimeZone("UTC"),Locale.ROOT);}
+    private static ObjectNode row(ResultSet r)throws SQLException {ObjectNode out=Json.object();ResultSetMetaData m=r.getMetaData();for(int i=1;i<=m.getColumnCount();i++){Object v=r.getObject(i);if(v instanceof PGobject p && ("json".equals(p.getType())||"jsonb".equals(p.getType())))out.set(m.getColumnLabel(i),Json.parse(p.getValue()));else if(v instanceof Timestamp)out.put(m.getColumnLabel(i),Protocol.jsInstant(r.getTimestamp(i,utc()).toInstant()));else if(v instanceof java.sql.Array a)out.set(m.getColumnLabel(i),Json.value(a.getArray()));else out.set(m.getColumnLabel(i),Json.value(v instanceof UUID?v.toString():v));}return out;}
     public static final class Failure extends RuntimeException { public Failure(Throwable cause){super(cause);} public String sqlState(){Throwable e=getCause();return e instanceof SQLException s?s.getSQLState():null;} }
     @Override public void close() {}
 }

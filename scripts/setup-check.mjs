@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import assert from "node:assert/strict";
 
 const checks = [];
 
@@ -28,7 +29,23 @@ function major(value) {
   return version ? Number(version.split(".")[0]) : undefined;
 }
 
-function checkTool(name, command, args, minimumMajor, action) {
+function versionAtLeast(value, minimumMajor, minimumMinor = 0) {
+  const version = firstVersion(value);
+  if (!version) return false;
+  const [major, minor] = version.split(".").map(Number);
+  return major > minimumMajor || (major === minimumMajor && minor >= minimumMinor);
+}
+
+if (process.argv.includes("--self-test")) {
+  assert.equal(versionAtLeast("go version go1.22.9 linux/amd64", 1, 23), false);
+  assert.equal(versionAtLeast("go version go1.23.0 darwin/arm64", 1, 23), true);
+  assert.equal(versionAtLeast("go version go1.26.3 darwin/arm64", 1, 23), true);
+  assert.equal(versionAtLeast("unknown", 17), false);
+  console.log("Toolchain version checks passed");
+  process.exit(0);
+}
+
+function checkTool(name, command, args, minimumMajor, action, minimumMinor = 0) {
   const result = run(command, args);
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
   if (result.error || result.status !== 0) {
@@ -36,12 +53,11 @@ function checkTool(name, command, args, minimumMajor, action) {
     return;
   }
   const version = firstVersion(output) ?? output.split("\n")[0];
-  const foundMajor = major(output);
-  if (foundMajor === undefined || foundMajor < minimumMajor) {
+  if (!versionAtLeast(output, minimumMajor, minimumMinor)) {
     record(
       "FAIL",
       name,
-      `found ${version || "unknown version"}; need ${minimumMajor}+`,
+      `found ${version || "unknown version"}; need ${minimumMajor}${minimumMinor ? `.${minimumMinor}` : ""}+`,
       action,
     );
     return;
@@ -232,6 +248,7 @@ if (python) {
 }
 checkTool("Java", "java", ["-version"], 17, "Install JDK 17 or newer.");
 checkTool("Maven", "mvn", ["--version"], 3, "Install Apache Maven 3 or newer.");
+checkTool("Go", "go", ["version"], 1, "Install Go 1.23 or newer.", 23);
 checkTool(
   "Docker",
   "docker",

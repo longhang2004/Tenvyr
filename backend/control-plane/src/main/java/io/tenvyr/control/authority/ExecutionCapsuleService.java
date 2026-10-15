@@ -41,10 +41,10 @@ public final class ExecutionCapsuleService {
         ObjectNode outbox=Json.object();for(ObjectNode row:t.query("SELECT o.status,COUNT(*) n FROM dispatch_outbox o JOIN step_attempts a ON a.id=o.\"stepAttemptId\" WHERE a.\"executionId\"=?::uuid GROUP BY o.status",executionId))outbox.set(Json.text(row,"status"),row.get("n"));
         ObjectNode account=t.one("SELECT * FROM budget_accounts WHERE \"scopeType\"='execution' AND \"scopeId\"=?",executionId);
         ObjectNode snapshot=t.one("SELECT version,hash FROM policy_snapshots ORDER BY \"createdAt\" DESC LIMIT 1");
-        int decisionCount=count(t,"SELECT COUNT(*) n FROM policy_decisions WHERE \"executionId\"=?::uuid",executionId);
-        List<ObjectNode> decisions=t.query("SELECT id,\"actionType\",effect FROM policy_decisions WHERE \"executionId\"=?::uuid ORDER BY \"createdAt\",id LIMIT 20",executionId);
+        int decisionCount=count(t,"SELECT COUNT(*) n FROM policy_decisions WHERE \"executionId\"=?",executionId);
+        List<ObjectNode> decisions=t.query("SELECT id,\"actionType\",effect FROM policy_decisions WHERE \"executionId\"=? ORDER BY \"createdAt\",id LIMIT 20",executionId);
         if(decisionCount>decisions.size())warnings.add("Policy decisions truncated to "+decisions.size()+" of "+decisionCount);
-        int pending=0,decided=0;for(ObjectNode row:t.query("SELECT status,COUNT(*) n FROM approval_requests WHERE \"executionId\"=?::uuid GROUP BY status",executionId)){if("PENDING".equals(Json.text(row,"status")))pending=Json.integer(row,"n",0);else decided+=Json.integer(row,"n",0);}
+        int pending=0,decided=0;for(ObjectNode row:t.query("SELECT status,COUNT(*) n FROM approval_requests WHERE \"executionId\"=? GROUP BY status",executionId)){if("PENDING".equals(Json.text(row,"status")))pending=Json.integer(row,"n",0);else decided+=Json.integer(row,"n",0);}
         ObjectNode graph=delegation.projection(executionId,100,c);
         if(Json.bool(graph,"supervisedTruncated",false))warnings.add("Supervised delegation edges may be truncated");
         if(Json.bool(graph,"observedTruncated",false))warnings.add("Observed delegation edges may be truncated");
@@ -67,7 +67,11 @@ public final class ExecutionCapsuleService {
     }
 
     /** Global policy display and capture time cannot change a terminal execution's identity. */
-    public static String contentHash(ObjectNode capsule){ObjectNode stable=capsule.deepCopy();stable.remove(List.of("capturedAt","contentHash"));ObjectNode policy=(ObjectNode)stable.path("header").path("policy");policy.putNull("snapshotVersion");policy.putNull("snapshotHash");return Json.hash(stable);}
+    public static String contentHash(ObjectNode capsule){ObjectNode stable=capsule.deepCopy();stable.remove(List.of("capturedAt","contentHash"));ObjectNode policy=(ObjectNode)stable.path("header").path("policy");policy.putNull("snapshotVersion");policy.putNull("snapshotHash");
+        // The retained canonicalJson walks Date's enumerable keys ({}), before JSON.stringify's ISO conversion.
+        // Preserve that persisted capsule identity while keeping ISO dates on the wire.
+        for(JsonNode attempt:stable.path("attempts"))if(attempt.hasNonNull("terminalAt"))((ObjectNode)attempt).set("terminalAt",Json.object());
+        return Json.hash(stable);}
     public ObjectNode createExport(String id,String exporter,String note){ObjectNode capsule=build(id);return db.transaction(t->{if(t.one("SELECT id FROM executions WHERE id=?::uuid FOR UPDATE",id)==null)throw new IllegalArgumentException("Execution does not exist");ObjectNode existing=t.one("SELECT * FROM execution_exports WHERE \"executionId\"=?::uuid AND \"capsuleHash\"=?",id,capsule.get("contentHash"));return existing!=null?existing:t.insert("execution_exports",Json.object("executionId",id,"capsuleHash",capsule.get("contentHash"),"exporter",exporter==null?"operator":exporter,"note",note));});}
     public ObjectNode replay(String id,String requester,String note){ObjectNode capsule=build(id);return db.transaction(t->replayWithManager(t.connection(),id,capsule,requester,note));}
     public ObjectNode replayWithManager(Connection c,String id,ObjectNode capsule,String requester,String note){Db t=Db.on(c);ObjectNode resolved=capsule==null?buildWithManager(c,id):capsule;if(!id.equals(Json.text(resolved,"executionId")))throw new IllegalArgumentException("Capsule belongs to another execution");if(!"terminal".equals(Json.text(resolved,"pointInTime")))throw new IllegalArgumentException("Execution "+id+" is "+Json.text(resolved,"sourceStatus")+"; replays require a terminal source");if(!resolved.path("header").hasNonNull("activeRevisionHash"))throw new IllegalArgumentException("Source capsule has no active revision hash");ObjectNode source=t.one("SELECT * FROM executions WHERE id=?::uuid FOR UPDATE",id);if(source==null)throw new IllegalArgumentException("Execution "+id+" is gone");ObjectNode existing=t.one("SELECT * FROM execution_replays WHERE \"sourceExecutionId\"=?::uuid AND \"sourceCapsuleHash\"=?",id,resolved.get("contentHash"));if(existing!=null)return replayResult(existing,resolved);

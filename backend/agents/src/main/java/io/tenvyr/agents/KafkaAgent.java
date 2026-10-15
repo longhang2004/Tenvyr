@@ -23,6 +23,7 @@ public final class KafkaAgent implements AutoCloseable {
     private volatile boolean running;
     private boolean started,closed;
     private Thread thread;
+    private final CompletableFuture<Void> ready=new CompletableFuture<>();
     public KafkaAgent(AgentProcessor processor,String brokers) {
         this.processor=processor;String agent=processor.agent();
         Properties properties=new Properties();properties.put("bootstrap.servers",brokers);properties.put("client.id","agent-"+agent);
@@ -39,11 +40,13 @@ public final class KafkaAgent implements AutoCloseable {
     public synchronized void start() {
         if(started||closed)throw new IllegalStateException("Agent lifecycle already started or closed");
         producer.partitionsFor(resultTopic);running=true;started=true;thread=new Thread(this::consume,"kafka-"+processor.agent());thread.start();
+        try{ready.get(30,TimeUnit.SECONDS);}catch(Exception failure){close();if(failure instanceof InterruptedException)Thread.currentThread().interrupt();throw new IllegalStateException("Kafka agent did not obtain a task assignment",failure);}
     }
     private void consume() {
         try {
             while(running) {
                 ConsumerRecords<String,String> records=consumer.poll(Duration.ofSeconds(1));
+                if(!consumer.assignment().isEmpty())ready.complete(null);
                 for(ConsumerRecord<String,String> record:records) {
                     if(!running)break;
                     TopicPartition partition=new TopicPartition(record.topic(),record.partition());
@@ -55,7 +58,7 @@ public final class KafkaAgent implements AutoCloseable {
                     }catch(Exception e) {consumer.seek(partition,record.offset());System.err.println("Agent task delivery failed; retaining offset for redelivery: "+AgentProcessor.message(e));break;}
                 }
             }
-        }catch(WakeupException e) {if(running)throw e;}finally {consumer.close();}
+        }catch(WakeupException e) {if(running){ready.completeExceptionally(e);throw e;}}catch(RuntimeException failure){ready.completeExceptionally(failure);throw failure;}finally {ready.completeExceptionally(new IllegalStateException("Kafka consumer stopped before assignment"));consumer.close();}
     }
     public static void deliver(AgentProcessor processor,String bytes,long timestamp,String messageKey,Publisher publisher)throws Exception {
         if(bytes==null||bytes.isEmpty())return;

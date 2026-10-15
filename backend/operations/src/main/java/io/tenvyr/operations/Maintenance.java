@@ -19,7 +19,22 @@ public final class Maintenance implements AutoCloseable {
     private final Path directory,lock,journal;private final String token=UUID.randomUUID().toString();private boolean owned;
     public Maintenance(Path directory){this.directory=directory.toAbsolutePath().normalize();lock=this.directory.resolve(".maintenance.lock");journal=this.directory.resolve(".recovery-journal.json");}
     public Path journalPath(){return journal;}
-    public void acquire()throws IOException {Files.createDirectories(directory);ObjectNode owner=Json.object("pid",ProcessHandle.current().pid(),"startedAt",Instant.now().toString(),"token",token);try(FileChannel file=FileChannel.open(lock,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE)){ByteBuffer bytes=ByteBuffer.wrap(Json.stringify(owner).getBytes(StandardCharsets.UTF_8));while(bytes.hasRemaining())file.write(bytes);file.force(true);owned=true;syncDirectory(directory);}catch(FileAlreadyExistsException contention){ObjectNode previous=owner();String reason=previous==null?"maintenance lock owner is unreadable":alive(previous)?"maintenance operation already active":"stale-maintenance-state: owner is dead, external maintenance children may still be running";throw new IllegalStateException(reason+"; inspect docker/pg_dump/pg_restore/psql descendants, then explicitly run maintenance --clear-stale-lock and restore --reconcile");}}
+    public void acquire()throws IOException {
+        Files.createDirectories(directory);
+        ObjectNode owner=Json.object("pid",ProcessHandle.current().pid(),"startedAt",Instant.now().toString(),"token",token);
+        Path staged=directory.resolve(".maintenance-owner-"+token);
+        try {
+            try(FileChannel file=FileChannel.open(staged,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE)){
+                ByteBuffer bytes=ByteBuffer.wrap(Json.stringify(owner).getBytes(StandardCharsets.UTF_8));
+                while(bytes.hasRemaining())file.write(bytes);
+                file.force(true);
+            }
+            // Publish a complete owner atomically; a competing process must never observe an empty lock.
+            try {Files.createLink(lock,staged);owned=true;syncDirectory(directory);}
+            catch(FileAlreadyExistsException contention){ObjectNode previous=owner();String reason=previous==null?"maintenance lock owner is unreadable":alive(previous)?"maintenance operation already active":"stale-maintenance-state: owner is dead, external maintenance children may still be running";throw new IllegalStateException(reason+"; inspect docker/pg_dump/pg_restore/psql descendants, then explicitly run maintenance --clear-stale-lock and restore --reconcile");}
+        } finally {Files.deleteIfExists(staged);}
+    }
+
     private ObjectNode owner(){try{return Json.requireObject(Json.parse(Files.readString(lock)),"Maintenance owner");}catch(Exception e){return null;}}
     private static boolean alive(ObjectNode owner){long pid=owner.path("pid").asLong(-1);if(pid<1)return true;try{return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);}catch(SecurityException inaccessible){return true;}}
     public boolean clearStale()throws IOException {if(!Files.exists(lock))return false;ObjectNode recorded=owner();if(recorded==null||alive(recorded))throw new IllegalStateException("refusing to clear unreadable or live owner's maintenance lock");Files.delete(lock);syncDirectory(directory);return true;}

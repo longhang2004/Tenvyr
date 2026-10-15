@@ -3,16 +3,19 @@ title: "Self-hosted deployment runbooks"
 status: current
 audience:
   - operator
-last_verified: 2026-08-12
+last_verified: 2026-10-15
 sources:
   - docker-compose.self-hosted.yml
-  - scripts/self-hosted/backup.mjs
-  - scripts/self-hosted/restore.mjs
+  - backend/operations/src/main/java/io/tenvyr/operations/Operations.java
+  - backend/operations/src/main/java/io/tenvyr/operations/Maintenance.java
+  - scripts/java-backend.sh
 ---
 
 # Self-hosted deployment runbooks (M11, single owner)
 
 All commands run on the owner-controlled host from the repository root.
+Run `pnpm backend:build` first with JDK 17+, Maven and Go 1.23+;
+`self-hosted:*` maintenance commands execute the Java implementation.
 
 ## Deployment identity (one documented meaning per key)
 
@@ -73,15 +76,15 @@ both values in `deploy.env` only after success.
    "maintenance operation already active"). A crashed operation releases
    the lock automatically (dead-owner-PID stale reclaim).
 1. `pnpm self-hosted:backup` → writes `backups/tenvyr-<version>-<ts>.dump`
-   + `.sha256` + `manifest.json`. The backup is VERIFIED before PASS: the
-   dump is restored into an isolated `tenvyr_backup_verify` database and
-   ALL manifest anchors (migration ledger fingerprint, table
-   inventory/count fingerprint over the complete authoritative 33-table
-   set, plan revision hash-ledger fingerprint, execution provenance
-   anchor, representative terminal Capsule/export anchor) are computed
-   FROM THE RESTORED DUMP — never from the live database. The manifest is
-   the RESTORE AUTHORITY; `PASS` means the artifact is already proven
-   restorable. A failed verification never leaves a labeled backup.
+   - `.sha256` + `manifest.json`. The backup is VERIFIED before PASS: the
+     dump is restored into an isolated `tenvyr_backup_verify` database and
+     ALL manifest anchors (migration ledger fingerprint, table
+     inventory/count fingerprint over the complete authoritative 33-table
+     set, plan revision hash-ledger fingerprint, execution provenance
+     anchor, representative terminal Capsule/export anchor) are computed
+     FROM THE RESTORED DUMP — never from the live database. The manifest is
+     the RESTORE AUTHORITY; `PASS` means the artifact is already proven
+     restorable. A failed verification never leaves a labeled backup.
 2. Restore DRILL (verification only — the ACTIVE authority is never
    touched): `pnpm self-hosted:restore backups/tenvyr-...dump --drill`
    — checksum verify, fail-closed manifest contract (checksum triple

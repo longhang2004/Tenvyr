@@ -60,7 +60,7 @@ public final class GatewayRoutes {
     }
     public JsonNode forward(String method,String path,JsonNode body) {
         try {
-            HttpRequest.Builder builder=HttpRequest.newBuilder(URI.create(orchestrator+path)).timeout(Duration.ofSeconds(30));
+            HttpRequest.Builder builder=HttpRequest.newBuilder(URI.create((orchestrator+path).replace(" ","%20"))).timeout(Duration.ofSeconds(30));
             if(body!=null)builder.header("Content-Type","application/json");
             HttpResponse<String> response=client.send(builder.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(Json.stringify(body))).build(),HttpResponse.BodyHandlers.ofString());
             JsonNode data=Json.parse(response.body());

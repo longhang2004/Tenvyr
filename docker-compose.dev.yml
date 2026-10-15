@@ -1,53 +1,37 @@
-version: '3.8'
-
+# Compose Watch rebuilds Java services on source/resource changes; frontend retains HMR.
 services:
-  # In development, we mount volumes for live code reloading
   gateway:
-    environment:
-      - NODE_ENV=development
-      - GATEWAY_HOST=0.0.0.0
-    volumes:
-      - ./services/gateway:/usr/src/app
-      - /usr/src/app/node_modules
-    build:
-      context: .
-      dockerfile: services/gateway/Dockerfile
-      target: development
-
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend
+          ignore: ["**/target/", "**/native/tenvyr-process-launcher"]
+        - action: rebuild
+          path: ./skills
   orchestrator:
-    environment:
-      - NODE_ENV=development
-      - ORCHESTRATOR_HOST=0.0.0.0
-    volumes:
-      - ./services/orchestrator:/usr/src/app
-      - /usr/src/app/node_modules
-    build:
-      context: .
-      dockerfile: services/orchestrator/Dockerfile
-      target: development
-
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend
+          ignore: ["**/target/", "**/native/tenvyr-process-launcher"]
+        - action: rebuild
+          path: ./skills
   agent-code-reviewer:
-    environment:
-      - NODE_ENV=development
-    volumes:
-      - ./services/agent-code-reviewer:/usr/src/app
-      - /usr/src/app/node_modules
-    build:
-      context: .
-      dockerfile: services/agent-code-reviewer/Dockerfile
-      target: development
-
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend
+          ignore: ["**/target/", "**/native/tenvyr-process-launcher"]
+        - action: rebuild
+          path: ./skills
   agent-observability:
-    environment:
-      - NODE_ENV=development
-    volumes:
-      - ./services/agent-observability:/usr/src/app
-      - /usr/src/app/node_modules
-    build:
-      context: .
-      dockerfile: services/agent-observability/Dockerfile
-      target: development
-
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend
+          ignore: ["**/target/", "**/native/tenvyr-process-launcher"]
+        - action: rebuild
+          path: ./skills
   frontend:
     environment:
       - NODE_ENV=development

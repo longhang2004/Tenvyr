@@ -289,12 +289,15 @@ function startChild(child, io) {
 
 /** Build the child manifest from repo truth. */
 export function buildManifest(env = process.env) {
+  const backend = env.TENVYR_BACKEND ?? "java";
+  if (!["java", "node"].includes(backend)) throw new Error("TENVYR_BACKEND must be java or node");
   const portOf = (service) => Number(env[service.portEnv] ?? service.defaultPort);
   const orchestratorService = DEFAULT_SERVICES.find((s) => s.name === "orchestrator");
   const hostService = DEFAULT_SERVICES.find((s) => s.name === "host");
 
   const orchestratorPort = orchestratorService ? portOf(orchestratorService) : 3001;
   const hostPort = hostService ? portOf(hostService) : 3002;
+  const gatewayPort = portOf(DEFAULT_SERVICES.find((s) => s.name === "gateway"));
 
   const bearerToken =
     env.HTTP_AGENT_BEARER_TOKEN ??
@@ -319,6 +322,8 @@ export function buildManifest(env = process.env) {
 
   const sharedDevEnv = {
     ...env,
+    ORCHESTRATOR_URL: env.ORCHESTRATOR_URL ?? `http://127.0.0.1:${orchestratorPort}`,
+    GATEWAY_URL: env.GATEWAY_URL ?? `http://127.0.0.1:${gatewayPort}`,
     TENVYR_LOG_LEVEL: env.TENVYR_LOG_LEVEL ?? "normal",
     HTTP_AGENT_BEARER_TOKEN: bearerToken,
     EXECUTOR_HOST_BEARER_TOKEN: bearerToken,
@@ -340,7 +345,11 @@ export function buildManifest(env = process.env) {
   };
 
   const services = DEFAULT_SERVICES.map((service) => {
-    const spec = service.name === "host" ? hostServiceSpec(env) ?? service : service;
+    let spec = service.name === "host" ? hostServiceSpec(env) ?? service : service;
+    if (backend === "java" && spec.name !== "workbench" && spec.command !== "cargo") {
+      const modules = { orchestrator: "control-plane", gateway: "gateway", host: "executor-host" };
+      spec = { ...spec, dir: ".", command: "sh", args: [join(ROOT, "scripts/java-backend.sh"), modules[spec.name]] };
+    }
     const port = portOf(spec);
     return {
       ...spec,
@@ -351,12 +360,14 @@ export function buildManifest(env = process.env) {
       // summaries may still display localhost.
       url: `http://127.0.0.1:${port}`,
       command: spec.command ?? "pnpm",
-      args: spec.args ?? ["run", spec.script],
+      args: spec.args ?? (spec.name === "workbench" ? ["exec", "next", "dev", "-p", String(port)] : ["run", spec.script]),
       cwd: join(ROOT, spec.dir),
       env: sharedDevEnv,
     };
   });
-  return { services, infraServices: INFRA_SERVICES, root: ROOT };
+  return { services, infraServices: INFRA_SERVICES, root: ROOT,
+    ...(backend === "java" ? { prepare: { name: "backend-build", label: "Backend build", command: "sh", args: [join(ROOT, "scripts/backend-build.sh")], cwd: ROOT, env: sharedDevEnv } } : {}),
+  };
 }
 
 function composeContainerNames(root) {
@@ -519,6 +530,21 @@ export async function runLauncher(
     if (io.isInteractive) {
       for (const line of bannerText(color)) io.write(line + "\n");
       io.write("\n  Starting development environment...\n\n");
+    }
+
+    if (manifest.prepare) {
+      log("INFO", "Building Java/Go backend...");
+      const build = startChild(manifest.prepare, io);
+      children.push(build);
+      const result = await build.exitPromise;
+      if (abort()) return abortReturn();
+      if (result.code !== 0) {
+        failed = true;
+        log("ERROR", "Backend build failed; fix the reported build error before starting services");
+        await requestShutdown("failure");
+        return { exitCode: exitCodeFor(), ready: false };
+      }
+      children.splice(children.indexOf(build), 1);
     }
 
     /* --- infrastructure --- */

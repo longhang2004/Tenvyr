@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 
 const setupSource = readFileSync("scripts/setup-check.mjs", "utf8");
 const composeSource = readFileSync("docker-compose.yml", "utf8");
@@ -21,6 +22,8 @@ test("setup checker requires the release toolchain versions", () => {
   );
   assert.match(setupSource, /"Java", "java", \["-version"\], 17,/);
   assert.match(setupSource, /"Maven",\s*"mvn",\s*\["--version"\],\s*3,/s);
+  assert.match(setupSource, /"Go", "go", \["version"\], 1, "Install Go 1\.23 or newer\.", 23/);
+  assert.match(execFileSync(process.execPath, ["scripts/setup-check.mjs", "--self-test"], { encoding: "utf8" }), /Toolchain version checks passed/);
 });
 
 test("Docker context excludes secrets, owner artifacts, and local caches", () => {
