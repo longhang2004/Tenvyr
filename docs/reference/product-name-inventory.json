@@ -44,7 +44,9 @@
   {
     "category": "package-identity",
     "value": "agentweave",
-    "locations": ["package.json"],
+    "locations": [
+      "package.json"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -202,7 +204,9 @@
   {
     "category": "source-symbol",
     "value": "AgentWeaveStructuredSuccess",
-    "locations": ["packages/worker/src/execution/execution-context.ts"],
+    "locations": [
+      "packages/worker/src/execution/execution-context.ts"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -222,7 +226,9 @@
   {
     "category": "environment-variable",
     "value": "AGENTWEAVE_BEARER_TOKEN",
-    "locations": ["packages/worker/README.md"],
+    "locations": [
+      "packages/worker/README.md"
+    ],
     "publicCompatibilityImpact": "none",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -310,7 +316,11 @@
       "packages/worker/src/callback/callback-delivery.ts",
       "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
       "services/local-executor-host-rs/src/protocol.rs",
-      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/HttpAgentAdapter.java",
+      "backend/platform/src/main/java/io/tenvyr/platform/Http.java",
+      "backend/worker/src/main/java/io/tenvyr/worker/CallbackDelivery.java",
+      "backend/worker/src/test/java/io/tenvyr/worker/WorkerCheck.java"
     ],
     "publicCompatibilityImpact": "wire-compatible",
     "migrationRecommendation": "preserve",
@@ -325,7 +335,12 @@
       "packages/worker/src/callback/callback-delivery.ts",
       "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
       "services/local-executor-host-rs/src/protocol.rs",
-      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/HttpAgentAdapter.java",
+      "backend/platform/src/main/java/io/tenvyr/platform/Http.java",
+      "backend/worker/src/main/java/io/tenvyr/worker/CallbackDelivery.java",
+      "backend/worker/src/test/java/io/tenvyr/worker/WorkerCheck.java",
+      "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostIntegrationCheck.java"
     ],
     "publicCompatibilityImpact": "wire-compatible",
     "migrationRecommendation": "preserve",
@@ -340,7 +355,12 @@
       "packages/worker/src/callback/callback-delivery.ts",
       "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
       "services/local-executor-host-rs/src/protocol.rs",
-      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/HttpAgentAdapter.java",
+      "backend/platform/src/main/java/io/tenvyr/platform/Http.java",
+      "backend/worker/src/main/java/io/tenvyr/worker/CallbackDelivery.java",
+      "backend/worker/src/test/java/io/tenvyr/worker/WorkerCheck.java",
+      "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostIntegrationCheck.java"
     ],
     "publicCompatibilityImpact": "wire-compatible",
     "migrationRecommendation": "preserve",
@@ -355,7 +375,12 @@
       "packages/worker/src/callback/callback-delivery.ts",
       "sdks/python-worker/src/tenvyr_worker/_callback/delivery.py",
       "services/local-executor-host-rs/src/protocol.rs",
-      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts"
+      "services/orchestrator/src/agent-adapters/http-agent-callback.controller.ts",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/HttpAgentAdapter.java",
+      "backend/platform/src/main/java/io/tenvyr/platform/Http.java",
+      "backend/worker/src/main/java/io/tenvyr/worker/CallbackDelivery.java",
+      "backend/worker/src/test/java/io/tenvyr/worker/WorkerCheck.java",
+      "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostIntegrationCheck.java"
     ],
     "publicCompatibilityImpact": "wire-compatible",
     "migrationRecommendation": "preserve",
@@ -364,7 +389,9 @@
   {
     "category": "wire-protocol",
     "value": "AgentWeave-Worker/1.0.0",
-    "locations": ["packages/worker/src/callback/callback-delivery.ts"],
+    "locations": [
+      "packages/worker/src/callback/callback-delivery.ts"
+    ],
     "publicCompatibilityImpact": "wire-compatible",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -390,7 +417,12 @@
       "docs/architecture/transports/adapter-model.md",
       "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
       "services/agent-code-reviewer/src/kafka.service.ts",
-      "services/agent-observability/src/kafka.service.ts"
+      "services/agent-observability/src/kafka.service.ts",
+      "backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java",
+      "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java",
+      "backend/control-plane/src/test/java/io/tenvyr/control/ControlKafkaIntegrationCheck.java",
+      "docker-compose.java.yml"
     ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
@@ -406,7 +438,12 @@
       "docs/architecture/transports/adapter-model.md",
       "services/orchestrator/src/agent-adapters/kafka-agent.adapter.ts",
       "services/agent-code-reviewer/src/kafka.service.ts",
-      "services/agent-observability/src/kafka.service.ts"
+      "services/agent-observability/src/kafka.service.ts",
+      "backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java",
+      "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java",
+      "backend/control-plane/src/test/java/io/tenvyr/control/ControlKafkaIntegrationCheck.java",
+      "docker-compose.java.yml"
     ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
@@ -415,7 +452,9 @@
   {
     "category": "kafka-identity",
     "value": "agentweave.orchestrator.execution",
-    "locations": ["CLAUDE.md"],
+    "locations": [
+      "CLAUDE.md"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -423,7 +462,9 @@
   {
     "category": "kafka-identity",
     "value": "agentweave.orchestrator.cancel",
-    "locations": ["CLAUDE.md"],
+    "locations": [
+      "CLAUDE.md"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -442,7 +483,10 @@
   {
     "category": "kafka-identity",
     "value": "agentweave-orchestrator",
-    "locations": ["services/orchestrator/src/services/kafka.service.ts"],
+    "locations": [
+      "services/orchestrator/src/services/kafka.service.ts",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -450,7 +494,9 @@
   {
     "category": "kafka-identity",
     "value": "agentweave-dev",
-    "locations": [".env.example"],
+    "locations": [
+      ".env.example"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -458,7 +504,10 @@
   {
     "category": "kafka-identity",
     "value": "agentweave-orchestrator-group",
-    "locations": ["services/orchestrator/src/services/kafka.service.ts"],
+    "locations": [
+      "services/orchestrator/src/services/kafka.service.ts",
+      "backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -466,7 +515,11 @@
   {
     "category": "kafka-identity",
     "value": "agentweave-reviewer-group",
-    "locations": ["services/agent-code-reviewer/src/kafka.service.ts"],
+    "locations": [
+      "services/agent-code-reviewer/src/kafka.service.ts",
+      "backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java",
+      "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -474,7 +527,11 @@
   {
     "category": "kafka-identity",
     "value": "agentweave-observability-group",
-    "locations": ["services/agent-observability/src/kafka.service.ts"],
+    "locations": [
+      "services/agent-observability/src/kafka.service.ts",
+      "backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java",
+      "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -482,7 +539,9 @@
   {
     "category": "kafka-identity",
     "value": "agentweave-runner-group",
-    "locations": ["services/agent-runner/src/main/resources/application.yml"],
+    "locations": [
+      "services/agent-runner/src/main/resources/application.yml"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-wire-v1"
@@ -493,7 +552,8 @@
     "locations": [
       ".env.example",
       "docker-compose.yml",
-      "services/orchestrator/src/database/database.provider.ts"
+      "services/orchestrator/src/database/database.provider.ts",
+      "backend/platform/src/main/java/io/tenvyr/platform/Db.java"
     ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
@@ -502,7 +562,9 @@
   {
     "category": "database-schema",
     "value": "com.agentweave",
-    "locations": ["services/agent-runner/pom.xml"],
+    "locations": [
+      "services/agent-runner/pom.xml"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -540,7 +602,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-postgres",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -548,7 +612,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-redis",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -556,7 +622,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-zookeeper",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -564,7 +632,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-kafka",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -572,7 +642,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-kafka-ui",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -580,7 +652,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-gateway",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -588,7 +662,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-orchestrator",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -596,7 +672,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-agent-runner",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -604,7 +682,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-agent-code-reviewer",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -612,7 +692,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-agent-observability",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -620,7 +702,9 @@
   {
     "category": "docker-deployment",
     "value": "agentweave-frontend",
-    "locations": ["docker-compose.yml"],
+    "locations": [
+      "docker-compose.yml"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "preserve",
     "status": "preserved-persistent"
@@ -641,7 +725,10 @@
   {
     "category": "repository-path",
     "value": "AgentWeave.zip",
-    "locations": ["AgentWeave.zip", "scripts/compress.sh"],
+    "locations": [
+      "AgentWeave.zip",
+      "scripts/compress.sh"
+    ],
     "publicCompatibilityImpact": "none",
     "migrationRecommendation": "preserve",
     "status": "historical"
@@ -649,7 +736,9 @@
   {
     "category": "telemetry-attribute",
     "value": "agentweave.* (conceptual future telemetry namespace)",
-    "locations": ["docs/roadmap/observability-provenance.md"],
+    "locations": [
+      "docs/roadmap/observability-provenance.md"
+    ],
     "publicCompatibilityImpact": "none",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -657,7 +746,9 @@
   {
     "category": "public-url",
     "value": "https://agentweave.dev/contracts/agent-event.v1.schema.json",
-    "locations": ["contracts/schemas/agent-event.v1.schema.json"],
+    "locations": [
+      "contracts/schemas/agent-event.v1.schema.json"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "deprecate",
     "status": "removed"
@@ -676,7 +767,9 @@
   {
     "category": "public-url",
     "value": "https://agentweave.dev/contracts/agent-result.v1.schema.json",
-    "locations": ["contracts/schemas/agent-result.v1.schema.json"],
+    "locations": [
+      "contracts/schemas/agent-result.v1.schema.json"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "deprecate",
     "status": "removed"
@@ -684,7 +777,9 @@
   {
     "category": "public-url",
     "value": "https://agentweave.dev/contracts/http-agent-run-accepted.v1.schema.json",
-    "locations": ["contracts/schemas/http-agent-run-accepted.v1.schema.json"],
+    "locations": [
+      "contracts/schemas/http-agent-run-accepted.v1.schema.json"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "deprecate",
     "status": "removed"
@@ -692,7 +787,9 @@
   {
     "category": "public-url",
     "value": "https://agentweave.dev/contracts/http-agent-run-request.v1.schema.json",
-    "locations": ["contracts/schemas/http-agent-run-request.v1.schema.json"],
+    "locations": [
+      "contracts/schemas/http-agent-run-request.v1.schema.json"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "deprecate",
     "status": "removed"
@@ -700,7 +797,9 @@
   {
     "category": "public-url",
     "value": "https://agentweave.dev/",
-    "locations": ["README.md"],
+    "locations": [
+      "README.md"
+    ],
     "publicCompatibilityImpact": "none",
     "migrationRecommendation": "preserve",
     "status": "historical"
@@ -731,7 +830,9 @@
   {
     "category": "public-url",
     "value": "https://github.com/longhn-lumin/AgentWeave",
-    "locations": ["frontend/src/app/page.tsx"],
+    "locations": [
+      "frontend/src/app/page.tsx"
+    ],
     "publicCompatibilityImpact": "breaking",
     "migrationRecommendation": "deprecate",
     "status": "removed"
@@ -750,7 +851,9 @@
   {
     "category": "test-fixture",
     "value": "agentweave-conformance-secret",
-    "locations": ["contracts/conformance/callback-signatures/vectors.json"],
+    "locations": [
+      "contracts/conformance/callback-signatures/vectors.json"
+    ],
     "publicCompatibilityImpact": "none",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -769,7 +872,9 @@
   {
     "category": "test-fixture",
     "value": "agentweave",
-    "locations": ["services/orchestrator/src/services/engine.service.spec.ts"],
+    "locations": [
+      "services/orchestrator/src/services/engine.service.spec.ts"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -777,7 +882,9 @@
   {
     "category": "test-fixture",
     "value": "agentweave-package-smoke-",
-    "locations": ["scripts/verify-package-packs.mjs"],
+    "locations": [
+      "scripts/verify-package-packs.mjs"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -785,7 +892,9 @@
   {
     "category": "test-fixture",
     "value": "agentweave-packed-consumer",
-    "locations": ["scripts/verify-package-packs.mjs"],
+    "locations": [
+      "scripts/verify-package-packs.mjs"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "rename",
     "status": "renamed"
@@ -793,7 +902,9 @@
   {
     "category": "test-fixture",
     "value": "agentweave-${name}-${sourceManifests[name].version}.tgz",
-    "locations": ["scripts/verify-package-packs.mjs"],
+    "locations": [
+      "scripts/verify-package-packs.mjs"
+    ],
     "publicCompatibilityImpact": "internal",
     "migrationRecommendation": "rename",
     "status": "renamed"

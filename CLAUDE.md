@@ -33,6 +33,13 @@ repository mechanics.
 
 ## Common commands
 
+The Java/Go backend is documented in
+[Java backend development](docs/development/java-backend.md). Build with
+`sh scripts/backend-build.sh`, then run
+`sh scripts/backend-checks.sh pure` or the complete `--integration` mode.
+Default development and Compose services use Java; the Go helper owns native
+process sessions. Check the implementation ledger for cutover evidence.
+
 ```bash
 pnpm test:all
 pnpm build:all

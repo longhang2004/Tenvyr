@@ -77,13 +77,29 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
 
 ## Registered Mechanics
 
+### Java and Go backend
+
+- The Java control-plane composition root owns adapters, recovery, provider
+  sessions and workspace reconciliation. The Go helper owns native session and
+  process-group operations; no Node backend is launched behind Java wrappers.
+- Run `scripts/backend-build.sh` for a clean reactor, build the Go launcher, and
+  execute `scripts/backend-checks.sh`. Integration mode requires real disposable
+  PostgreSQL/Kafka, all four public SDKs, Socket.IO v4, native processes and
+  Docker maintenance. Missing infrastructure or check classes must fail.
+- Keep ICU/canonical bytes, the TypeORM ledger, UTC timestamp behavior and
+  capsule Date/hash compatibility pinned to executable comparison checks.
+  Default services run Java; keep the PR draft until compatibility/cutover
+  gates pass and record the exact evidence in the implementation ledger.
+- See [Java backend development](java-backend.md) for prerequisites and the
+  distinction between Node reference test tooling and Java production services.
+
 ### Event-Driven Pipeline Runtime
 
 - **Purpose:** The orchestrator persists pipeline definitions/executions in PostgreSQL, dispatches step tasks to Kafka topics, consumes agent result topics, and pushes execution updates to the Gateway webhook for Socket.IO broadcast.
 - **Interfaces:** Task topics follow `agentweave.agent.<agent>.task`; result topics follow `agentweave.agent.<agent>.result`; dashboard clients receive `execution-update` over the Gateway WebSocket endpoint.
 - **Compatibility:** Every retained Kafka topic, consumer group, and client ID is a legacy runtime-v1 identifier, not active Tenvyr branding. Do not rename, alias, or dual-publish it during product-identity work.
 - **Rules:** Keep `steps.<stepId>.result.<field>` template semantics stable, preserve the v1 `invocationId` and `stepExecutionId` correlation fields for retry safety, and update `ORCHESTRATOR_AGENT_NAMES` when adding Kafka-backed agents.
-- **Verification:** Build the touched NestJS services with `pnpm --filter <service> run build`; compile the Java runner with `mvn clean compile`; use a sample YAML pipeline to verify status transitions and WebSocket updates.
+- **Verification:** Build Java/Go with `pnpm backend:build` and run `pnpm backend:test`; build touched reference NestJS services with `pnpm --filter <service> run build`; compile the Java runner with `mvn clean compile`; use a sample YAML pipeline to verify status transitions and WebSocket updates.
 
 ### Agent Invocation Contracts v1
 
@@ -146,9 +162,9 @@ These tools may improve a developer-agent workflow, but they are not Tenvyr runt
   not implement roadmap features as incidental hardening.
 - **References:** Follow the [product principles](../product/principles.md) and [observability and provenance roadmap](../roadmap/observability-provenance.md).
 
-### Node Test Setup
+### Node reference test setup
 
-- **Purpose:** Provides a per-service Jest + ts-jest runner for the four NestJS services (`gateway`, `orchestrator`, `agent-code-reviewer`, `agent-observability`) so the Workspace_Test_Command `pnpm -r test` passes. `agent-code-reviewer` additionally carries `fast-check` for property-based tests (it is the only service hosting property tests).
+- **Purpose:** Provides a per-service Jest + ts-jest runner for the four retained reference NestJS services (`gateway`, `orchestrator`, `agent-code-reviewer`, `agent-observability`) so the Workspace_Test_Command `pnpm -r test` passes. `agent-code-reviewer` additionally carries `fast-check` for property-based tests (it is the only service hosting property tests).
 - **Interfaces:** Run a single service's tests with `pnpm --filter <service> run test`; run every service's tests with `pnpm -r test`. Each service owns a self-contained `jest.config.js` (`preset: 'ts-jest'`, `testEnvironment: 'node'`, `rootDir: 'src'`, `testRegex: '.*\\.spec\\.ts$'`). Tests build a NestJS `TestingModule` with mocked providers only — no Postgres, Kafka, or Socket.IO bootstrap occurs.
 - **Rules:** Adding test (or any) devDependencies to a service `package.json` invalidates `pnpm-lock.yaml`, so you MUST refresh the lockfile with a normal `pnpm install` at the repo root afterward; this keeps the later `pnpm install --frozen-lockfile` verification step passing.
 - **Verification:** `pnpm -r test` exits `0` with passing suites reported for all four services.

@@ -1,0 +1,3 @@
+[
+  "DROP TABLE IF EXISTS \"state_write_evidence\""
+]

@@ -1,0 +1,4 @@
+[
+  "DROP TABLE IF EXISTS \"execution_replays\"",
+  "DROP TABLE IF EXISTS \"execution_exports\""
+]

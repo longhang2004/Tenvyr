@@ -1,0 +1,5 @@
+[
+  "\n      CREATE TABLE IF NOT EXISTS \"state_write_evidence\" (\n        \"id\" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),\n        \"executionId\" uuid NOT NULL,\n        \"stepAttemptId\" uuid NOT NULL,\n        \"resultInboxId\" uuid NOT NULL,\n        \"priorVersion\" integer NOT NULL,\n        \"resultVersion\" integer NOT NULL,\n        \"disposition\" varchar(16) NOT NULL,\n        \"mappingHash\" varchar(64),\n        \"rejectionCode\" varchar(64),\n        \"createdAt\" timestamp NOT NULL DEFAULT now(),\n        CONSTRAINT \"UQ_state_write_evidence_inbox\" UNIQUE (\"resultInboxId\"),\n        CONSTRAINT \"FK_state_write_evidence_attempt\" FOREIGN KEY (\"stepAttemptId\")\n          REFERENCES \"step_attempts\"(\"id\"),\n        CONSTRAINT \"FK_state_write_evidence_inbox\" FOREIGN KEY (\"resultInboxId\")\n          REFERENCES \"result_inbox\"(\"id\")\n      )\n    ",
+  "CREATE INDEX IF NOT EXISTS \"IDX_state_write_evidence_attempt\" ON \"state_write_evidence\" (\"stepAttemptId\")",
+  "CREATE INDEX IF NOT EXISTS \"IDX_state_write_evidence_execution\" ON \"state_write_evidence\" (\"executionId\")"
+]

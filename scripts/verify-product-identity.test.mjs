@@ -25,6 +25,23 @@ const oldName = ["Agent", "Weave"].join("");
 const oldLower = oldName.toLowerCase();
 const oldUpper = oldName.toUpperCase();
 
+test("Java migration compatibility allowances keep exact values and boundary paths", () => {
+  const callback = "backend/worker/src/main/java/io/tenvyr/worker/CallbackDelivery.java";
+  const kafka = "backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java";
+  const audit = auditEntries([
+    { path: callback, text: `"X-${oldName}-Signature"` },
+    { path: kafka, text: `"${oldLower}-orchestrator-group"` },
+    { path: "src/copied-callback.java", text: `"X-${oldName}-Signature"` },
+    { path: callback, text: `"X-${oldName}-Signature-Alias"` },
+    { path: kafka, text: `"${oldLower}-orchestrator-group-alias"` },
+    { path: kafka, text: `"${oldLower}.agent.code-reviewer.unapproved"` },
+  ], []);
+  assert.equal(audit.findings.length, 6);
+  assert.equal(audit.findings.filter(({ category }) => category === "wire-protocol-v1").length, 1);
+  assert.equal(audit.findings.filter(({ category }) => category === "kafka-runtime-v1").length, 1);
+  assert.equal(audit.findings.filter(({ category }) => category === null).length, 4);
+});
+
 test("active branding, package, API, User-Agent, and environment names are violations", () => {
   const audit = auditEntries(
     [

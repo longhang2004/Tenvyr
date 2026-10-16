@@ -1,0 +1,3 @@
+[
+  "\n      DROP INDEX IF EXISTS \"IDX_coordination_iteration_pending_proposal\";\n      ALTER TABLE \"coordination_iterations\"\n        DROP COLUMN IF EXISTS \"pendingPlanProposalId\";\n    "
+]

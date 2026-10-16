@@ -3,7 +3,7 @@ title: Local Development
 status: current
 audience:
   - developer
-last_verified: 2026-09-10
+last_verified: 2026-10-15
 sources:
   - package.json
   - docker-compose.yml
@@ -22,9 +22,9 @@ sources:
 
 - Node.js 22 or newer with Corepack and pnpm 9, as pinned by package metadata.
 - Python 3.11 or newer for the private Python Worker SDK.
-- JDK 17 and Maven for the Java Agent Runner release path.
+- JDK 17+, Maven, and Go 1.23+ for the Java backend and native process helper.
 - Docker with Docker Compose. The no-host-ports override requires Compose 2.24 or newer because it uses `!reset`.
-- Optional: Rustc 1.80+ / Cargo to run the additive local executor host (`TENVYR_EXECUTOR_HOST=rust`). The default `pnpm dev` host remains TypeScript.
+- Optional: Rustc 1.80+ / Cargo to run the additive local executor host (`TENVYR_EXECUTOR_HOST=rust`). The default `pnpm dev` host runs Java with the Go process helper.
 
 Dependency installation may use the network:
 
@@ -75,23 +75,24 @@ startup or smoke command.
 The one-command dev stack starts the infrastructure (Postgres, Redis,
 Zookeeper, Kafka, Kafka UI) plus the operational services — orchestrator (`:3001`),
 gateway (`:3000`), local executor host (`:3002`), and frontend/workbench (`:4000`) — in
-parallel watch mode:
+parallel, after a clean Java/Go build:
 
 ```bash
 pnpm dev
 ```
 
 Opt into the additive Rust executor host with `TENVYR_EXECUTOR_HOST=rust pnpm dev`
-(requires Cargo). The default remains the TypeScript host.
+(requires Cargo). The default host runs Java/Go.
 
 `pnpm dev` composes the automatic development Local Runtime Bridge:
+
 - Ephemeral cryptographically random bearer and callback secrets.
 - Automatic loopback callback URL (`http://127.0.0.1:3001` or derived from `ORCHESTRATOR_PORT`).
 - Automatic loopback host URL (`http://127.0.0.1:3002/v1/runs` or derived from `EXECUTOR_HOST_PORT`).
 - `HTTP_AGENT_ALLOW_INSECURE=true` (only for this local development launcher).
 - No manual `AGENT_TRANSPORT_CONFIG` or `EXECUTOR_HOST_AGENTS` required for normal local development.
 
-Stop everything with `Ctrl-C` — the watch services **and** the Compose
+Stop everything with `Ctrl-C` — the services **and** the Compose
 stack are shut down (named volumes are kept, so dev data survives). Run
 `pnpm dev:infra:down` only after a hard kill (SIGKILL), which bypasses the
 cleanup. If you previously started the full Compose stack
@@ -102,6 +103,20 @@ the Kafka-path agents (`pnpm dev:reviewer`, `pnpm dev:observability`) are not in
 because a host-run Kafka client cannot reach the Compose broker (it advertises its
 docker-internal hostname). Run those agents inside the full Compose stack
 (`pnpm dev:infra`).
+
+`pnpm dev` watches backend sources, resources, Maven/Go configuration and skill
+prompts. A change gracefully stops application services, rebuilds Java/Go and restarts them;
+PostgreSQL/Kafka containers remain running throughout reload.
+frontend HMR remains active. Build outputs are excluded to prevent restart loops.
+Use `TENVYR_DEV_WATCH=0 pnpm dev` for a single supervised run. For automatic
+container rebuilds, use Compose Watch:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
+```
+
+`TENVYR_BACKEND=node pnpm dev` explicitly selects the retained reference backend.
+It is not used by default deployment or by Java services.
 
 The root `dev:infra` name is historical: its current implementation starts every service in the default Compose file, not only Postgres, Redis, and Kafka.
 
@@ -115,7 +130,7 @@ To start infrastructure without application services:
 docker compose up -d postgres redis zookeeper kafka kafka-ui
 ```
 
-Application services can then run in separate terminals with watch mode:
+Build once with `pnpm backend:build`, then launch services in separate terminals:
 
 ```bash
 pnpm dev:orchestrator
@@ -200,7 +215,6 @@ pnpm dev:infra:down
 
 Use the same `-f` arguments on `docker compose down` when the stack was started with override files.
 
-
 ## Development terminal UX
 
 `pnpm dev` runs the whole stack through a small repository-owned launcher
@@ -231,7 +245,6 @@ on an interactive stdout; `NO_COLOR=1` disables ANSI; `CI` and redirected
 output stay deterministic and plain. Colors are semantic only (INFO
 neutral, WARN yellow, ERROR red). Full logs can be captured with
 `pnpm dev > /tmp/tenvyr-dev.log`.
-
 
 ### Lifecycle semantics (final closure)
 

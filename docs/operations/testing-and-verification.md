@@ -3,7 +3,7 @@ title: Testing and Verification
 status: current
 audience:
   - developer
-last_verified: 2026-09-15
+last_verified: 2026-10-16
 sources:
   - package.json
   - packages/worker/package.json
@@ -37,7 +37,8 @@ pnpm test:all
 pnpm build:all
 ```
 
-`test:all` runs each pnpm workspace package's own test script. `build:all` recursively builds the workspace. The Python SDK and Java Agent Runner are outside the pnpm workspace and require their own commands.
+`test:all` builds Java/Go, runs backend pure checks, then each pnpm workspace
+package's tests. `build:all` builds Java/Go before the pnpm workspace. The Python SDK and Java Agent Runner are outside the pnpm workspace and require their own commands.
 
 For the TypeScript Worker, run its normal suite and a leak-focused Jest pass:
 
@@ -46,6 +47,25 @@ pnpm --filter @tenvyr/worker test
 pnpm --filter @tenvyr/worker exec jest --runInBand --detectOpenHandles
 pnpm --filter @tenvyr/example-typescript-http-worker test
 ```
+
+## Java/Go backend acceptance
+
+```sh
+pnpm backend:build
+pnpm backend:test
+# After preparing disposable PostgreSQL, Kafka and all public SDKs:
+pnpm backend:integration
+pnpm backend:dev-check
+pnpm backend:showcase
+pnpm backend:upgrade-check
+```
+
+The Maven package step compiles the check programs; the shell check runner
+actually executes them. Integration requires real infrastructure and fails
+when prerequisites are unavailable. The retained Node services supply original
+compatibility comparisons; default production images run Java without Node.
+See [backend development](../development/java-backend.md) for setup and
+[verification evidence](../reference/backend-migration-verification.md).
 
 ## Python Worker
 
@@ -166,7 +186,7 @@ git diff --check
 The static setup test verifies that every Node service image which builds
 `@tenvyr/contracts` copies `scripts/copy-contract-schemas.mjs` into its shared
 base stage before either development or production compilation inherits it.
-The Orchestrator production TypeScript build excludes test-only `*.spec.ts`
+The retained reference Orchestrator TypeScript build excludes test-only `*.spec.ts`
 imports; Jest still compiles those files in the test gate.
 
 The pinned Confluent 7.3 Zookeeper and Kafka images receive

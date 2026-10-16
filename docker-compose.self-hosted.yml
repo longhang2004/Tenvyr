@@ -37,12 +37,14 @@ services:
   orchestrator:
     image: tenvyr-orchestrator:${TENVYR_VERSION:?set TENVYR_VERSION at deploy time}
     # Clean-checkout bootable: the image is buildable from the repository
-    # context (production stage of services/orchestrator/Dockerfile) at the
+    # context (control-plane stage of backend/Dockerfile) at the
     # same pinned TENVYR_VERSION tag.
     build:
       context: .
-      dockerfile: services/orchestrator/Dockerfile
-      target: production
+      dockerfile: backend/Dockerfile
+      target: control-plane
+      args:
+        TENVYR_SOURCE_REVISION: ${TENVYR_SOURCE_REVISION:-unknown}
     container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-orchestrator
     environment:
       ORCHESTRATOR_HOST: "0.0.0.0"
@@ -61,6 +63,7 @@ services:
       HTTP_AGENT_CALLBACK_BASE_URL: ${HTTP_AGENT_CALLBACK_BASE_URL:?set the callback base URL}
       HTTP_AGENT_CALLBACK_KEYS: ${HTTP_AGENT_CALLBACK_KEYS:?set callback keys (JSON of keyId -> secretEnv name)}
       HTTP_AGENT_ALLOW_INSECURE: ${HTTP_AGENT_ALLOW_INSECURE:-true}
+      GATEWAY_URL: http://gateway:3000
       ORCHESTRATOR_SUPERVISION_CONFIG: ${ORCHESTRATOR_SUPERVISION_CONFIG:-{}}
     ports:
       - "127.0.0.1:${TENVYR_ORCHESTRATOR_PORT:-3001}:3001"
@@ -70,7 +73,11 @@ services:
     networks:
       - tenvyr-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health | grep -q '\"ready\":true'"]
+      test:
+        [
+          "CMD-SHELL",
+          'curl -fsS http://127.0.0.1:3001/health | grep -q ''"ready":true''',
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -78,11 +85,13 @@ services:
   gateway:
     image: tenvyr-gateway:${TENVYR_VERSION}
     # Clean-checkout bootable: same build context contract as the
-    # orchestrator (production stage of services/gateway/Dockerfile).
+    # orchestrator (gateway stage of backend/Dockerfile).
     build:
       context: .
-      dockerfile: services/gateway/Dockerfile
-      target: production
+      dockerfile: backend/Dockerfile
+      target: gateway
+      args:
+        TENVYR_SOURCE_REVISION: ${TENVYR_SOURCE_REVISION:-unknown}
     container_name: ${TENVYR_SELF_HOSTED_PREFIX:-tenvyr-self-hosted}-gateway
     environment:
       GATEWAY_HOST: "0.0.0.0"
@@ -96,7 +105,7 @@ services:
     networks:
       - tenvyr-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health | grep -q UP"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health | grep -q UP"]
       interval: 10s
       timeout: 5s
       retries: 12

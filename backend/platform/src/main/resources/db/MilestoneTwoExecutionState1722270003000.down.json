@@ -1,0 +1,5 @@
+[
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"executionState\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"executionStateVersion\"",
+  "ALTER TABLE \"executions\" DROP COLUMN IF EXISTS \"executionStateUpdatedAt\""
+]

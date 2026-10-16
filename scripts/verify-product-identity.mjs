@@ -191,6 +191,11 @@ const compatibilityValues = new Set([
   `${legacyLower}/runner/controller/RunnerController.java`,
 ]);
 const wireProtocolPaths = new Set([
+  "backend/control-plane/src/main/java/io/tenvyr/control/engine/HttpAgentAdapter.java",
+  "backend/platform/src/main/java/io/tenvyr/platform/Http.java",
+  "backend/worker/src/main/java/io/tenvyr/worker/CallbackDelivery.java",
+  "backend/worker/src/test/java/io/tenvyr/worker/WorkerCheck.java",
+  "backend/executor-host/src/test/java/io/tenvyr/executorhost/ExecutorHostIntegrationCheck.java",
   "docs/architecture/transports/http-agent-adapter-v1.md",
   "docs/architecture/workers/typescript-worker-sdk.md",
   "packages/worker/src/callback/callback-delivery.ts",
@@ -381,6 +386,21 @@ const kafkaPathRules = new Map([
     ]),
   ],
 ]);
+
+// Exact retained runtime-v1 values on the Java migration's explicit boundaries.
+for (const [value, paths] of [
+  [`${legacyLower}-orchestrator`, ["backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java"]],
+  [`${legacyLower}-orchestrator-group`, ["backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java"]],
+  [`${legacyLower}-reviewer-group`, ["backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java", "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"]],
+  [`${legacyLower}-observability-group`, ["backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java", "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"]],
+  [`${legacyLower}.agent.`, ["backend/agents/src/main/java/io/tenvyr/agents/KafkaAgent.java", "backend/control-plane/src/main/java/io/tenvyr/control/engine/KafkaAgentAdapter.java", "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java"]],
+  [`${legacyLower}.agent.code-reviewer.task`, ["backend/agents/src/test/java/io/tenvyr/agents/AgentCheck.java"]],
+  [`${legacyLower}.agent.code-reviewer.result`, ["backend/agents/src/test/java/io/tenvyr/agents/AgentCheck.java", "backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java", "docker-compose.java.yml", "docker-compose.yml"]],
+  [`${legacyLower}.agent.observability.result`, ["backend/agents/src/test/java/io/tenvyr/agents/AgentIntegrationCheck.java", "docker-compose.java.yml", "docker-compose.yml"]],
+  [`${legacyLower}.agent.code-reviewer.event`, ["backend/control-plane/src/test/java/io/tenvyr/control/ControlKafkaIntegrationCheck.java"]],
+]) {
+  for (const path of paths) kafkaPathRules.get(value).add(path);
+}
 
 const forbiddenPattern = new RegExp(
   [
@@ -1079,6 +1099,9 @@ function isHistoricalReference(path, line, match) {
 }
 
 function isPersistentIdentifier(path, line, match) {
+  if (path === "backend/platform/src/main/java/io/tenvyr/platform/Db.java" && match === legacyLower) {
+    return line.trim() === `public static Db fromEnv() { return new Db(env("DATABASE_URL","jdbc:postgresql://"+env("POSTGRES_HOST","localhost")+":"+env("POSTGRES_PORT","5432")+"/"+env("POSTGRES_DB","${legacyLower}")),env("POSTGRES_USER","postgres"),env("POSTGRES_PASSWORD","postgres")); }`;
+  }
   if (
     documentedJavaSourcePaths.has(path) &&
     documentedJavaSourceValues.has(match)

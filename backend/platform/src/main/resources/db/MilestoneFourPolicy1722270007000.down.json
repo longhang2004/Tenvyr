@@ -1,0 +1,4 @@
+[
+  "DROP TABLE IF EXISTS \"policy_decisions\"",
+  "DROP TABLE IF EXISTS \"policy_snapshots\""
+]

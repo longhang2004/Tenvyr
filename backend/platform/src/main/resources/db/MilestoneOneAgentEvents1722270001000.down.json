@@ -1,0 +1,8 @@
+[
+  "ALTER TABLE \"step_attempts\" DROP COLUMN IF EXISTS \"lastProgressReceivedAt\"",
+  "ALTER TABLE \"step_attempts\" DROP COLUMN IF EXISTS \"lastHeartbeatReceivedAt\"",
+  "ALTER TABLE \"step_attempts\" DROP COLUMN IF EXISTS \"lastEventReceivedAt\"",
+  "ALTER TABLE \"step_attempts\" DROP COLUMN IF EXISTS \"acceptedAt\"",
+  "DROP TABLE IF EXISTS \"agent_event_conflicts\"",
+  "DROP TABLE IF EXISTS \"agent_events\""
+]

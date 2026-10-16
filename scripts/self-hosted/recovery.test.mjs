@@ -46,6 +46,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const JAVA_BACKEND = process.env.TENVYR_RECOVERY_BACKEND !== "node";
+const COMPOSE_FILE = "docker-compose.self-hosted.yml";
 
 /** UNIQUE per-run disposable identity — never the production names and
  *  never shared between two simultaneous E2E invocations: each run gets
@@ -73,15 +75,21 @@ const COMPOSE = [
   "-p",
   E2E_PROJECT,
   "-f",
-  "docker-compose.self-hosted.yml",
+  COMPOSE_FILE,
   "--env-file",
   E2E_DEPLOY_ENV,
 ];
 const TARGET = "v0.1.0";
 const DISPOSABLE_SHA = "a".repeat(40);
 
-const run = (cmd, args, opts = {}) =>
-  spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", timeout: 600_000, ...opts });
+function operationCommand(cmd, args) {
+  const match = JAVA_BACKEND && cmd === process.execPath && /^scripts\/self-hosted\/(preflight|backup|restore|upgrade|invariants|maintenance)\.mjs$/.exec(args[0] ?? "");
+  return match ? ["sh", ["scripts/java-backend.sh", "operations", match[1], ...args.slice(1)]] : [cmd, args];
+}
+const run = (cmd, args, opts = {}) => {
+  [cmd, args] = operationCommand(cmd, args);
+  return spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", timeout: 600_000, ...opts });
+};
 
 const runOk = (cmd, args, opts = {}) => {
   const result = run(cmd, args, opts);
@@ -100,6 +108,7 @@ const runOk = (cmd, args, opts = {}) => {
 
 const runAsync = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
+    [cmd, args] = operationCommand(cmd, args);
     const child = spawn(cmd, args, { cwd: ROOT, ...opts });
     let output = "";
     child.stdout?.on("data", (chunk) => {
@@ -262,7 +271,7 @@ HTTP_AGENT_ALLOW_INSECURE=true
     const needsBuild = ["tenvyr-orchestrator", "tenvyr-gateway"].some(
       (image) => run("docker", ["image", "inspect", `${image}:${TARGET}`], { timeout: 30_000 }).status !== 0,
     );
-    if (needsBuild) {
+    if (JAVA_BACKEND || needsBuild) {
       runOk("docker", [...COMPOSE.slice(1), "build"], { timeout: 1_200_000 });
     }
     // Pull external service images with retries before starting
@@ -318,6 +327,7 @@ HTTP_AGENT_ALLOW_INSECURE=true
     TENVYR_POSTGRES_CONTAINER: E2E_POSTGRES_CONTAINER,
     TENVYR_SELF_HOSTED_PROJECT: E2E_PROJECT,
     TENVYR_MAINTENANCE_DIR: E2E_DIR,
+    ...(JAVA_BACKEND ? { TENVYR_SELF_HOSTED_COMPOSE: COMPOSE_FILE, TENVYR_RECOVERY_FAULTS: extra.TENVYR_RESTORE_FAULT ?? "" } : {}),
     TENVYR_ORCHESTRATOR_PORT: E2E_ORCHESTRATOR_PORT,
     TENVYR_GATEWAY_PORT: E2E_GATEWAY_PORT,
     ...extra,

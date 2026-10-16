@@ -1,0 +1,3 @@
+[
+  "\n      DROP INDEX IF EXISTS \"IDX_workspace_execution_allocation_key\";\n      CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_workspace_execution_allocation_key_unique\"\n        ON \"workspace_executions\" (\"allocationKey\")\n        WHERE \"allocationKey\" IS NOT NULL;\n    "
+]

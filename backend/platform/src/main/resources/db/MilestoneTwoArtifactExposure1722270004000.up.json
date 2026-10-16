@@ -1,0 +1,4 @@
+[
+  "\n      CREATE TABLE IF NOT EXISTS \"artifact_exposures\" (\n        \"id\" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),\n        \"stepAttemptId\" uuid NOT NULL,\n        \"artifactId\" uuid NOT NULL,\n        \"createdAt\" timestamp NOT NULL DEFAULT now(),\n        CONSTRAINT \"UQ_artifact_exposure_attempt_artifact\" UNIQUE (\"stepAttemptId\", \"artifactId\"),\n        CONSTRAINT \"FK_artifact_exposure_attempt\" FOREIGN KEY (\"stepAttemptId\")\n          REFERENCES \"step_attempts\"(\"id\"),\n        CONSTRAINT \"FK_artifact_exposure_artifact\" FOREIGN KEY (\"artifactId\")\n          REFERENCES \"artifacts\"(\"id\")\n      )\n    ",
+  "CREATE INDEX IF NOT EXISTS \"IDX_artifact_exposure_artifact\" ON \"artifact_exposures\" (\"artifactId\")"
+]

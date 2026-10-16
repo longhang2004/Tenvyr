@@ -1,0 +1,3 @@
+[
+  "\n      CREATE TABLE IF NOT EXISTS \"artifacts\" (\n        \"id\" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),\n        \"resultInboxId\" uuid NOT NULL,\n        \"descriptorOrdinal\" integer NOT NULL,\n        \"descriptorHash\" varchar(64) NOT NULL,\n        \"createdAt\" timestamp NOT NULL DEFAULT now(),\n        CONSTRAINT \"UQ_artifact_inbox_ordinal\" UNIQUE (\"resultInboxId\", \"descriptorOrdinal\"),\n        CONSTRAINT \"FK_artifact_inbox\" FOREIGN KEY (\"resultInboxId\")\n          REFERENCES \"result_inbox\"(\"id\") ON DELETE CASCADE\n      )\n    "
+]

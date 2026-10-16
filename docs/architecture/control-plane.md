@@ -3,8 +3,13 @@ title: Control Plane
 status: current
 audience:
   - developer
-last_verified: 2026-09-10
+last_verified: 2026-10-15
 sources:
+  - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
+  - backend/control-plane/src/main/java/io/tenvyr/control/engine
+  - backend/control-plane/src/main/java/io/tenvyr/control/authority
+  - backend/control-plane/src/main/java/io/tenvyr/control/runtime
+  - backend/platform/src/main/java/io/tenvyr/platform/Migrator.java
   - services/orchestrator/src/database/data-source.ts
   - services/orchestrator/src/database/migrations/1722270000000-MilestoneZeroFoundation.ts
   - services/orchestrator/src/database/migrations/1722270001000-MilestoneOneAgentEvents.ts
@@ -35,6 +40,14 @@ sources:
 ---
 
 # Control Plane
+
+The default implementation is Java 17 in `backend/control-plane`;
+`io.tenvyr.control.Main` owns composition and recovery. The Go helper implements
+native session/process-group operations. The retained TypeScript sources and
+tests provide the executable compatibility reference. Public routes, 36 entity
+tables, 27 TypeORM migrations and persisted identities are unchanged. See
+[backend development and verification](../development/java-backend.md) for
+builds, security boundaries and acceptance gates.
 
 The Orchestrator is the execution authority. It validates reusable pipelines,
 snapshots each run into an immutable execution plan revision, persists logical

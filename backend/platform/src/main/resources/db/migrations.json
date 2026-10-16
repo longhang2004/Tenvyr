@@ -1,0 +1,245 @@
+[
+  {
+    "timestamp": 1722270000000,
+    "name": "MilestoneZeroFoundation1722270000000",
+    "up": "MilestoneZeroFoundation1722270000000.up.json",
+    "down": "MilestoneZeroFoundation1722270000000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270000000-MilestoneZeroFoundation.ts",
+    "upStatements": 47,
+    "downStatements": 20
+  },
+  {
+    "timestamp": 1722270001000,
+    "name": "MilestoneOneAgentEvents1722270001000",
+    "up": "MilestoneOneAgentEvents1722270001000.up.json",
+    "down": "MilestoneOneAgentEvents1722270001000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270001000-MilestoneOneAgentEvents.ts",
+    "upStatements": 12,
+    "downStatements": 6
+  },
+  {
+    "timestamp": 1722270002000,
+    "name": "MilestoneTwoArtifactIdentity1722270002000",
+    "up": "MilestoneTwoArtifactIdentity1722270002000.up.json",
+    "down": "MilestoneTwoArtifactIdentity1722270002000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270002000-MilestoneTwoArtifactIdentity.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270003000,
+    "name": "MilestoneTwoExecutionState1722270003000",
+    "up": "MilestoneTwoExecutionState1722270003000.up.json",
+    "down": "MilestoneTwoExecutionState1722270003000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270003000-MilestoneTwoExecutionState.ts",
+    "upStatements": 3,
+    "downStatements": 3
+  },
+  {
+    "timestamp": 1722270004000,
+    "name": "MilestoneTwoArtifactExposure1722270004000",
+    "up": "MilestoneTwoArtifactExposure1722270004000.up.json",
+    "down": "MilestoneTwoArtifactExposure1722270004000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270004000-MilestoneTwoArtifactExposure.ts",
+    "upStatements": 2,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270005000,
+    "name": "MilestoneTwoStateWriteEvidence1722270005000",
+    "up": "MilestoneTwoStateWriteEvidence1722270005000.up.json",
+    "down": "MilestoneTwoStateWriteEvidence1722270005000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270005000-MilestoneTwoStateWriteEvidence.ts",
+    "upStatements": 3,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270006000,
+    "name": "MilestoneFourBudgetLedger1722270006000",
+    "up": "MilestoneFourBudgetLedger1722270006000.up.json",
+    "down": "MilestoneFourBudgetLedger1722270006000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270006000-MilestoneFourBudgetLedger.ts",
+    "upStatements": 4,
+    "downStatements": 4
+  },
+  {
+    "timestamp": 1722270007000,
+    "name": "MilestoneFourPolicy1722270007000",
+    "up": "MilestoneFourPolicy1722270007000.up.json",
+    "down": "MilestoneFourPolicy1722270007000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270007000-MilestoneFourPolicy.ts",
+    "upStatements": 2,
+    "downStatements": 2
+  },
+  {
+    "timestamp": 1722270008000,
+    "name": "MilestoneFourApprovals1722270008000",
+    "up": "MilestoneFourApprovals1722270008000.up.json",
+    "down": "MilestoneFourApprovals1722270008000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270008000-MilestoneFourApprovals.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270009000,
+    "name": "MilestoneFivePlanProposals1722270009000",
+    "up": "MilestoneFivePlanProposals1722270009000.up.json",
+    "down": "MilestoneFivePlanProposals1722270009000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270009000-MilestoneFivePlanProposals.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270010000,
+    "name": "MilestoneSixDelegationObservations1722270010000",
+    "up": "MilestoneSixDelegationObservations1722270010000.up.json",
+    "down": "MilestoneSixDelegationObservations1722270010000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270010000-MilestoneSixDelegationObservations.ts",
+    "upStatements": 1,
+    "downStatements": 2
+  },
+  {
+    "timestamp": 1722270011000,
+    "name": "MilestoneSixDelegationRequests1722270011000",
+    "up": "MilestoneSixDelegationRequests1722270011000.up.json",
+    "down": "MilestoneSixDelegationRequests1722270011000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270011000-MilestoneSixDelegationRequests.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270012000,
+    "name": "MilestoneSevenCapsuleExports1722270012000",
+    "up": "MilestoneSevenCapsuleExports1722270012000.up.json",
+    "down": "MilestoneSevenCapsuleExports1722270012000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270012000-MilestoneSevenCapsuleExports.ts",
+    "upStatements": 1,
+    "downStatements": 2
+  },
+  {
+    "timestamp": 1722270013000,
+    "name": "RoadmapLineageIntegrity1722270013000",
+    "up": "RoadmapLineageIntegrity1722270013000.up.json",
+    "down": "RoadmapLineageIntegrity1722270013000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270013000-RoadmapLineageIntegrity.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270014000,
+    "name": "MilestoneEightConnections1722270014000",
+    "up": "MilestoneEightConnections1722270014000.up.json",
+    "down": "MilestoneEightConnections1722270014000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270014000-MilestoneEightConnections.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270015000,
+    "name": "MilestoneNineCoordination1722270015000",
+    "up": "MilestoneNineCoordination1722270015000.up.json",
+    "down": "MilestoneNineCoordination1722270015000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270015000-MilestoneNineCoordination.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270016000,
+    "name": "MilestoneTenOperatorActions1722270016000",
+    "up": "MilestoneTenOperatorActions1722270016000.up.json",
+    "down": "MilestoneTenOperatorActions1722270016000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270016000-MilestoneTenOperatorActions.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270017000,
+    "name": "CoordinationApprovalResume1722270017000",
+    "up": "CoordinationApprovalResume1722270017000.up.json",
+    "down": "CoordinationApprovalResume1722270017000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270017000-CoordinationApprovalResume.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270018000,
+    "name": "WorkspaceIdentity1722270018000",
+    "up": "WorkspaceIdentity1722270018000.up.json",
+    "down": "WorkspaceIdentity1722270018000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270018000-WorkspaceIdentity.ts",
+    "upStatements": 3,
+    "downStatements": 3
+  },
+  {
+    "timestamp": 1722270019000,
+    "name": "ModelSources1722270019000",
+    "up": "ModelSources1722270019000.up.json",
+    "down": "ModelSources1722270019000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270019000-ModelSources.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270020000,
+    "name": "P3ContextBundle1722270020000",
+    "up": "P3ContextBundle1722270020000.up.json",
+    "down": "P3ContextBundle1722270020000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270020000-P3ContextBundle.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270021000,
+    "name": "WorkspaceExecutionIsolation1722270021000",
+    "up": "WorkspaceExecutionIsolation1722270021000.up.json",
+    "down": "WorkspaceExecutionIsolation1722270021000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270021000-WorkspaceExecutionIsolation.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270022000,
+    "name": "Handoff1722270022000",
+    "up": "Handoff1722270022000.up.json",
+    "down": "Handoff1722270022000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270022000-Handoff.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270023000,
+    "name": "WorkspaceExecutionAllocationKey1722270023000",
+    "up": "WorkspaceExecutionAllocationKey1722270023000.up.json",
+    "down": "WorkspaceExecutionAllocationKey1722270023000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270023000-WorkspaceExecutionAllocationKey.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270024000,
+    "name": "WorkspaceExecutionUniqueAllocationKey1722270024000",
+    "up": "WorkspaceExecutionUniqueAllocationKey1722270024000.up.json",
+    "down": "WorkspaceExecutionUniqueAllocationKey1722270024000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270024000-WorkspaceExecutionUniqueAllocationKey.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270025000,
+    "name": "WorkspaceExecutionReleaseOperation1722270025000",
+    "up": "WorkspaceExecutionReleaseOperation1722270025000.up.json",
+    "down": "WorkspaceExecutionReleaseOperation1722270025000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270025000-WorkspaceExecutionReleaseOperation.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  },
+  {
+    "timestamp": 1722270026000,
+    "name": "WorkspaceReleaseLock1722270026000",
+    "up": "WorkspaceReleaseLock1722270026000.up.json",
+    "down": "WorkspaceReleaseLock1722270026000.down.json",
+    "source": "services/orchestrator/src/database/migrations/1722270026000-WorkspaceReleaseLock.ts",
+    "upStatements": 1,
+    "downStatements": 1
+  }
+]

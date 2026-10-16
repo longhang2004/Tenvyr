@@ -166,8 +166,10 @@ and [local development](docs/operations/local-development.md).
 
 ### Offline showcase (original)
 
-Requirements: Node.js 22+, pnpm 9.0.0, Python 3.11+, JDK 17, Docker, and Docker
-Compose v2.
+Requirements: Node.js 22+, pnpm 9.0.0, Python 3.11+, JDK 17, Maven, Go 1.23+, Docker, and Docker
+Compose 2.24.4+. The default backend runs Java and the native process helper
+runs Go; Node remains frontend/SDK/development tooling. See
+[backend development and verification](docs/development/java-backend.md).
 
 ```bash
 corepack enable

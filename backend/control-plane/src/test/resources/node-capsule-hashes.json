@@ -1,0 +1,65 @@
+[
+  {
+    "capsule": {
+      "schemaVersion": "1",
+      "capturedAt": "2026-10-15T02:00:00.000Z",
+      "contentHash": "ignored",
+      "executionId": "execution",
+      "header": {
+        "policy": {
+          "snapshotVersion": "1",
+          "snapshotHash": "ignored"
+        }
+      },
+      "attempts": [
+        {
+          "status": "RUNNING",
+          "terminalAt": null
+        }
+      ]
+    },
+    "hash": "1f0ec6fbf0ff970b3247c4a693502b81408bd4371273f4340831a3ac6b1192ad"
+  },
+  {
+    "capsule": {
+      "schemaVersion": "1",
+      "capturedAt": "2026-10-15T02:00:00.000Z",
+      "contentHash": "ignored",
+      "executionId": "execution",
+      "header": {
+        "policy": {
+          "snapshotVersion": "1",
+          "snapshotHash": "ignored"
+        }
+      },
+      "attempts": [
+        {
+          "status": "SUCCESS",
+          "terminalAt": "2026-10-15T00:00:00.000Z"
+        }
+      ]
+    },
+    "hash": "f11f83c4855c2d58a191e44ea1722eee0584b6e74f2124dcc74ac8a461b4ce31"
+  },
+  {
+    "capsule": {
+      "schemaVersion": "1",
+      "capturedAt": "2026-10-15T02:00:00.000Z",
+      "contentHash": "ignored",
+      "executionId": "execution",
+      "header": {
+        "policy": {
+          "snapshotVersion": "1",
+          "snapshotHash": "ignored"
+        }
+      },
+      "attempts": [
+        {
+          "status": "SUCCESS",
+          "terminalAt": "2026-10-15T01:02:03.456Z"
+        }
+      ]
+    },
+    "hash": "f11f83c4855c2d58a191e44ea1722eee0584b6e74f2124dcc74ac8a461b4ce31"
+  }
+]

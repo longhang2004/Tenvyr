@@ -4,8 +4,13 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-15
+last_verified: 2026-10-16
 sources:
+  - backend/executor-host/src/main/java/io/tenvyr/executorhost/HostConfig.java
+  - backend/executor-host/src/main/java/io/tenvyr/executorhost/Supervisor.java
+  - backend/executor-host/src/main/java/io/tenvyr/executorhost/Main.java
+  - backend/executor-host/native/process_unix.go
+  - backend/worker/src/main
   - services/local-executor-host/src/config.ts
   - services/local-executor-host/src/supervisor.ts
   - services/local-executor-host/src/state.ts
@@ -19,16 +24,18 @@ sources:
 
 ## Purpose
 
-`@tenvyr/local-executor-host` runs FIXED operator-configured commands as a
-trusted-code-only local process executor. The pipeline selects only a logical
-agent name; the host resolves that name to a preconfigured executable. It
-implements the canonical HTTP Worker protocol (via the reviewed
-`@tenvyr/worker` SDK), so the Orchestrator treats it as an ordinary HTTP
-executor: M3 descriptor pinning, profile-rotation safe failure, and
-cancel-capability evidence all apply unchanged.
+The default Java host (`backend/executor-host`) runs fixed operator-configured
+commands as a trusted-code-only local process executor. Java owns the Worker
+protocol, immutable connection binding, supervision and recovery; a small Go
+helper creates a Unix session and executes/signals its process group. It uses
+the Java backend's HTTP Worker implementation with the same v1 contract.
+Static agents resolve preconfigured executables. The dynamic bridge instead
+resolves hash-bound immutable database connection revisions; pipeline input
+cannot override executables or arbitrary arguments. The retained TypeScript
+`@tenvyr/local-executor-host` implementation is a compatibility reference.
 
 The host is **trusted-code-only**: operator deployment configuration is the
-trust boundary. The default TypeScript host has no OS sandbox. The additive
+trust boundary. The default Java/Go host has no OS sandbox. The additive
 Rust host (`TENVYR_EXECUTOR_HOST=rust`) uses the same HTTP Worker protocol
 and spawn contract, plus a new process group and Linux `no_new_privs`;
 Landlock/seccomp/cgroup memory remain the upgrade path.
@@ -38,10 +45,10 @@ Landlock/seccomp/cgroup memory remain the upgrade path.
 - **Fixed commands**: `command` must be an absolute path from
   `EXECUTOR_HOST_AGENTS`; the pipeline can never supply a path, command, or
   argument.
-- **No shell**: argv array, never a shell. The TypeScript host uses
-  `child_process.spawn` with `shell: false`; the Rust host uses
-  `Command` with `env_clear` and no shell. Metacharacters in arguments
-  stay literal (tested in both).
+- **No shell**: Java `ProcessBuilder` passes fixed argv to the Go helper,
+  which calls `setsid` and `exec`; the Rust host uses `Command`. Java clears
+  the environment before applying configured references; Rust uses `env_clear`.
+  Metacharacters remain literal.
 - **Allowlisted working root**: every `cwd` must resolve inside
   `EXECUTOR_HOST_ALLOWED_ROOT`; both paths are canonicalized.
 - **PP1 workspace execution**: when an invocation carries the reserved
@@ -92,19 +99,19 @@ Landlock/seccomp/cgroup memory remain the upgrade path.
 ## Rust host (additive)
 
 Set `TENVYR_EXECUTOR_HOST=rust` before `pnpm dev` to run
-`services/local-executor-host-rs` instead of the Node host. Same env vars,
+`services/local-executor-host-rs` instead of the Java/Go host. Same env vars,
 same `/v1/runs` + signed callback contract, same fail-closed cwd/binding
-rules. Default remains the TypeScript host.
+rules. The default remains Java/Go.
 
 ```bash
 cargo test --manifest-path services/local-executor-host-rs/Cargo.toml
 ```
 
-Limitations versus the TypeScript host: AgentEvents/heartbeats are not
+Limitations versus the Java/Go host: AgentEvents/heartbeats are not
 emitted yet (the result callback remains terminal authority); Landlock,
 seccomp, and cgroup memory bounds are not wired; macOS has process-group
 kill + `env_clear` only. Persisted `kill_at` is `startedAt + wallTimeMs`,
-matching the TypeScript host state file.
+matching the retained host state contract.
 
 ## Configuration
 
@@ -113,6 +120,11 @@ See [operations/configuration.md](../../operations/configuration.md). One
 concurrency 1 and a bounded queue.
 
 ## Verification
+
+`sh scripts/backend-build.sh` builds Java and the Go helper.
+`sh scripts/backend-checks.sh --integration` exercises actual process groups,
+HTTP callbacks, immutable database profiles and native coordinated execution.
+See [backend verification](../../reference/backend-migration-verification.md).
 
 - Unit: config bounds/traversal/hostile names, no-shell argv, output limits,
   wall-time/invocation-deadline/shutdown kills, SIGKILL escalation, stdin

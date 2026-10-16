@@ -1,0 +1,3 @@
+[
+  "\n      ALTER TABLE \"step_attempts\"\n        DROP COLUMN IF EXISTS \"efficiency\"\n    "
+]

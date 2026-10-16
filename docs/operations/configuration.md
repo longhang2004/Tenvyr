@@ -4,8 +4,11 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-09-15
+last_verified: 2026-10-16
 sources:
+  - backend/executor-host/src/main/java/io/tenvyr/executorhost/HostConfig.java
+  - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
+  - backend/platform/src/main/java/io/tenvyr/platform/Http.java
   - .env.example
   - docker-compose.yml
   - scripts/dev.mjs
@@ -32,21 +35,21 @@ Values below are variable names and source defaults, never production secret val
 
 ## Orchestrator
 
-| Variable                             | Requirement and default                                                                                     |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `ORCHESTRATOR_PORT`                  | Optional; defaults to `3001`. The service does not read generic `PORT`.                                     |
-| `ORCHESTRATOR_HOST`                  | Optional; defaults to `127.0.0.1` (IPv4 loopback). Compose/self-hosted set `0.0.0.0` so published ports and sibling containers can reach the process; host-side publish stays loopback. |
+| Variable                             | Requirement and default                                                                                                                                                                                                          |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORCHESTRATOR_PORT`                  | Optional; defaults to `3001`. The service does not read generic `PORT`.                                                                                                                                                          |
+| `ORCHESTRATOR_HOST`                  | Optional; defaults to `127.0.0.1` (IPv4 loopback). Compose/self-hosted set `0.0.0.0` so published ports and sibling containers can reach the process; host-side publish stays loopback.                                          |
 | `CORS_ORIGIN`                        | Optional comma-separated allow-list of explicit origins shared with the WebSocket policy. Unset means NO HTTP CORS (the Workbench same-origin proxy needs none). A literal `*` is REJECTED and fails startup — never a wildcard. |
-| `POSTGRES_HOST`, `POSTGRES_PORT`     | Optional; default `localhost`, `5432`.                                                                      |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD` | Optional; both default to `postgres` for local development. Supply secrets outside source control.          |
-| `POSTGRES_DB`                        | Optional; uses the persistent compatibility default recorded in `.env.example`.                             |
-| `TENVYR_DB_MIGRATIONS`               | Optional; migrations run by default. Exact `false` disables startup migration execution.                    |
-| `TENVYR_DB_SYNCHRONIZE`              | Disposable development only; exact `true` works only with `NODE_ENV=development`. Always off in production. |
-| `KAFKA_BROKERS`                      | Optional comma-separated brokers; defaults to `localhost:9092`.                                             |
-| `KAFKA_CLIENT_ID`                    | Optional; legacy compatibility default `agentweave-orchestrator`.                                           |
-| `GATEWAY_URL`                        | Optional; defaults to `http://127.0.0.1:3000` (explicit IPv4 loopback; never localhost address-family dependent). |
-| `ORCHESTRATOR_AGENT_NAMES`           | Optional; defaults to `code-reviewer,observability`.                                                        |
-| `ORCHESTRATOR_RESULT_TOPICS`         | Optional comma-separated additional result topics; empty by default.                                        |
+| `POSTGRES_HOST`, `POSTGRES_PORT`     | Optional; default `localhost`, `5432`.                                                                                                                                                                                           |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD` | Optional; both default to `postgres` for local development. Supply secrets outside source control.                                                                                                                               |
+| `POSTGRES_DB`                        | Optional; uses the persistent compatibility default recorded in `.env.example`.                                                                                                                                                  |
+| `TENVYR_DB_MIGRATIONS`               | Optional; migrations run by default. Exact `false` disables startup migration execution.                                                                                                                                         |
+| `TENVYR_DB_SYNCHRONIZE`              | Disposable development only; exact `true` works only with `NODE_ENV=development`. Always off in production.                                                                                                                      |
+| `KAFKA_BROKERS`                      | Optional comma-separated brokers; defaults to `localhost:9092`.                                                                                                                                                                  |
+| `KAFKA_CLIENT_ID`                    | Optional; legacy compatibility default `agentweave-orchestrator`.                                                                                                                                                                |
+| `GATEWAY_URL`                        | Optional; defaults to `http://127.0.0.1:3000` (explicit IPv4 loopback; never localhost address-family dependent).                                                                                                                |
+| `ORCHESTRATOR_AGENT_NAMES`           | Optional; defaults to `code-reviewer,observability`.                                                                                                                                                                             |
+| `ORCHESTRATOR_RESULT_TOPICS`         | Optional comma-separated additional result topics; empty by default.                                                                                                                                                             |
 
 HTTP agent transport is disabled when `AGENT_TRANSPORT_CONFIG` is absent or blank. When present, it must be a JSON object keyed by exact agent name. Each entry selects `kafka` or `http`; HTTP entries contain the submit URL, time/size limits, and names of environment variables holding bearer/callback secrets.
 
@@ -72,21 +75,25 @@ configuration (Kafka default) and are never rewritten.
 
 ## Local executor host (M3-S3)
 
-`@tenvyr/local-executor-host` is a trusted-code-only local process executor
+The default Java/Go executor host is a trusted-code-only local process executor
 (no sandbox; run only commands you trust). Point an agent's
 `AGENT_TRANSPORT_CONFIG` entry at its `http://127.0.0.1:<port>/v1/runs`
 submit URL with a bearer token and shared callback key/secret, exactly like
 any other HTTP agent.
 
-| Variable                                       | Requirement and default                                                                                        |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `EXECUTOR_HOST_AGENTS`                         | Required JSON: agent name -> `{ command, args?, cwd?, env?, secrets?, wallTimeMs, maxStdoutBytes, maxStderrBytes, port, bearerTokenEnv }`. `command` must be an absolute path; `cwd` must resolve inside the allowlisted root; `env`/`secrets` map child variable names to host environment names (secret VALUES are never configured or logged). |
-| `EXECUTOR_HOST_ALLOWED_ROOT`                   | Required absolute working-root allowlist.                                                                      |
-| `EXECUTOR_HOST_STATE_DIR`                      | Required directory for per-agent run state files (orphan termination on restart).                              |
-| `EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS`       | Required comma-separated callback origins (the Orchestrator callback base URL).                                |
-| `EXECUTOR_HOST_CALLBACK_KEYS`                  | Required JSON `{ keyId: secret }` matching the agent's `callbackAuthentication`.                               |
-| `EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE`        | Optional; only exact `true` permits HTTP callback URLs. Default HTTPS-only.                                    |
-| `TENVYR_EXECUTOR_HOST`                         | Optional. Exact `rust` makes `pnpm dev` launch `services/local-executor-host-rs` instead of the Node host. Default remains TypeScript. |
+| Variable                                 | Requirement and default                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EXECUTOR_HOST_AGENTS`                   | Optional JSON for static mode: agent name -> `{ command, args?, cwd, env?, secrets?, wallTimeMs, maxStdoutBytes, maxStderrBytes, port, bearerTokenEnv }`. Absent selects the immutable database connection bridge. `command` must be an absolute path; `cwd` must resolve inside the allowlisted root; `env`/`secrets` map child variable names to host environment names (secret VALUES are never configured or logged). |
+| `EXECUTOR_HOST_ALLOWED_ROOT`             | Existing working-root allowlist; defaults to `TENVYR_WORKSPACE_ROOT`, then the OS temporary directory.                                                                                                                                                                                                                                                                                                                    |
+| `EXECUTOR_HOST_STATE_DIR`                | Per-agent state directory; defaults to `tenvyr-host-state` under the OS temporary directory.                                                                                                                                                                                                                                                                                                                              |
+| `EXECUTOR_HOST_CALLBACK_ALLOWED_ORIGINS` | Comma-separated callback origins; defaults to localhost/127.0.0.1 on ports 3000/3001.                                                                                                                                                                                                                                                                                                                                     |
+| `EXECUTOR_HOST_CALLBACK_KEYS`            | JSON `{ keyId: secret }` matching callback authentication, or the configured `HTTP_AGENT_CALLBACK_SECRET` / `LOOPBACK_CALLBACK_SECRET` fallback. At least one key is required.                                                                                                                                                                                                                                            |
+| `EXECUTOR_HOST_CALLBACK_ALLOW_INSECURE`  | Optional; only exact `true` permits HTTP callback URLs. Default HTTPS-only.                                                                                                                                                                                                                                                                                                                                               |
+| `TENVYR_EXECUTOR_HOST`                   | Optional. Exact `rust` makes `pnpm dev` launch `services/local-executor-host-rs` instead of the Java/Go host. Java/Go is the default.                                                                                                                                                                                                                                                                                     |
+
+`EXECUTOR_HOST_LAUNCHER` selects the executable Go helper; the host build creates
+`backend/executor-host/native/tenvyr-process-launcher`, and the Docker image sets
+its container path explicitly. The launcher must exist and be executable.
 
 The child environment is exactly the configured `env` allowlist plus
 resolved `secrets` (include `PATH` if the command needs it). The process
@@ -106,12 +113,12 @@ group is killed at the earlier of the invocation deadline and `wallTimeMs`
 
 ## Gateway
 
-| Variable           | Requirement and default                                                 |
-| ------------------ | ----------------------------------------------------------------------- |
-| `GATEWAY_PORT`     | Optional; defaults to `3000`. The service does not read generic `PORT`. |
-| `GATEWAY_HOST`     | Optional; defaults to `127.0.0.1` (IPv4 loopback). Compose/self-hosted set `0.0.0.0` so Docker published ports work; host-side publish stays loopback. |
+| Variable           | Requirement and default                                                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GATEWAY_PORT`     | Optional; defaults to `3000`. The service does not read generic `PORT`.                                                                                                 |
+| `GATEWAY_HOST`     | Optional; defaults to `127.0.0.1` (IPv4 loopback). Compose/self-hosted set `0.0.0.0` so Docker published ports work; host-side publish stays loopback.                  |
 | `CORS_ORIGIN`      | Optional comma-separated allow-list of explicit origins; shared with the Orchestrator semantics. Unset means NO HTTP CORS. A literal `*` is REJECTED and fails startup. |
-| `ORCHESTRATOR_URL` | Optional; defaults to `http://127.0.0.1:3001` (explicit IPv4 loopback). |
+| `ORCHESTRATOR_URL` | Optional; defaults to `http://127.0.0.1:3001` (explicit IPv4 loopback).                                                                                                 |
 
 ### Local boundary and CORS (Gateway + Orchestrator)
 

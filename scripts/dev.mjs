@@ -27,8 +27,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { readFileSync, readdirSync, statSync, watch } from "node:fs";
 import { parseEnv } from "node:util";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -289,12 +289,15 @@ function startChild(child, io) {
 
 /** Build the child manifest from repo truth. */
 export function buildManifest(env = process.env) {
+  const backend = env.TENVYR_BACKEND ?? "java";
+  if (!["java", "node"].includes(backend)) throw new Error("TENVYR_BACKEND must be java or node");
   const portOf = (service) => Number(env[service.portEnv] ?? service.defaultPort);
   const orchestratorService = DEFAULT_SERVICES.find((s) => s.name === "orchestrator");
   const hostService = DEFAULT_SERVICES.find((s) => s.name === "host");
 
   const orchestratorPort = orchestratorService ? portOf(orchestratorService) : 3001;
   const hostPort = hostService ? portOf(hostService) : 3002;
+  const gatewayPort = portOf(DEFAULT_SERVICES.find((s) => s.name === "gateway"));
 
   const bearerToken =
     env.HTTP_AGENT_BEARER_TOKEN ??
@@ -319,6 +322,8 @@ export function buildManifest(env = process.env) {
 
   const sharedDevEnv = {
     ...env,
+    ORCHESTRATOR_URL: env.ORCHESTRATOR_URL ?? `http://127.0.0.1:${orchestratorPort}`,
+    GATEWAY_URL: env.GATEWAY_URL ?? `http://127.0.0.1:${gatewayPort}`,
     TENVYR_LOG_LEVEL: env.TENVYR_LOG_LEVEL ?? "normal",
     HTTP_AGENT_BEARER_TOKEN: bearerToken,
     EXECUTOR_HOST_BEARER_TOKEN: bearerToken,
@@ -340,7 +345,11 @@ export function buildManifest(env = process.env) {
   };
 
   const services = DEFAULT_SERVICES.map((service) => {
-    const spec = service.name === "host" ? hostServiceSpec(env) ?? service : service;
+    let spec = service.name === "host" ? hostServiceSpec(env) ?? service : service;
+    if (backend === "java" && spec.name !== "workbench" && spec.command !== "cargo") {
+      const modules = { orchestrator: "control-plane", gateway: "gateway", host: "executor-host" };
+      spec = { ...spec, dir: ".", command: "sh", args: [join(ROOT, "scripts/java-backend.sh"), modules[spec.name]] };
+    }
     const port = portOf(spec);
     return {
       ...spec,
@@ -351,12 +360,14 @@ export function buildManifest(env = process.env) {
       // summaries may still display localhost.
       url: `http://127.0.0.1:${port}`,
       command: spec.command ?? "pnpm",
-      args: spec.args ?? ["run", spec.script],
+      args: spec.args ?? (spec.name === "workbench" ? ["exec", "next", "dev", "-p", String(port)] : ["run", spec.script]),
       cwd: join(ROOT, spec.dir),
       env: sharedDevEnv,
     };
   });
-  return { services, infraServices: INFRA_SERVICES, root: ROOT };
+  return { services, infraServices: INFRA_SERVICES, root: ROOT,
+    ...(backend === "java" ? { prepare: { name: "backend-build", label: "Backend build", command: "sh", args: [join(ROOT, "scripts/backend-build.sh")], cwd: ROOT, env: sharedDevEnv } } : {}),
+  };
 }
 
 function composeContainerNames(root) {
@@ -412,6 +423,7 @@ export async function runLauncher(
   let failed = false;
   let terminationSignal = null;
   let shutdownStarted = false;
+  let retainInfrastructure = false;
   const children = [];
   const states = new Map();
   const serviceByName = new Map(manifest.services.map((s) => [s.name, s]));
@@ -463,7 +475,7 @@ export async function runLauncher(
       }
     }
     // Infra teardown (parity with the legacy dev.sh).
-    if ((manifest.infraServices ?? []).length > 0) {
+    if (!retainInfrastructure && (manifest.infraServices ?? []).length > 0) {
       spawnSync("docker", ["compose", "down"], { cwd: manifest.root, stdio: "ignore", timeout: 60_000 });
     }
     io.write(
@@ -493,6 +505,8 @@ export async function runLauncher(
   const onSignal = (signal) => {
     void requestShutdown("user", signal);
   };
+  const onReload = () => { retainInfrastructure = true; void requestShutdown("reload"); };
+  process.on("SIGUSR2", onReload);
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
@@ -519,6 +533,21 @@ export async function runLauncher(
     if (io.isInteractive) {
       for (const line of bannerText(color)) io.write(line + "\n");
       io.write("\n  Starting development environment...\n\n");
+    }
+
+    if (manifest.prepare) {
+      log("INFO", "Building Java/Go backend...");
+      const build = startChild(manifest.prepare, io);
+      children.push(build);
+      const result = await build.exitPromise;
+      if (abort()) return abortReturn();
+      if (result.code !== 0) {
+        failed = true;
+        log("ERROR", "Backend build failed; fix the reported build error before starting services");
+        await requestShutdown("failure");
+        return { exitCode: exitCodeFor(), ready: false };
+      }
+      children.splice(children.indexOf(build), 1);
     }
 
     /* --- infrastructure --- */
@@ -713,6 +742,7 @@ export async function runLauncher(
 
     return { exitCode: exitCodeFor(), ready: state === "ready" && !failed };
   } finally {
+    process.removeListener("SIGUSR2", onReload);
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
   }
@@ -724,8 +754,65 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (process.env.POSTGRES_PORT === undefined) {
     process.env.POSTGRES_PORT = process.env.TENVYR_POSTGRES_PORT ?? "5432";
   }
-  const manifest = buildManifest();
-  runLauncher(manifest).then(({ exitCode }) => {
-    process.exitCode = exitCode;
-  });
+  if ((process.env.TENVYR_BACKEND ?? "java") === "java" && process.env.TENVYR_DEV_WATCH !== "0" && !process.env.TENVYR_DEV_WATCH_CHILD) {
+    const modules = ["platform", "control-plane", "gateway", "agents", "worker", "executor-host", "operations"];
+    const native = "backend/executor-host/native";
+    const paths = ["backend/pom.xml", "scripts/dev.mjs", "scripts/backend-build.sh", "scripts/java-backend.sh", "skills",
+      ...modules.flatMap((module) => [`backend/${module}/pom.xml`, `backend/${module}/src/main`]),
+      ...readdirSync(join(ROOT, native)).filter((file) => file.endsWith(".go") || file === "go.mod").map((file) => `${native}/${file}`)];
+    let child, timer, restarting = false, stopping = false;
+    const watchers = [];
+    let cleaned = false;
+    const closeWatchers = () => { clearTimeout(timer); for (const watcher of watchers) watcher.close(); };
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      closeWatchers(); process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", terminate);
+      // A user can stop during the gap between reload children, when the old
+      // child deliberately retained infrastructure. Final cleanup always owns it.
+      spawnSync("docker", ["compose", "down"], { cwd: ROOT, stdio: "ignore", timeout: 60_000 });
+    };
+    const launch = () => {
+      child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: ROOT, stdio: "inherit", env: { ...process.env, TENVYR_DEV_WATCH_CHILD: "1" },
+      });
+      child.once("error", (error) => { cleanup(); console.error(error.message); process.exitCode = 1; });
+      child.once("exit", (code, signal) => {
+        child = undefined;
+        if (!stopping && restarting) { clearTimeout(timer); restarting = false; launch(); }
+        else { cleanup(); process.exitCode = code ?? (["SIGINT", "SIGTERM"].includes(signal) ? 0 : 1); }
+      });
+    };
+    const changed = () => {
+      if (stopping) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        restarting = true;
+        console.log("Backend source changed; rebuilding after graceful service shutdown...");
+        if (child) child.kill("SIGUSR2");
+        else { restarting = false; launch(); }
+      }, 250);
+    };
+    const interrupt = () => { stopping = true; closeWatchers(); child?.kill("SIGINT"); };
+    const terminate = () => { stopping = true; closeWatchers(); child?.kill("SIGTERM"); };
+    // File watches on macOS can report neighboring build activity. Require a
+    // changed timestamp/size, and watch parents so atomic editor saves stay visible.
+    for (const path of paths.map((path) => join(ROOT, path))) {
+      if (statSync(path).isDirectory()) watchers.push(watch(path, { recursive: true }, changed));
+      else {
+        const stamp = () => { try { const value = statSync(path); return `${value.mtimeMs}:${value.size}`; } catch { return "missing"; } };
+        let previous = stamp();
+        watchers.push(watch(dirname(path), (_event, file) => {
+          if (file !== null && String(file) !== basename(path)) return;
+          const next = stamp();
+          if (next !== previous) { previous = next; changed(); }
+        }));
+      }
+    }
+    process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
+    launch();
+  } else {
+    const manifest = buildManifest();
+    runLauncher(manifest).then(({ exitCode }) => { process.exitCode = exitCode; });
+  }
 }

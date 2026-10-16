@@ -35,6 +35,8 @@ prose. The conflict must still be corrected rather than ignored.
 
 ## Current architecture
 
+- [Java and Go backend and acceptance checks](development/java-backend.md)
+
 - [System overview](architecture/overview.md)
 - [Control plane](architecture/control-plane.md)
 - [Coordinator loop domain](architecture/coordination-loop.md)
@@ -103,8 +105,7 @@ Developer tooling is not a Tenvyr production runtime feature.
   the [PP1 coding-agent wedge slice](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md) ([report](plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/IMPLEMENTATION_REPORT.md)),
   the [P3 runtime harness optimization + context efficiency slice (implemented; plan archived)](archive/plans/tenvyr-productization-roadmap/P3-runtime-harness-optimization/GOAL.md),
   the [polyglot HTTP workers slice](plans/active/polyglot-http-workers/GOAL.md)
-  (Java Worker SDK, C++ worker, truthful Rust host — TypeScript control
-  plane stays),
+  (Java Worker SDK, C++ worker, truthful Rust host; original slice scope),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take

@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-09-15
+last_verified: 2026-10-16
 sources:
   - package.json
   - README.md
@@ -74,7 +74,7 @@ Xem [tổng quan hệ thống](architecture/overview.md) để biết bức tran
 
 - Node.js 22+ với Corepack và pnpm 9 (được chốt trong package metadata)
 - Python 3.11+ (cho Python Worker SDK và ví dụ)
-- JDK 17 và Maven (cho Java Agent Runner)
+- JDK 17+, Maven và Go 1.23+ (backend Java, Agent Runner và bộ trợ giúp tiến trình Go)
 - Docker với Docker Compose v2 (override `no-host-ports` cần Compose 2.24+)
 
 ```bash
@@ -151,7 +151,7 @@ không chạy được. Nếu trước đó bạn đã khởi động toàn bộ
 ứng dụng của nó đang giữ cổng host mà các dịch vụ watch cần.
 
 `pnpm dev` bao phủ đường HTTP Worker (orchestrator + gateway + Local Executor Host + dashboard).
-Host mặc định là TypeScript; `TENVYR_EXECUTOR_HOST=rust pnpm dev` chạy host Rust bổ sung (cần Cargo). Xem [local executor host](architecture/executors/local-executor-host.md).
+Host mặc định chạy Java với bộ trợ giúp tiến trình Go; `TENVYR_EXECUTOR_HOST=rust pnpm dev` chạy host Rust bổ sung (cần Cargo). Xem [local executor host](architecture/executors/local-executor-host.md).
 Các agent đường Kafka (`pnpm dev:reviewer`, `pnpm dev:observability`) không
 được bao gồm vì client Kafka chạy trên host không kết nối được broker Compose
 (nó quảng bá hostname nội bộ docker) — hãy chạy các agent đó bên trong toàn bộ
@@ -317,7 +317,6 @@ Tenvyr định tuyến lưu lượng suy luận — chuỗi luôn là
 - **OpenCode** — quản lý provider hạng nhất. Mỗi provider một hàng (provider
   id, Connected / Not connected, **Models** / **Test** cho provider đã kết
   nối). Provider chưa kết nối có nút **[Connect]**:
-
   - **Phương thức OAuth** — chọn method, **Start Authorization**: Tenvyr
     mở trang ủy quyền của chính provider. Hoàn tất trên cửa sổ đó, rồi
     **Complete** trong CÙNG phiên: Tenvyr nhờ runtime chứng minh kết nối
@@ -332,6 +331,7 @@ Tenvyr định tuyến lưu lượng suy luận — chuỗi luôn là
     **Check Again** — thông tin xác thực không bao giờ đi qua Tenvyr;
     file auth không bao giờ bị đọc và output auth thô không bao giờ
     được lưu.
+
 - **Codex** — một provider ngầm định duy nhất (OpenAI); trạng thái xác thực
   từ probe onboarding runtime, đăng nhập qua `codex login`.
 - **Claude Code** — một provider ngầm định duy nhất (Anthropic); trạng thái
@@ -525,7 +525,7 @@ Quy tắc vận hành quan trọng:
   quyền (`backups/.maintenance.lock`). Thao tác thứ hai chạy song song thất bại
   nhanh. Khóa có PID chủ đã chết **không bao giờ được tự thu hồi** — các tiến
   trình con docker/DB của chủ có thể vẫn còn sống. Hãy xóa tường minh bằng
-  `node scripts/self-hosted/maintenance.mjs --clear-stale-lock` chỉ sau khi xác
+  `sh scripts/java-backend.sh operations maintenance --clear-stale-lock` chỉ sau khi xác
   nhận không còn tiến trình bảo trì hay hậu duệ nào đang chạy.
 - **Backup được xác minh trước khi được gọi là backup**: PASS nghĩa là manifest
   đã được chứng minh dựa trên một lần restore cô lập của đúng dump đó.
@@ -570,7 +570,7 @@ Giao thức đầy đủ, bảng quyết định và runbook:
 | Callback Worker bị từ chối                               | `TENVYR_CALLBACK_*` trong Worker phải khớp `HTTP_AGENT_CALLBACK_KEYS`/`HTTP_AGENT_CALLBACK_BASE_URL` của orchestrator; callback HTTP cần cờ insecure đúng `true` ở cả hai phía và origin phải khớp chính xác.                                                                                                                                                        |
 | Attempt lỗi `EXECUTOR_CONNECTION_REVOKED`                | Kết nối bị thu hồi sau khi attempt được xếp hàng; cấu hình lại hoặc tạo lại run (không fallback tự động — theo thiết kế).                                                                                                                                                                                                                                            |
 | `EXECUTOR_PROFILE_MISMATCH`                              | Profile transport của agent bị xoay sau khi claim; retry quy trình tạo attempt mới với descriptor mới.                                                                                                                                                                                                                                                               |
-| "maintenance operation already active"                   | Một backup/restore khác đang giữ khóa bảo trì độc quyền; chờ nó xong hoặc (sau khi xác nhận không còn hậu duệ sống) chạy `node scripts/self-hosted/maintenance.mjs --clear-stale-lock`.                                                                                                                                                                              |
+| "maintenance operation already active"                   | Một backup/restore khác đang giữ khóa bảo trì độc quyền; chờ nó xong hoặc (sau khi xác nhận không còn hậu duệ sống) chạy `sh scripts/java-backend.sh operations maintenance --clear-stale-lock`.                                                                                                                                                                     |
 | Promotion bị gián đoạn                                   | Chạy `pnpm self-hosted:restore <backup> --reconcile` trước — không bao giờ tiếp tục mù quáng.                                                                                                                                                                                                                                                                        |
 | Lỗi migration khi khởi động                              | Kiểm tra `TENVYR_DB_MIGRATIONS` và `TENVYR_DB_SYNCHRONIZE` (sync chỉ dành cho môi trường phát triển dùng một lần, cần đúng `true` và `NODE_ENV=development`); xem mã lý do tại `/health`.                                                                                                                                                                            |
 | Run với provider thật thất bại                           | Key thiếu/placeholder hoặc lỗi provider dẫn đến `fail` (hiển thị rõ, theo thiết kế). Export đúng key và model, hoặc dùng `LLM_FAILURE_MODE=mock` cho fallback có nhãn.                                                                                                                                                                                               |

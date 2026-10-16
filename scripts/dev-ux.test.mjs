@@ -363,8 +363,8 @@ const waitUntil = async (predicate, timeoutMs, label) => {
 /** Long-running fake service: writes its pid, never serves health. */
 const lingerChild = (markerFile, pidFile) =>
   `const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(markerFile)}, "up");
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+fs.writeFileSync(${JSON.stringify(markerFile)}, "up");
 setInterval(() => {}, 1000);`;
 
 /** Fake service with a health server that stays up. */
@@ -600,6 +600,34 @@ describe("final closure: env file semantics", () => {
 });
 
 describe("dev launcher dynamic bridge composition (buildManifest)", () => {
+  test("a failed backend preparation never starts a required service", async () => {
+    let output = "";
+    const manifest = {
+      root: process.cwd(), infraServices: [],
+      prepare: { name: "backend-build", label: "Backend build", command: process.execPath, args: ["-e", "process.exit(7)"], cwd: process.cwd(), env: process.env },
+      services: [{ name: "orchestrator", command: process.execPath, args: ["-e", "console.log('SERVICE_MUST_NOT_START')"], cwd: process.cwd(), env: process.env }],
+    };
+    const result = await runLauncher(manifest, { write: (text) => { output += text; }, color: false, mode: "normal", isInteractive: false });
+    assert.equal(result.ready, false);
+    assert.equal(result.exitCode, 1);
+    assert.ok(!output.includes("SERVICE_MUST_NOT_START"));
+  });
+  test("Java mode uses real backend entrypoints and keeps Rust selectable", () => {
+    const manifest = buildManifest({ ORCHESTRATOR_PORT: "4101", GATEWAY_PORT: "4100" });
+    for (const [name, module] of [["orchestrator", "control-plane"], ["gateway", "gateway"], ["host", "executor-host"]]) {
+      const service = manifest.services.find((s) => s.name === name);
+      assert.equal(service.command, "sh");
+      assert.match(service.args[0], /scripts\/java-backend\.sh$/);
+      assert.equal(service.args[1], module);
+      assert.equal(service.env.ORCHESTRATOR_URL, "http://127.0.0.1:4101");
+      assert.equal(service.env.GATEWAY_URL, "http://127.0.0.1:4100");
+    }
+    assert.match(manifest.prepare.args[0], /scripts\/backend-build\.sh$/);
+    assert.deepEqual(manifest.services.find((service) => service.name === "workbench").args, ["exec", "next", "dev", "-p", "4000"]);
+    assert.equal(buildManifest({ PORT: "54000" }).services.find((service) => service.name === "workbench").args.at(-1), "54000");
+    assert.equal(buildManifest({ TENVYR_BACKEND: "java", TENVYR_EXECUTOR_HOST: "rust" }).services.find((s) => s.name === "host").command, "cargo");
+    assert.throws(() => buildManifest({ TENVYR_BACKEND: "unknown" }), /TENVYR_BACKEND/);
+  });
   test("DEFAULT PORTS: composes loopback bridge environment for orchestrator and host", () => {
     const manifest = buildManifest({});
     const orch = manifest.services.find((s) => s.name === "orchestrator");

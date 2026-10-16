@@ -3,7 +3,7 @@ title: "Single-owner self-hosted deployment"
 status: current
 audience:
   - operator
-last_verified: 2026-08-12
+last_verified: 2026-10-15
 sources:
   - docker-compose.self-hosted.yml
   - docker-compose.yml
@@ -18,11 +18,11 @@ One owner controls one host/private environment, operating one Tenvyr
 control plane and PostgreSQL authority with configured runtime connections.
 The supported profile is `docker-compose.self-hosted.yml` and pins:
 
-| Component  | Supported version            | Binding           | Volume                    |
-| ---------- | ---------------------------- | ----------------- | ------------------------- |
-| PostgreSQL | `postgres:15-alpine`         | `127.0.0.1:5433`  | `tenvyr_postgres_data`    |
-| Orchestrator | built from this repo, release tag `TENVYR_VERSION` (vMAJOR.MINOR.PATCH) | `127.0.0.1:3001` | — (DB is authority) |
-| Gateway    | built from this repo, release tag `TENVYR_VERSION` | `127.0.0.1:3000` | —            |
+| Component    | Supported version                                                       | Binding          | Volume                 |
+| ------------ | ----------------------------------------------------------------------- | ---------------- | ---------------------- |
+| PostgreSQL   | `postgres:15-alpine`                                                    | `127.0.0.1:5433` | `tenvyr_postgres_data` |
+| Orchestrator | built from this repo, release tag `TENVYR_VERSION` (vMAJOR.MINOR.PATCH) | `127.0.0.1:3001` | — (DB is authority)    |
+| Gateway      | built from this repo, release tag `TENVYR_VERSION`                      | `127.0.0.1:3000` | —                      |
 
 ## Deployment identity (one documented meaning per key)
 
@@ -47,8 +47,7 @@ Trust: trusted host administration and trusted configured local runtimes.
 This is NOT tenant isolation, a security sandbox, HA, or internet-safe by
 default. Services bind loopback unless the operator explicitly configures a
 reviewed private reverse proxy. Kafka/Redis/Java services are included only
-where the chosen profile needs them: the HTTP Worker path needs none of
-them; the self-hosted profile ships PostgreSQL + Orchestrator + Gateway.
+where the chosen profile needs them: the HTTP Worker path needs no Kafka/Redis or separate Java runner; the self-hosted profile ships PostgreSQL + Orchestrator + Gateway.
 
 ## Data inventory (what every backup must contain)
 
@@ -76,6 +75,17 @@ explicitly (runtime-owned machine state).
 - Local CLI auth is never backed up; re-authenticate after restore or host
   migration.
 
+## Backend and maintenance runtime
+
+The supported profile builds Java 17 control-plane/gateway images from
+`backend/Dockerfile`. Existing network names, database/volume identity, ports,
+migration ledger and callback protocol remain stable. Build the host maintenance
+CLI with `pnpm backend:build` (JDK 17+, Maven and Go 1.23+) before using the
+`self-hosted:*` commands. These commands execute Java directly. The Docker
+`operations` target also contains Java plus the Docker CLI/Compose plugin;
+it needs the Docker socket and the repository/deployment/backup paths mounted
+at their original absolute host paths when operating containers.
+
 ## Bootstrap (slice 2)
 
 `pnpm self-hosted:preflight` validates the host (docker, ports, disk,
@@ -92,17 +102,16 @@ operator fills values from their own secret store. No installer framework.
   authority-swap database names). A second concurrent operation FAILS FAST
   with "maintenance operation already active" — it never interleaves
   destructive operations. STALE-OWNER POLICY (fail closed): a lock whose
-  recorded owner PID is dead is NEVER auto-reclaimed — a dead JS owner
+  recorded owner PID is dead is NEVER auto-reclaimed — a dead maintenance owner
   does not prove that its external maintenance children (docker exec /
   pg_dump / pg_restore / psql) are dead, so reclaiming could overlap live
   database work. The stale state DENIES acquisition with bounded operator
   instructions, and the operator clears the lock EXPLICITLY
-  (`node scripts/self-hosted/maintenance.mjs --clear-stale-lock`) only
+  (`sh scripts/java-backend.sh operations maintenance --clear-stale-lock`) only
   after confirming no maintenance process or docker/DB descendant is
   running (the clear refuses a live or unreadable owner). The
   verified-backup operation runs IN THE LOCK OWNER'S PROCESS (`upgrade`
-  calls backup.mjs's exported `runVerifiedBackup` while holding the
-  lock): there is no delegated child, so nothing capable of using the
+  calls Java `Operations.backup()` while holding the lock): there is no delegated child, so nothing capable of using the
   shared maintenance resources can survive the owner's death and overlap
   a new owner.
 - Maintenance-state isolation: all maintenance/backup state (lock,
@@ -170,7 +179,7 @@ operator fills values from their own secret store. No installer framework.
 - CRASH RECOVERY (durable journal): promotion writes a durable phase
   journal (`backups/.recovery-journal.json`) BEFORE every destructive
   database step: `verify-done -> quiescing -> swap-active-to-safety ->
-  swap-verified-to-active -> post-gates -> complete`. A process death at
+swap-verified-to-active -> post-gates -> complete`. A process death at
   ANY phase leaves the journal + the database names as the unambiguous
   record of what happened; the NEXT recovery invocation (drill, promote,
   or `--reconcile`) reconciles the observed state BEFORE any destructive

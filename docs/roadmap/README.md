@@ -42,9 +42,11 @@ Product Pivot 1
 ```
 
 Planned/next work after the deterministic vertical:
+
 - [PP1 slice documents](../plans/active/tenvyr-productization-roadmap/PP1-coding-agent-wedge/GOAL.md)
 - [Polyglot HTTP workers](../plans/active/polyglot-http-workers/GOAL.md)
-  (Java SDK + C++ worker + truthful Rust host; TypeScript control plane stays)
+  (Java SDK + C++ worker + truthful Rust host; original slice scope — default
+  backend selection is now owned by the Java/Go migration)
 - real-runtime manual dogfood (Codex / Claude Code / OpenCode; opt-in, no
   paid credentials in CI) — the Technical Lead selects the next feature
   only after that measured evidence.

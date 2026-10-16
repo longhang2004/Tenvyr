@@ -14,6 +14,11 @@ sources:
 
 # Goal — Polyglot HTTP workers
 
+> Runtime update: statements below about keeping TypeScript as the default
+> describe this slice's original scope. The later Java/Go backend migration
+> owns current default backend/host selection; see
+> [backend development](../../../development/java-backend.md).
+
 Slice documents: [PLAN](PLAN.md) · [SPEC](SPEC.md) · [VERIFY](VERIFY.md) · [IMPLEMENTATION REPORT](IMPLEMENTATION_REPORT.md)
 
 Portfolio claim: Tenvyr stays a **language-neutral control plane**. Java,

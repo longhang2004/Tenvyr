@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-09-15
+last_verified: 2026-10-16
 sources:
   - package.json
   - README.md
@@ -75,7 +75,7 @@ Java Runner, and HTTP → Python/TypeScript Workers → signed callback. See the
 
 - Node.js 22+ with Corepack and pnpm 9 (pinned by package metadata)
 - Python 3.11+ (for the Python Worker SDK and example)
-- JDK 17 and Maven (for the Java Agent Runner)
+- JDK 17+, Maven and Go 1.23+ (Java backend, Agent Runner and native process helper)
 - Docker with Docker Compose v2 (the `no-host-ports` override needs Compose 2.24+)
 
 ```bash
@@ -152,7 +152,7 @@ cleanup. If you previously started the full Compose stack
 hold the host ports the watch services need.
 
 `pnpm dev` covers the HTTP Worker path (orchestrator + gateway + Local Executor Host + dashboard).
-The default host is TypeScript; `TENVYR_EXECUTOR_HOST=rust pnpm dev` launches the additive Rust host instead (requires Cargo). See [local executor host](architecture/executors/local-executor-host.md).
+The default host runs Java with a Go process helper; `TENVYR_EXECUTOR_HOST=rust pnpm dev` launches the additive Rust host instead (requires Cargo). See [local executor host](architecture/executors/local-executor-host.md).
 The Kafka-path agents (`pnpm dev:reviewer`, `pnpm dev:observability`) are not
 included because a host-run Kafka client cannot reach the Compose broker (it
 advertises its docker-internal hostname) — run those agents inside the full
@@ -302,7 +302,6 @@ traffic — the chain stays `Tenvyr -> Executor -> Agent Runtime -> Provider`.
 - **OpenCode** — first-class provider management. One row per provider
   (provider id, Connected / Not connected, **Models** / **Test** per
   connected provider). A not-connected provider offers **[Connect]**:
-
   - **OAuth-capable methods** — pick the auth method, **Start
     Authorization**: Tenvyr opens the provider's own authorization page.
     Complete it in that provider window, then **Complete** in the SAME
@@ -317,6 +316,7 @@ traffic — the chain stays `Tenvyr -> Executor -> Agent Runtime -> Provider`.
     `opencode auth login --provider <id>` command with **Copy Command** /
     **Check Again** — credentials never pass through Tenvyr; the auth file
     is never read and raw auth output is never persisted.
+
 - **Codex** — a single implied provider (OpenAI); auth status from the
   runtime onboarding probe, sign-in via `codex login`.
 - **Claude Code** — a single implied provider (Anthropic); auth status
@@ -509,7 +509,7 @@ Operational rules that matter:
   lock (`backups/.maintenance.lock`). A second concurrent operation fails
   fast. A lock whose owner PID is dead is **never auto-reclaimed** — the
   owner's docker/DB descendants may still be alive. Clear it explicitly with
-  `node scripts/self-hosted/maintenance.mjs --clear-stale-lock` only after
+  `sh scripts/java-backend.sh operations maintenance --clear-stale-lock` only after
   confirming no maintenance process or descendant is running.
 - **Backups are verified before they are labeled backups**: a PASS means the
   manifest was proven against an isolated restore of that exact dump.
@@ -551,7 +551,7 @@ Full protocol, decision table, and runbooks:
 | Worker callbacks rejected                                  | `TENVYR_CALLBACK_*` in the Worker must match the orchestrator's `HTTP_AGENT_CALLBACK_KEYS`/`HTTP_AGENT_CALLBACK_BASE_URL`; HTTP callbacks need the exact `true` insecure flags on both sides, and the callback origin must match exactly.                                                                                                                                                         |
 | Attempt fails with `EXECUTOR_CONNECTION_REVOKED`           | The connection was revoked after the attempt was queued; reconfigure or recreate the run (no automatic fallback by design).                                                                                                                                                                                                                                                                       |
 | `EXECUTOR_PROFILE_MISMATCH`                                | The agent's transport profile was rotated after the claim; workflow retry creates a fresh attempt with a new descriptor.                                                                                                                                                                                                                                                                          |
-| "maintenance operation already active"                     | Another backup/restore holds the exclusive maintenance lock; wait for it or (after confirming no live descendants) run `node scripts/self-hosted/maintenance.mjs --clear-stale-lock`.                                                                                                                                                                                                             |
+| "maintenance operation already active"                     | Another backup/restore holds the exclusive maintenance lock; wait for it or (after confirming no live descendants) run `sh scripts/java-backend.sh operations maintenance --clear-stale-lock`.                                                                                                                                                                                                    |
 | Interrupted promotion                                      | Run `pnpm self-hosted:restore <backup> --reconcile` first — never resume blindly.                                                                                                                                                                                                                                                                                                                 |
 | Migration error at startup                                 | Check `TENVYR_DB_MIGRATIONS` and `TENVYR_DB_SYNCHRONIZE` (sync is disposable-development only, exact `true` and `NODE_ENV=development` required); inspect `/health` reason codes.                                                                                                                                                                                                                 |
 | Real-provider run fails                                    | Missing/placeholder key or provider error derives `fail` (visible, by design). Export the key and model correctly, or use `LLM_FAILURE_MODE=mock` for a labeled fallback.                                                                                                                                                                                                                         |

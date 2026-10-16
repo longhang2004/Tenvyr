@@ -211,16 +211,16 @@ test("clean checkout is bootable: orchestrator and gateway declare build context
   const orchestratorBlock = COMPOSE.slice(0, orchestratorIndex);
   assert.match(
     orchestratorBlock,
-    /build:\n\s+context: \.\n\s+dockerfile: services\/orchestrator\/Dockerfile\n\s+target: production/,
+    /build:\n\s+context: \.\n\s+dockerfile: backend\/Dockerfile\n\s+target: control-plane/,
   );
   const gatewayBlock = COMPOSE.slice(orchestratorIndex, gatewayIndex);
   assert.match(
     gatewayBlock,
-    /build:\n\s+context: \.\n\s+dockerfile: services\/gateway\/Dockerfile\n\s+target: production/,
+    /build:\n\s+context: \.\n\s+dockerfile: backend\/Dockerfile\n\s+target: gateway/,
   );
   // The Dockerfiles the build contract points at exist.
-  assert.ok(existsSync(join(ROOT, "services", "orchestrator", "Dockerfile")));
-  assert.ok(existsSync(join(ROOT, "services", "gateway", "Dockerfile")));
+  assert.ok(existsSync(join(ROOT, "backend", "Dockerfile")));
+  assert.ok(existsSync(join(ROOT, "backend", "Dockerfile")));
 });
 
 test("upgrade validates target versions executably (supported shape, no downgrade, no no-op)", async () => {
@@ -424,11 +424,11 @@ test("upgrade verifies the RUNNING containers' baked source revision — image t
   );
   // The Dockerfiles bake the build arg into the production image.
   const orchestratorDockerfile = readFileSync(
-    join(ROOT, "services", "orchestrator", "Dockerfile"),
+    join(ROOT, "backend", "Dockerfile"),
     "utf8",
   );
   const gatewayDockerfile = readFileSync(
-    join(ROOT, "services", "gateway", "Dockerfile"),
+    join(ROOT, "backend", "Dockerfile"),
     "utf8",
   );
   for (const dockerfile of [orchestratorDockerfile, gatewayDockerfile]) {
@@ -1968,10 +1968,10 @@ test("package.json wires the advertised upgrade and invariants commands", () => 
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   assert.match(
     pkg.scripts["self-hosted:upgrade"],
-    /scripts\/self-hosted\/upgrade\.mjs/,
+    /scripts\/java-backend\.sh operations upgrade/,
   );
   assert.match(
     pkg.scripts["self-hosted:invariants"],
-    /scripts\/self-hosted\/invariants\.mjs/,
+    /scripts\/java-backend\.sh operations invariants/,
   );
 });

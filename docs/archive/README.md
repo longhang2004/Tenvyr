@@ -21,6 +21,8 @@ an API, operations, or architecture source of truth. Start with the
 
 ## Records
 
+- [Java/Go backend migration closure and original handoff](plans/backend-language-migration/CONTINUE.md)
+
 - [M2A durable artifact references and producer lineage](plans/2026-08-11-tenvyr-m2a-durable-artifact-references.md)
 - [M2B–M2F bounded context, state, artifacts, and lineage program](plans/m2-program/README.md)
 - [M2 independent Tech Lead closure review](reviews/2026-08-11-m2-independent-closure.md)

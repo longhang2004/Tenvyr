@@ -1,0 +1,71 @@
+# Candidate full-stack overlay; default selection changes only after cutover acceptance.
+# Requires Docker Compose 2.24.4+ for !override (same family as the existing port override).
+services:
+  kafka:
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 15s
+      retries: 18
+      start_period: 30s
+  orchestrator:
+    image: tenvyr-orchestrator:${TENVYR_VERSION:-java-candidate}
+    build:
+      dockerfile: backend/Dockerfile
+      target: control-plane
+      args:
+        TENVYR_SOURCE_REVISION: ${TENVYR_SOURCE_REVISION:-unknown}
+    ports: !override
+      - "127.0.0.1:${TENVYR_ORCHESTRATOR_PORT:-3001}:3001"
+    environment:
+      ORCHESTRATOR_RESULT_TOPICS: agentweave.agent.code-reviewer.result,agentweave.agent.observability.result
+      AGENT_TRANSPORT_CONFIG: ${AGENT_TRANSPORT_CONFIG:-}
+      HTTP_AGENT_CALLBACK_BASE_URL: ${HTTP_AGENT_CALLBACK_BASE_URL:-http://127.0.0.1:3001}
+      HTTP_AGENT_ALLOW_INSECURE: ${HTTP_AGENT_ALLOW_INSECURE:-true}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -fsS http://127.0.0.1:3001/health | grep -q ''"ready":true''',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+  gateway:
+    image: tenvyr-gateway:${TENVYR_VERSION:-java-candidate}
+    build:
+      dockerfile: backend/Dockerfile
+      target: gateway
+      args:
+        TENVYR_SOURCE_REVISION: ${TENVYR_SOURCE_REVISION:-unknown}
+    ports: !override
+      - "127.0.0.1:${TENVYR_GATEWAY_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health | grep -q UP"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+  agent-code-reviewer:
+    image: tenvyr-agents:${TENVYR_VERSION:-java-candidate}
+    build:
+      dockerfile: backend/Dockerfile
+      target: agents
+      args:
+        TENVYR_SOURCE_REVISION: ${TENVYR_SOURCE_REVISION:-unknown}
+    command: ["agents", "code-reviewer"]
+    ports: !override
+      - "127.0.0.1:3002:3002"
+  agent-observability:
+    image: tenvyr-agents:${TENVYR_VERSION:-java-candidate}
+    build:
+      dockerfile: backend/Dockerfile
+      target: agents
+      args:
+        TENVYR_SOURCE_REVISION: ${TENVYR_SOURCE_REVISION:-unknown}
+    command: ["agents", "observability"]
+    ports: !override
+      - "127.0.0.1:3003:3003"

@@ -1,0 +1,3 @@
+[
+  "\n      ALTER TABLE \"step_attempts\"\n        ADD COLUMN IF NOT EXISTS \"efficiency\" jsonb\n    "
+]
