@@ -12,6 +12,10 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.lang.reflect.Method;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import org.postgresql.ds.PGSimpleDataSource;
 
 /** Real control composition, signed HTTP Worker and durable restart recovery. */
 public final class ControlIntegrationCheck {
@@ -39,7 +43,19 @@ public final class ControlIntegrationCheck {
             Files.writeString(proof,Json.stringify(Json.object("capsule",authority.capsules.build(id),"capsuleSummary",workbench.capsuleFor(id),"connections",workbench.connectionCards(),"executions",workbench.executionSummaries(1),"projection",workbench.executionProjection(id),"attention",new AttentionService(fixture.db).attention())));
             ProcessBuilder oracle=new ProcessBuilder("node","scripts/backend-capsule-oracle.mjs").directory(root.toFile()).inheritIO();
             oracle.environment().putAll(Map.of("TZ","UTC","TENVYR_TEST_SCHEMA",fixture.schema(),"TENVYR_EXECUTION_ID",id,"TENVYR_JAVA_CAPSULE_PATH",proof.toString()));
-            Process process=oracle.start();if(!process.waitFor(20,TimeUnit.SECONDS)){process.destroyForcibly();throw new AssertionError("Original read-model comparison timed out");}
+            String timeoutEnv = System.getenv("TENVYR_ORACLE_TIMEOUT_SECONDS");
+            int timeoutSeconds = 20;
+            if (timeoutEnv != null && !timeoutEnv.isBlank()) {
+                try {
+                    timeoutSeconds = Integer.parseInt(timeoutEnv.trim());
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("Invalid TENVYR_ORACLE_TIMEOUT_SECONDS: " + timeoutEnv, e);
+                }
+                if (timeoutSeconds < 1 || timeoutSeconds > 180) {
+                    throw new IllegalArgumentException("TENVYR_ORACLE_TIMEOUT_SECONDS must be between 1 and 180: " + timeoutSeconds);
+                }
+            }
+            Process process=oracle.start();if(!process.waitFor(timeoutSeconds,TimeUnit.SECONDS)){process.destroyForcibly();throw new AssertionError("Original read-model comparison timed out");}
             check(process.exitValue()==0,"capsule/hash and read-model parity against original production services");
         }finally{Files.deleteIfExists(proof);}
     }
@@ -80,6 +96,7 @@ public final class ControlIntegrationCheck {
                     check(calls.get()==2,"restart does not reexecute accepted work");
                     worker.stop().join(); // Drain final events before comparing point-in-time captures.
                     assertOriginalReadModels(fixture,id,Path.of(args.length>0?args[0]:"."));
+                    assertRuntimeAndDataSourceSeam(fixture);
                     Main closingControl=control;
                     var closer=java.util.concurrent.Executors.newSingleThreadExecutor();
                     java.util.concurrent.atomic.AtomicReference<Future<?>> closed=new java.util.concurrent.atomic.AtomicReference<>();
@@ -104,6 +121,110 @@ public final class ControlIntegrationCheck {
                 } finally {released.complete(Json.object());control.close();}
             }
         }
+        assertStandaloneRuntimeLifecycle();
         System.out.println("ControlIntegrationCheck: "+checks+" real PostgreSQL/HTTP/restart checks passed");
+    }
+
+    static final class DeliberateRollbackMarker extends RuntimeException {
+        DeliberateRollbackMarker(String msg) { super(msg); }
+    }
+
+    static void assertRuntimeAndDataSourceSeam(IntegrationDatabase fixture) throws Exception {
+        String raw = System.getenv("TEST_DATABASE_URL");
+        if (raw == null) raw = System.getenv("TENVYR_TEST_DATABASE_URL");
+        if (raw == null) throw new IllegalArgumentException("TEST_DATABASE_URL is required");
+
+        String user = System.getenv().getOrDefault("POSTGRES_USER", "postgres");
+        String password = System.getenv().getOrDefault("POSTGRES_PASSWORD", "postgres");
+        String url = raw;
+        if (!raw.startsWith("jdbc:postgresql:")) {
+            URI parsed = URI.create(raw);
+            if (!Set.of("postgres", "postgresql").contains(parsed.getScheme())) throw new IllegalArgumentException("PostgreSQL required");
+            if (parsed.getUserInfo() != null) {
+                String[] auth = parsed.getUserInfo().split(":", 2);
+                user = auth[0];
+                password = auth.length > 1 ? auth[1] : "";
+            }
+            url = "jdbc:postgresql://" + parsed.getHost() + ":" + (parsed.getPort() < 0 ? 5432 : parsed.getPort()) + parsed.getPath();
+        }
+
+        PGSimpleDataSource ds = new PGSimpleDataSource();
+        ds.setUrl(url + (url.contains("?") ? "&" : "?") + "currentSchema=" + fixture.schema() + ",public");
+        ds.setUser(user);
+        ds.setPassword(password);
+
+        Db pooledDb = Db.fromDataSource(ds);
+        check(pooledDb.one("SELECT 1 AS n").path("n").asInt() == 1, "pooled Db query succeeds on PostgreSQL");
+        check(pooledDb.one("SHOW TIME ZONE").path("TimeZone").asText().equalsIgnoreCase("UTC"), "pooled Db connection sets UTC timezone");
+
+        // Dedicated probe table in fixture schema
+        fixture.db.execute("CREATE TABLE " + Db.identifier(fixture.schema()) + ".seam_probe (id uuid primary key, val text)");
+        UUID probeId = UUID.randomUUID();
+
+        try (Connection borrowed = ds.getConnection()) {
+            borrowed.setAutoCommit(false);
+            Db callerDb = Db.on(borrowed);
+            boolean markerCaught = false;
+            try {
+                callerDb.transaction(tx -> {
+                    tx.execute("INSERT INTO " + Db.identifier(fixture.schema()) + ".seam_probe (id, val) VALUES (?, ?)", probeId, "pending-value");
+                    check(tx.exists("SELECT 1 FROM " + Db.identifier(fixture.schema()) + ".seam_probe WHERE id=?", probeId), "inserted probe row visible inside transaction");
+                    throw new DeliberateRollbackMarker("deliberate test rollback marker");
+                });
+            } catch (DeliberateRollbackMarker expected) {
+                markerCaught = true;
+            }
+            check(markerCaught, "exact DeliberateRollbackMarker was thrown and caught");
+            check(!borrowed.isClosed(), "borrowed connection remains open after caller-owned transaction error");
+            borrowed.rollback();
+            check(!fixture.db.exists("SELECT 1 FROM " + Db.identifier(fixture.schema()) + ".seam_probe WHERE id=?", probeId), "countRowsCreatedByRolledBackOperation must be 0 after caller rollback");
+        }
+
+        // Real pooledDb.transaction failure/rollback probe with DeliberateRollbackMarker
+        UUID pooledProbeId = UUID.randomUUID();
+        boolean pooledMarkerCaught = false;
+        try {
+            pooledDb.transaction(tx -> {
+                tx.execute("INSERT INTO " + Db.identifier(fixture.schema()) + ".seam_probe (id, val) VALUES (?, ?)", pooledProbeId, "pooled-rollback-val");
+                check(tx.exists("SELECT 1 FROM " + Db.identifier(fixture.schema()) + ".seam_probe WHERE id=?", pooledProbeId), "inserted row visible in pooled transaction");
+                throw new DeliberateRollbackMarker("pooled deliberate test rollback marker");
+            });
+        } catch (DeliberateRollbackMarker expected) {
+            pooledMarkerCaught = true;
+        }
+        check(pooledMarkerCaught, "exact DeliberateRollbackMarker caught from pooledDb.transaction");
+        check(!fixture.db.exists("SELECT 1 FROM " + Db.identifier(fixture.schema()) + ".seam_probe WHERE id=?", pooledProbeId), "countRowsCreatedByRolledBackOperation must be 0 after pooledDb transaction rollback");
+
+        pooledDb.close();
+        try (Connection checkConn = ds.getConnection()) {
+            check(!checkConn.isClosed(), "dataSourceStillUsableAfterRuntimeClose");
+        }
+
+        Map<String, String> env = Map.of(
+            "GATEWAY_URL", "http://127.0.0.1:1"
+        );
+        ControlPlaneRuntime runtime = new ControlPlaneRuntime(fixture.db, env, msg -> {});
+        check(runtime.pipelines() != null, "runtime.pipelines() accessible");
+        check(runtime.executions() != null, "runtime.executions() accessible");
+        check(runtime.engine() != null, "runtime.engine() accessible");
+        check(runtime.callbacks() != null, "runtime.callbacks() accessible");
+        check(runtime.events() != null, "runtime.events() accessible");
+        runtime.close();
+        check(fixture.db.exists("SELECT 1"), "fixture.db still usable after runtime.close()");
+    }
+
+    static void assertStandaloneRuntimeLifecycle() throws Exception {
+        Map<String, String> env = Map.of("GATEWAY_URL", "http://127.0.0.1:1");
+        try (IntegrationDatabase freshFixture = new IntegrationDatabase()) {
+            Migrator.migrate(freshFixture.db);
+            try (ControlPlaneRuntime freshRuntime = new ControlPlaneRuntime(freshFixture.db, env, msg -> {})) {
+                freshRuntime.startAfterMigrations();
+                freshRuntime.startAfterMigrations();
+                check(freshRuntime.pipelines() != null, "freshRuntime started and pipelines accessible");
+                freshRuntime.close();
+                freshRuntime.close();
+                check(freshFixture.db.exists("SELECT 1"), "freshFixture.db remains usable after freshRuntime.close()");
+            }
+        }
     }
 }

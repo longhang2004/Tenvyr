@@ -1669,6 +1669,42 @@
     ],
     "verification": "real integration and cutover gates; latest published tree verified by required CI"
    }
+  },
+  {
+   "id": "review-runtime-seam",
+   "status": "implemented",
+   "sources": [
+    "backend/platform/src/main/java/io/tenvyr/platform/Db.java",
+    "backend/control-plane/src/main/java/io/tenvyr/control/ControlPlaneRuntime.java",
+    "backend/control-plane/src/main/java/io/tenvyr/control/Main.java"
+   ],
+   "tests": [
+    "backend/platform/src/test/java/io/tenvyr/platform/FoundationCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlCheck.java",
+    "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md"
+   ],
+   "limitations": [
+    "Runtime seam only; business API and worker modules are delivered in subsequent tasks",
+    "Caller owns DataSource lifecycle and Spring transaction boundaries",
+    "Full backend --integration suite deferred to T08 due to Kafka and SDK prerequisites"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/platform/src/main/java/io/tenvyr/platform/Db.java",
+     "backend/control-plane/src/main/java/io/tenvyr/control/ControlPlaneRuntime.java",
+     "backend/control-plane/src/main/java/io/tenvyr/control/Main.java"
+    ],
+    "checks": [
+     "backend/platform/src/test/java/io/tenvyr/platform/FoundationCheck.java",
+     "backend/control-plane/src/test/java/io/tenvyr/control/ControlCheck.java",
+     "backend/control-plane/src/test/java/io/tenvyr/control/ControlIntegrationCheck.java"
+    ],
+    "verification": "pure checks and ControlIntegrationCheck verified by controller; full backend --integration deferred to T08"
+   }
   }
  ],
  "backend_migration": {

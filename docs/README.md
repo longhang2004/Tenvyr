@@ -39,6 +39,7 @@ prose. The conflict must still be corrected rather than ignored.
 
 - [System overview](architecture/overview.md)
 - [Control plane](architecture/control-plane.md)
+- [Review service architecture seam](architecture/review-service.md)
 - [Coordinator loop domain](architecture/coordination-loop.md)
 - [Operator Workbench](architecture/workbench.md),
   [workspace execution / isolation](architecture/workspace-execution.md),
@@ -98,6 +99,8 @@ Developer tooling is not a Tenvyr production runtime feature.
 
 ## Roadmap, plans, and history
 
+- Proposed portfolio execution: [Spring review-service worker plan](plans/active/spring-review-portfolio/README.md)
+  (reuse the Java engine for a fixed Spring business workflow; not implemented).
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md) (M8–M10 plans archived; M11 remains active),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
