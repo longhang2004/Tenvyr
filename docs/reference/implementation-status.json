@@ -1705,6 +1705,44 @@
     ],
     "verification": "pure checks and ControlIntegrationCheck verified by controller; full backend --integration deferred to T08"
    }
+  },
+  {
+   "id": "review-spring-boundary",
+   "status": "implemented",
+   "sources": [
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewApplication.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/EngineConfiguration.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/EngineLifecycle.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/AgentCallbackController.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java",
+    "backend/review-api/src/main/resources/application.yml"
+   ],
+   "tests": [
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewContractCompatibilityTest.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewCallbackIT.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewLifecycleIT.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md"
+   ],
+   "limitations": [
+    "Spring application boundary and callback authentication only; business review schema and submission routes delivered in T02-T04",
+    "No legacy control routes exposed on public review API",
+    "All business routes denied until authentication and session management delivered in T03",
+    "Full retained Kafka/polyglot compatibility suite remains the required T08 gate; prerequisites are ready but it has not run for T01"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-api/src/main/java/io/tenvyr/review"
+    ],
+    "checks": [
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewContractCompatibilityTest.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewCallbackIT.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewLifecycleIT.java"
+    ],
+    "verification": "Accepted 2026-11-13: clean backend build; final review unit 11 tests and integration 13 ITs (9 callback, 4 lifecycle), all 0 failures/errors/skips; 9 retained pure programs; original read-model/hash oracle and 93 PostgreSQL/HTTP/restart checks; docs and identity verifiers passed. Boot-autoconfigured Hikari pool cleanup verified on startup failure and other cleanup failure. Runner and direct IT guards reject JDBC routing query overrides and raw fragments while preserving normal connection options and IPv6. Full retained Kafka/polyglot suite remains T08."
+   }
   }
  ],
  "backend_migration": {

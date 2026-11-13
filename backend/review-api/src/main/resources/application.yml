@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  address: 127.0.0.1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+spring:
+  application:
+    name: review-api
+  datasource:
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 2000
+      connection-init-sql: "SET TIME ZONE 'UTC'"

@@ -3,7 +3,7 @@ title: "Spring Review Portfolio Implementation Plan"
 status: current
 audience:
   - developer
-last_verified: 2026-11-12
+last_verified: 2026-11-13
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -21,7 +21,7 @@ sources:
 **Tech Stack:** Java 17; Boot 3.5.16 for new API only; JDBC/PostgreSQL; Spring Security sessions; Flyway for business schema only; existing HTTP/HMAC Worker; JUnit/Spring test for new module.
 
 **Spec:** [SPEC.md](SPEC.md). Mandatory existing-API evidence: [DISCOVERY.md](DISCOVERY.md).
-**Status:** In-progress. T00 completed ([report](reports/T00.md)).
+**Status:** In progress. T00 completed ([report](reports/T00.md)); T01 completed and accepted on 2026-11-13 ([report](reports/T01.md)). T02 onward remains planned.
 
 ## Global Constraints
 
@@ -73,7 +73,7 @@ than inventing alternate names. No `ReviewRequestService` alias for `ReviewServi
 ## Phase 1 — protect reuse before adding business behavior
 
 - [x] [T00: runtime/pooled JDBC seam](tasks/T00-runtime-seam.md) ([report](reports/T00.md))
-- [ ] [T01: Spring boundary and lifecycle](tasks/T01-spring-boundary.md)
+- [x] [T01: Spring boundary and lifecycle](tasks/T01-spring-boundary.md) — accepted ([report](reports/T01.md))
 - [ ] [T02: schema, fixed pipeline and domain contracts](tasks/T02-review-schema.md)
 - [ ] [T03: session security and stable ownership](tasks/T03-session-security.md)
 

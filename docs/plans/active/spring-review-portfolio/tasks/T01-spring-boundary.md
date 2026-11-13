@@ -1,9 +1,9 @@
 ---
 title: "T01 — Add isolated Spring application, signed callbacks and lifecycle gates"
-status: planned
+status: current
 audience:
   - developer
-last_verified: 2026-11-11
+last_verified: 2026-11-13
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -14,7 +14,8 @@ sources:
 
 Dependencies: T00. Estimate: 5–7 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: planned, not implemented.
+Status: completed and accepted on 2026-11-13 ([report](../reports/T01.md)).
+Report: [reports/T01.md](../reports/T01.md)
 
 ## Deliverable and files
 
@@ -50,20 +51,20 @@ closure; do not regenerate expected values.
 
 ## Steps and acceptance
 
-- [ ] Add independent Boot 3.5.16 parent with Java 17, explicit internal artifact
+- [x] Add independent Boot 3.5.16 parent with Java 17, explicit internal artifact
   versions and initial Web/Validation/JDBC/Security/Actuator/test dependencies.
   Keep root BOM/pins unchanged. Configure Surefire unit tests and a
   `review-integration` Failsafe profile for `*IT`.
-- [ ] Add failing tests for unsigned/bad-signature callbacks, exact raw bytes,
+- [x] Add failing tests for unsigned/bad-signature callbacks, exact raw bytes,
   and known canonical vectors under the new runtime dependency tree.
-- [ ] Wire pooled Db and T00 runtime exactly once. At this stage base Migrator
+- [x] Wire pooled Db and T00 runtime exactly once. At this stage base Migrator
   runs before runtime start; T02 inserts review migration before that start.
   Validate code-reviewer resolves to HTTP and explicit Kafka configuration is
   absent in review mode. Do not register ControlRoutes on the public server.
-- [ ] Configure one exact callback CSRF exemption and permit its authentication
+- [x] Configure one exact callback CSRF exemption and permit its authentication
   to be handled by HMAC; leave all remaining unsafe requests protected. Bound
   callback streaming body to 1 MiB. A valid HMAC request needs no user session.
-- [ ] Implement admission/readiness and draining lifecycle with integration
+- [x] Implement admission/readiness and draining lifecycle with integration
   evidence. Use Spring SmartLifecycle ordering: runtime start before web
   admission, runtime stop after web admission/drain; depend explicitly on
   completed database initialization. Do not rely on bean registration order.
@@ -71,12 +72,15 @@ closure; do not regenerate expected values.
   evidence: hold an actual database lock across shutdown; close waits, then
   releases all resources after the lock clears. Startup failure leaves no timer
   or adapter running. Pool closes last even if another close throws.
-- [ ] Create runner modes using Maven reactor `-pl review-api -am`; unit uses
+- [x] Create runner modes using Maven reactor `-pl review-api -am`; unit uses
   `test`, integration uses `verify -Preview-integration` and fails on missing
   disposable database. Print executed tests; build-with-skip is not evidence.
-- [ ] Run unit/integration modes and retained pure/lifecycle regressions. Record
+- [x] Run unit/integration modes and retained pure/lifecycle regressions. Record
   effective dependency tree and verify all Jackson components converge. Update
-  docs/ledger, run verifiers and hand off.
+  docs/ledger, run verifiers and hand off. Accepted with 11 unit tests,
+  13 ITs, 9 pure programs, 93 retained PostgreSQL/HTTP/restart checks and both
+  verifiers. Final runner/direct-IT routing-query and fragment guards passed.
+  Full retained Kafka/polyglot compatibility remains the T08 gate.
 
 Representative checks:
 ```java
