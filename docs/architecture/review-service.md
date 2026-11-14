@@ -20,17 +20,28 @@ sources:
   - backend/review-api/src/main/java/io/tenvyr/review/security/ActorResolver.java
   - backend/review-api/src/main/java/io/tenvyr/review/security/BootstrapUsers.java
   - backend/review-api/src/main/java/io/tenvyr/review/AuthController.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewReportMapper.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewErrors.java
+  - backend/review-api/src/main/java/io/tenvyr/review/RequestBodyLimitFilter.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewValidation.java
   - backend/review-api/src/main/resources/db/review/V1__review_domain.sql
   - backend/agents/src/main/java/io/tenvyr/agents/ReviewReportContract.java
   - contracts/schemas/review-report.v1.schema.json
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewLifecycleIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewValidationTest.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewSubmissionIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewReadsIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewTestSupport.java
 ---
 
 # Review Service Architecture and Seam
 
 ## Overview
 
-The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below. T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF, current database actors, and explicit atomic user bootstrap.
+The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below. T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF, current database actors, and explicit atomic user bootstrap. T04 was verified locally on 2026-11-14 with atomic idempotent submission and authorized bounded reads.
 
 ## Delivered Components
 
@@ -171,6 +182,44 @@ credentials fail validation; existing credentials are never silently changed.
 The protected T03 visibility/role fixtures use the actual actor resolver, but
 T04/T06 must verify authorization again against real business repositories.
 
+## Review Submission and Bounded Reads (T04)
+
+T04 delivers the atomic idempotent submission command, visibility-filtered
+keyset pagination, strict report state projection, and streaming request body limit.
+
+1. **Atomic submission command:** `ReviewService.submit` executes within a single
+   Spring `TransactionTemplate` transaction on the same connection (`DataSourceUtils.getConnection`).
+   It sets local transaction timeouts (`lock_timeout = '2s'`, `statement_timeout = '5s'`),
+   acquires an operation advisory lock derived from `(actorId, "SUBMIT", idempotencyKey)`,
+   rechecks existing submissions (equivalent returns 202; differing returns 409),
+   ensures the fixed internal pipeline `review-request-v1`, materializes the engine
+   execution with deadline now + 180s, invokes the package-private
+   `PostMaterializationObserver` seam on the same connection, and inserts both the
+   request and `SUBMIT` audit row. Connection is released without closing the borrowed
+   pool handle; recovery starts executions post-commit.
+2. **Streaming body limit filter:** `RequestBodyLimitFilter` filters only review business
+   routes, preserving Spring form login and callback's own streaming bounds. It enforces an
+   exact 1 MiB (1,048,576 bytes) bound on POST/PUT/PATCH streams before JSON parsing or
+   memory allocation, ignoring misleading `Content-Length` headers and returning
+   413 `PAYLOAD_TOO_LARGE` with stable bounded JSON error.
+3. **Visibility-filtered keyset pagination:** `ReviewRepository.list` enforces that
+   `SUBMITTER` sees only own requests, while `REVIEWER` sees all requests. Foreign IDs
+   return 404 `NOT_FOUND`. Queries sort `createdAt DESC, id DESC` and use prepared SQL.
+   Keyset cursors encode exact `{createdAt, id}` in URL-safe Base64 and are strictly
+   bounded to <= 256 bytes. Summaries exclude source code and report bodies.
+4. **Report projection:** `ReviewRepository.getReport` projects the report from the
+   committed successful attempt of logical step `review` and its `APPLIED` result inbox row
+   (persisted status is `APPLIED`, not `COMMITTED`), verifying payload hash and IDs.
+   Business contracts are enforced via `ReviewReportMapper` (score 0..100, <= 50 findings,
+   finding nonblank <= 1000 units, report JSON <= 65,536 bytes). Truthful metadata is mapped
+   to `ReportEvidence`. Non-ready executions return 409 `REPORT_NOT_READY`; invalid terminal
+   outputs return 409 `REVIEW_REPORT_INVALID`.
+5. **Error mapping:** `ReviewErrors.ReviewControllerAdvice` maps lock timeouts, deadlocks,
+   and pool exhaustion to safe 503 `DATABASE_UNAVAILABLE` with `Retry-After: 1` header after
+   rollback, and maps validation, authorization, and conflict exceptions to safe bounded JSON
+   `{code, message, requestId}`. Transient DB read/write errors produce 503 Retry-After: 1,
+   preventing false permanent report failure.
+
 ## Verification Boundary
 
 T01 was accepted on 2026-11-13 with 11 unit tests, 13 integration tests,
@@ -207,3 +256,8 @@ bootstrap rollback/no implicit seeding, failed-startup pool cleanup, and
 local/HTTPS cookie flags. Two manifest-value leak regressions first failed,
 then passed with field/index-only parser messages. See the
 [T03 report](../plans/active/spring-review-portfolio/reports/T03.md).
+
+T04 was verified locally on 2026-11-14 with 44 unit tests (11 compat + 13 security + 8 types + 12 validation)
+and 73 real PostgreSQL ITs (7 bootstrap + 11 catalog + 9 callback + 4 lifecycle + 10 reads + 6 schema + 15 security + 11 submission),
+zero failures/errors/skips in 5m27s (finished 2026-11-14T12:52:34Z). Independent review aaaf9ca5-ca11-4694-a07c-5eefa68998d3
+returned 0 actionable findings.
