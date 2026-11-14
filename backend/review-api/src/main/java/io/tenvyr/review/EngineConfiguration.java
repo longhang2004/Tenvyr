@@ -3,6 +3,7 @@ package io.tenvyr.review;
 import io.tenvyr.control.ControlPlaneRuntime;
 import io.tenvyr.control.engine.AgentTransportConfig;
 import io.tenvyr.platform.Db;
+import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -29,7 +30,14 @@ public class EngineConfiguration {
     }
 
     @Bean(destroyMethod = "close")
+    @DependsOnDatabaseInitialization
     public ControlPlaneRuntime engineRuntime() {
+        Map<String, String> envMap = validateReviewEnvironment(environment);
+        Db db = Db.fromDataSource(dataSource);
+        return new ControlPlaneRuntime(db, envMap, msg -> {});
+    }
+
+    public static Map<String, String> validateReviewEnvironment(Environment environment) {
         Map<String, String> envMap = new HashMap<>(System.getenv());
         if (environment instanceof ConfigurableEnvironment ce) {
             for (PropertySource<?> ps : ce.getPropertySources()) {
@@ -66,7 +74,6 @@ public class EngineConfiguration {
             throw new IllegalStateException("code-reviewer agent must be configured with HTTP transport");
         }
 
-        Db db = Db.fromDataSource(dataSource);
-        return new ControlPlaneRuntime(db, envMap, msg -> {});
+        return envMap;
     }
 }

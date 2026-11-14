@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:tenvyr:schema:review-report:v1",
+  "title": "ReviewReportV1",
+  "$comment": "Supplemental validation in ReviewReportContract enforces <=1000 UTF-16 code units per finding, non-blank strings, and max 65536 serialized UTF-8 bytes for the full report because JSON Schema maxLength counts code points and cannot express total serialized UTF-8 byte bounds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["score", "findings"],
+  "properties": {
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Calculated review score between 0 and 100 inclusive."
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      },
+      "description": "List of findings identified during review (0 to 50 items). Note: JSON Schema maxLength counts Unicode code points; supplemental Java validation enforces <=1,000 UTF-16 code units, non-blank text, and overall serialized report <=65,536 UTF-8 bytes."
+    },
+    "_tenvyr": {
+      "type": "object",
+      "description": "Optional engine-injected metadata and usage evidence."
+    }
+  }
+}

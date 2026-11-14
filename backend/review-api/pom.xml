@@ -32,6 +32,11 @@
             <artifactId>control-plane</artifactId>
             <version>${internal.tenvyr.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.tenvyr</groupId>
+            <artifactId>agents</artifactId>
+            <version>${internal.tenvyr.version}</version>
+        </dependency>
 
         <!-- Spring Boot starters -->
         <dependency>
@@ -53,6 +58,16 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Flyway database migration (Boot-managed versions) -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
         <!-- PostgreSQL driver -->

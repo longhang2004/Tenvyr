@@ -1,8 +1,6 @@
 package io.tenvyr.review;
 
 import io.tenvyr.control.ControlPlaneRuntime;
-import io.tenvyr.platform.Db;
-import io.tenvyr.platform.Migrator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
@@ -10,20 +8,22 @@ import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
 
 /**
- * SmartLifecycle coordinator for base migrations and control plane runtime.
+ * SmartLifecycle coordinator for control plane runtime.
  * Starts runtime before web admission and drains runtime after web admission stops.
  */
 @Component("engineLifecycle")
 public class EngineLifecycle implements SmartLifecycle {
 
     private final ControlPlaneRuntime engineRuntime;
-    private final DataSource dataSource;
     private volatile boolean running;
 
     @Autowired
-    public EngineLifecycle(ControlPlaneRuntime engineRuntime, DataSource dataSource) {
+    public EngineLifecycle(ControlPlaneRuntime engineRuntime) {
         this.engineRuntime = engineRuntime;
-        this.dataSource = dataSource;
+    }
+
+    public EngineLifecycle(ControlPlaneRuntime engineRuntime, DataSource dataSource) {
+        this(engineRuntime);
     }
 
     @Override
@@ -32,8 +32,6 @@ public class EngineLifecycle implements SmartLifecycle {
             return;
         }
         try {
-            Db db = Db.fromDataSource(dataSource);
-            Migrator.migrate(db);
             engineRuntime.startAfterMigrations();
             running = true;
         } catch (Exception e) {

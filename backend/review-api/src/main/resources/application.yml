@@ -16,6 +16,11 @@ management:
 spring:
   application:
     name: review-api
+  flyway:
+    enabled: true
+    locations: classpath:db/review
+    schemas: tenvyr_review
+    default-schema: tenvyr_review
   datasource:
     hikari:
       maximum-pool-size: 10

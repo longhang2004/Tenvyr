@@ -1743,6 +1743,51 @@
     ],
     "verification": "Accepted 2026-11-13: clean backend build; final review unit 11 tests and integration 13 ITs (9 callback, 4 lifecycle), all 0 failures/errors/skips; 9 retained pure programs; original read-model/hash oracle and 93 PostgreSQL/HTTP/restart checks; docs and identity verifiers passed. Boot-autoconfigured Hikari pool cleanup verified on startup failure and other cleanup failure. Runner and direct IT guards reject JDBC routing query overrides and raw fragments while preserving normal connection options and IPv6. Full retained Kafka/polyglot suite remains T08."
    }
+  },
+  {
+   "id": "review-schema-and-contracts",
+   "status": "implemented",
+   "sources": [
+    "backend/review-api/src/main/java/io/tenvyr/review/domain/ReviewTypes.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/PipelineCatalog.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewMigrationConfiguration.java",
+    "backend/review-api/src/main/resources/db/review/V1__review_domain.sql",
+    "backend/agents/src/main/java/io/tenvyr/agents/ReviewReportContract.java",
+    "contracts/schemas/review-report.v1.schema.json"
+   ],
+   "tests": [
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewTypesTest.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/PipelineCatalogIT.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewSchemaIT.java",
+    "backend/agents/src/test/java/io/tenvyr/agents/AgentCheck.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md",
+    "docs/plans/active/spring-review-portfolio/reports/T02.md"
+   ],
+   "limitations": [
+    "Review schema, fixed catalog, and typed report contracts only; authentication remains T03 and submission/read routes remain T04",
+    "Supported showcase engine schema is public; business SQL is qualified to tenvyr_review and engine foreign keys explicitly target public",
+    "Supplemental Java report validation enforces UTF-16 length, Unicode nonblank strings, and total serialized UTF-8 bytes beyond standard JSON Schema limits",
+    "Full retained Kafka/polyglot compatibility suite remains the required T08 gate"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-api/src/main/java/io/tenvyr/review/domain/ReviewTypes.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/PipelineCatalog.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewMigrationConfiguration.java",
+     "backend/review-api/src/main/resources/db/review/V1__review_domain.sql",
+     "backend/agents/src/main/java/io/tenvyr/agents/ReviewReportContract.java"
+    ],
+    "checks": [
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewTypesTest.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/PipelineCatalogIT.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewSchemaIT.java",
+     "backend/agents/src/test/java/io/tenvyr/agents/AgentCheck.java"
+    ],
+    "verification": "Accepted locally 2026-11-14: review unit 19 tests (11 compatibility, 8 types) and real PostgreSQL integration 30 ITs (11 catalog, 9 callback, 4 lifecycle, 6 schema), all zero failures/errors/skips; integration 2m39. Actual V1 duplicate-users migration failure SQLState42P07 prevents runtime construction/readiness and closes the pool; invalid transport configuration creates no base ledger. Two actual concurrent Spring apps serve HTTP readiness with one catalog binding/pipeline and public pool paths. Caller rollback, persisted definition/content-hash drift, exact constraint SQL states/index ordering, and retained 27 ledger identities pass. Unchanged-production evidence from 2026-11-14: 9 retained pure programs (AgentCheck95) and exact original 27 up/down migration identities/physical schema parity. Focused report probe passes all3 cases. Documentation and identity verification run before the local checkpoint; no push or deployment claimed."
+   }
   }
  ],
  "backend_migration": {

@@ -4,7 +4,7 @@ status: planned
 audience:
   - developer
   - product
-last_verified: 2026-11-11
+last_verified: 2026-11-14
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -13,9 +13,12 @@ sources:
 
 # Spring Review Portfolio
 
-Lifecycle: proposed implementation, ready for task review. Direction authorized:
-reuse Tenvyr for a Java/Spring business-backend portfolio. Detailed choices below
-are the plan author's proposal, not claims about implemented behavior.
+Lifecycle: approved implementation in progress. Direction: reuse Tenvyr for a
+Java/Spring business-backend portfolio. **3 of 9 tasks are accepted locally:**
+[T00](reports/T00.md), [T01](reports/T01.md), and [T02](reports/T02.md).
+T02 acceptance includes 19 unit tests, 30 real PostgreSQL ITs, retained pure
+checks, and schema parity. T03–T08 have not started. Current contracts and
+verified reports take precedence over this plan.
 
 Build one fixed asynchronous code-review request workflow on the existing
 PostgreSQL-authoritative engine. A user submits a code snippet, receives a
@@ -29,8 +32,9 @@ legacy runtimes and contracts working; do not rewrite the scheduler.
 3. Implement only that task, run its checks and the applicable [verification gates](VERIFY.md).
 4. Supply evidence and a handoff; a reviewer checks the task before dependants start.
 
-No implementation, deployment, package publication, or production-readiness
-claim is delivered by this planning change. No existing milestone is closed.
+Accepted local implementation is recorded in each task report. This plan makes
+no deployment, package publication, or production-readiness claim and does not
+close an existing product milestone.
 
 ## Task graph
 
@@ -48,8 +52,9 @@ claim is delivered by this planning change. No existing milestone is closed.
 
 Estimate: 41–59 focused engineering hours, including testing and review; not an
 estimate of agent wall time. A blocked prerequisite is reported, never a skipped
-success. T04 and T05 may run concurrently in isolated worktrees after T03 is
-merged, provided T05 stays within its owned files. All other integration is serial.
+success. T04 and T05 may run concurrently in isolated worktrees after a reviewed T03
+checkpoint, provided T05 stays within its owned files. All other integration is
+serial.
 
 ## Scope decisions
 

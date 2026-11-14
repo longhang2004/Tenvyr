@@ -1,5 +1,7 @@
 package io.tenvyr.agents;
 
+import com.fasterxml.jackson.databind.node.LongNode;
+import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.tenvyr.platform.*;
 import org.apache.kafka.clients.consumer.*;
@@ -20,9 +22,9 @@ public final class AgentCheck {
     private static int checks;
     public static void main(String[] args)throws Exception {
         Path skills=Files.createTempDirectory("agent-check");
-        try {processor(skills);poison(skills);delivery(skills);redelivery(skills);shutdown(skills);}
+        try {processor(skills);poison(skills);delivery(skills);redelivery(skills);shutdown(skills);reportValidator();}
         finally {try(var files=Files.walk(skills)){for(Path file:files.sorted(Comparator.reverseOrder()).toList())Files.delete(file);}}
-        System.out.println("AgentCheck: "+checks+" checks passed (prompts, DTO, contracts, outcomes, poison ack, publication retry, graceful drain)");
+        System.out.println("AgentCheck: "+checks+" checks passed (prompts, DTO, contracts, outcomes, poison ack, publication retry, graceful drain, report validator)");
     }
     static ObjectNode invocation(String agent,String executionId) {
         return Protocol.invocation(Json.object("schemaVersion","1","invocationId",executionId+":step:1","executionId",executionId,"stepExecutionId",executionId+":step","stepId",agent.equals("code-reviewer")?"review":"observe","target",Json.object("agent",agent),"input",agent.equals("code-reviewer")?Json.object("code","const safe = true;","language","typescript"):Json.object("logs","all good","findings",Json.array()),"attempt",1,"createdAt","2026-07-26T00:00:00.000Z","trace",Json.object("traceId",executionId,"correlationId",executionId+":step:1")));
@@ -124,6 +126,38 @@ public final class AgentCheck {
         @Override public synchronized void commitSync(Map<TopicPartition,OffsetAndMetadata> offsets){if(wakeupCommit&&wakeup.compareAndSet(true,false))throw new WakeupException();super.commitSync(offsets);long offset=offsets.values().iterator().next().offset();commits.add(offset);lastOffset.set(offset);}
         @Override public synchronized void seek(TopicPartition partition,long offset){super.seek(partition,offset);seeks.incrementAndGet();if(redelivery!=null&&offset==redelivery.offset()){ConsumerRecord<String,String> record=redelivery;redelivery=null;schedulePollTask(()->addRecord(record));}}
         @Override public synchronized void wakeup(){wakeup.set(true);super.wakeup();}
+    }
+    private static void reportValidator() {
+        ObjectNode valid = Json.object("score", 85, "findings", Json.array().add("Safe code."));
+        check(ReviewReportContract.requireOutput(valid) != null, "valid report accepted");
+        check(ReviewReportContract.requireOutput(Json.object("score", new LongNode(90L), "findings", Json.array())) != null, "valid LongNode score accepted");
+        ObjectNode withLegacy = Json.object("score", 90, "findings", Json.array(), "_tenvyr", Json.object("metadata", Json.object("provider", "mock", "model", "local-heuristic")));
+        check(ReviewReportContract.requireOutput(withLegacy) != null, "report with _tenvyr metadata accepted");
+        rejects(() -> ReviewReportContract.requireOutput(null), "null output");
+        rejects(() -> ReviewReportContract.requireOutput(Json.array()), "array output");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("findings", Json.array())), "missing score");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", "90", "findings", Json.array())), "string score");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90)), "missing findings");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", -1, "findings", Json.array())), "score < 0");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 101, "findings", Json.array())), "score > 100");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", new LongNode(-1L), "findings", Json.array())), "LongNode score < 0");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", new LongNode(101L), "findings", Json.array())), "LongNode score > 100");
+        var tooMany = Json.array();
+        for (int i = 0; i < 51; i++) tooMany.add("Finding " + i);
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", tooMany)), "excessive findings (>50)");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array().add("   "))), "blank finding");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array().add("\u2003"))), "U+2003 whitespace finding rejected");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array().add("a".repeat(1001)))), "finding > 1000 chars");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array(), "_tenvyr", NullNode.getInstance())), "_tenvyr null rejected");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array(), "_tenvyr", "not-an-object")), "_tenvyr non-object rejected");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array(), "_tenvyr", 123)), "_tenvyr number rejected");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array(), "_tenvyr", Json.array())), "_tenvyr array rejected");
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", Json.array(), "extra", "disallowed")), "extra unallowed fields");
+
+        var multiByteFindings = Json.array();
+        String mbItem = "\u4e16".repeat(500);
+        for (int i = 0; i < 45; i++) multiByteFindings.add(mbItem);
+        rejects(() -> ReviewReportContract.requireOutput(Json.object("score", 90, "findings", multiByteFindings)), "oversize UTF-8 report rejected");
     }
     private static void await(java.util.function.BooleanSupplier ready,String label)throws Exception {long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(!ready.getAsBoolean()&&System.nanoTime()<deadline)Thread.sleep(5);check(ready.getAsBoolean(),label);}
     private static void rejects(Runnable run,String label){try{run.run();throw new AssertionError("Accepted "+label);}catch(IllegalArgumentException|IllegalStateException expected){checks++;}}

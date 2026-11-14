@@ -3,7 +3,7 @@ title: "T02 — Define review schema, fixed pipeline and typed shared contracts"
 status: planned
 audience:
   - developer
-last_verified: 2026-11-11
+last_verified: 2026-11-14
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -13,8 +13,11 @@ sources:
 # T02: Define review schema, fixed pipeline and typed shared contracts
 
 Dependencies: T01. Estimate: 4–6 focused engineering hours.
-Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: planned, not implemented.
+Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md), [VERIFY](../VERIFY.md), and [report](../reports/T02.md) first.
+Status: **Accepted locally on 2026-11-14**. Controller verification: 19 unit
+tests and 30 real PostgreSQL ITs, all with zero failures/errors/skips; 9 retained
+pure programs and exact 27-migration schema parity. See the [report](../reports/T02.md)
+for counts, failure proofs, and DTO handoff.
 
 ## Deliverable and files
 
@@ -54,13 +57,16 @@ record ReviewDetail(UUID id, String title, String language, String code,
                     int attemptCount, String errorCode, DecisionView decision) {}
 record AuditEntry(UUID id, UUID actorId, String action, Instant createdAt) {}
 // concrete catalog, not a new workflow framework
-ObjectNode PipelineCatalog.ensure(Connection connection)
+ObjectNode PipelineCatalog.ensure(Connection connection) // static; requires autoCommit=false
 ObjectNode ReviewReportContract.requireOutput(JsonNode output) // static; throws IllegalArgumentException
 ```
 
 Use immutable/copy-safe list values. Detail/error/decision nullable fields follow
 SPEC; report output validator accepts score/findings and optional legacy
-`_tenvyr` metadata only. Metadata is projected separately into ReportEvidence.
+`_tenvyr` object metadata only. Empty findings are allowed (`0..50`); each finding
+must be nonblank and at most 1,000 UTF-16 code units. Java additionally enforces
+the 65,536-byte serialized UTF-8 bound beyond the JSON Schema code-point limits.
+Metadata is projected separately into ReportEvidence.
 
 ## References to copy
 
@@ -70,25 +76,27 @@ check, and Boot FlywayMigrationStrategy docs in DISCOVERY.
 
 ## Steps and acceptance
 
-- [ ] Add failing boundary/invalid report tests and real migration tests.
+- [x] Add failing boundary/invalid report tests and real migration tests.
   Assert 65,536 UTF-8 bytes accepted, 65,537 rejected; distinguish Unicode byte
   bounds from Java string length. Invalid score type/range and excessive
   findings fail, not coerce.
-- [ ] Implement exact SPEC tables/constraints/indexes in tenvyr_review. Add a
+- [x] Implement exact SPEC tables/constraints/indexes in tenvyr_review. Add a
   Boot FlywayMigrationStrategy: retained Migrator first, Flyway review schema
-  second, runtime start only after both. Use Flyway's own versioned migration
-  mechanism, no custom second migration framework or schema.sql.
-- [ ] Implement PipelineCatalog.ensure on the supplied Connection with an
+  second, then catalog initialization in its caller transaction. Runtime
+  construction depends on completed database initialization; lifecycle starts
+  recovery before admission and does not rerun migrations. Use Flyway's own
+  versioned migration mechanism, no custom second migration framework or schema.sql.
+- [x] Implement PipelineCatalog.ensure on the supplied Connection with an
   advisory transaction lock and version binding. Validate fixed definition;
   create pipeline/binding atomically; repeat/concurrent startup reuses the same
   pipeline. Definition hash drift fails startup rather than silently rewriting.
-- [ ] Add typed contracts and strict report validator. Reuse Json.hash and
+- [x] Add typed contracts and strict report validator. Reuse Json.hash and
   existing protocol fixtures; no source/secret logging or score fallback.
-- [ ] On real PostgreSQL, prove two startups create one catalog binding; base
+- [x] On real PostgreSQL, prove two startups create one catalog binding; base
   ledger remains the same 27 entries/identities; a business-schema failure
   prevents readiness. Assert pooled sessions still address the engine's
   original schema after Flyway returns.
-- [ ] Run review unit/integration and existing schema parity gate. Update
+- [x] Run review unit/integration and existing schema parity gate. Update
   current docs/ledger and verifiers, then publish the exact DTO handoff.
 
 Representative assertions:
