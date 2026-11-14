@@ -3,11 +3,15 @@ package io.tenvyr.agents;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.tenvyr.platform.*;
+import java.io.*;
 import java.net.URI;
 import java.net.http.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.regex.*;
 
 /** Actual specialized-agent behavior, independent of Kafka offset ownership. */
@@ -17,6 +21,10 @@ public final class AgentProcessor {
     private final Path skills;
     private final Runner runner;
     private static final Pattern OUTPUT=Pattern.compile("\\{[\\s\\S]*}");
+    private static final HttpClient BOUNDED_HTTP_CLIENT = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
+
     public AgentProcessor(String agent,String runnerUrl,Path skills) {this(agent,skills,httpRunner(runnerUrl));}
     public AgentProcessor(String agent,Path skills,Runner runner) {if(!Set.of("code-reviewer","observability").contains(agent))throw new IllegalArgumentException("Unknown specialized agent: "+agent);this.agent=agent;this.skills=skills;this.runner=runner;}
     public String agent() {return agent;}
@@ -87,6 +95,100 @@ public final class AgentProcessor {
             HttpResponse<String> response=client.send(request,HttpResponse.BodyHandlers.ofString());
             JsonNode data=Json.parse(response.body());
             if(response.statusCode()<200||response.statusCode()>=300||!Json.bool(data,"success",false))throw new IllegalStateException(truthy(data.get("error"))?jsString(data.get("error")):"Agent Runner returned HTTP "+response.statusCode());
+            return data;
+        };
+    }
+    public static Runner httpRunner(String runnerUrl, int maxResponseBytes) {
+        if (maxResponseBytes <= 0) throw new IllegalArgumentException("maxResponseBytes must be positive: " + maxResponseBytes);
+        return (prompt, context, timeout) -> {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(runnerUrl + "/api/run"))
+                    .timeout(Duration.ofMillis(Math.max(1, timeout)))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.stringify(Json.object("promptTemplate", prompt, "context", context))))
+                    .build();
+
+            HttpResponse.BodyHandler<byte[]> boundedHandler = responseInfo -> {
+                OptionalLong declared = responseInfo.headers().firstValueAsLong("Content-Length");
+                if (declared.isPresent() && declared.getAsLong() > maxResponseBytes) {
+                    throw new IllegalStateException("Agent Runner response Content-Length exceeded limit: " + declared.getAsLong());
+                }
+                return new HttpResponse.BodySubscriber<byte[]>() {
+                    private final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    private final CompletableFuture<byte[]> bodyFuture = new CompletableFuture<>();
+                    private Flow.Subscription subscription;
+                    private int bytesRead = 0;
+
+                    @Override
+                    public CompletionStage<byte[]> getBody() {
+                        return bodyFuture;
+                    }
+
+                    @Override
+                    public void onSubscribe(Flow.Subscription subscription) {
+                        this.subscription = subscription;
+                        subscription.request(1);
+                    }
+
+                    @Override
+                    public void onNext(List<ByteBuffer> item) {
+                        for (ByteBuffer bb : item) {
+                            int count = bb.remaining();
+                            bytesRead += count;
+                            if (bytesRead > maxResponseBytes) {
+                                subscription.cancel();
+                                bodyFuture.completeExceptionally(new IllegalStateException("Agent Runner response body exceeded limit of " + maxResponseBytes + " bytes"));
+                                return;
+                            }
+                            byte[] chunk = new byte[count];
+                            bb.get(chunk);
+                            baos.write(chunk, 0, count);
+                        }
+                        subscription.request(1);
+                    }
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                        bodyFuture.completeExceptionally(throwable);
+                    }
+
+                    @Override
+                    public void onComplete() {
+                        bodyFuture.complete(baos.toByteArray());
+                    }
+                };
+            };
+
+            CompletableFuture<HttpResponse<byte[]>> future = BOUNDED_HTTP_CLIENT.sendAsync(request, boundedHandler);
+            HttpResponse<byte[]> response;
+            try {
+                response = future.get(Math.max(1, timeout), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                future.cancel(true);
+                HttpTimeoutException hte = new HttpTimeoutException("Agent Runner response timed out after " + timeout + "ms");
+                hte.initCause(e);
+                throw hte;
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof HttpTimeoutException hte) throw hte;
+                if (cause instanceof Exception ex) throw ex;
+                throw new RuntimeException(cause);
+            }
+
+            int status = response.statusCode();
+            if (status < 200 || status >= 300) {
+                throw new IllegalStateException("Agent Runner returned HTTP " + status);
+            }
+
+            JsonNode data;
+            try {
+                data = Json.parse(new String(response.body(), StandardCharsets.UTF_8));
+            } catch (Exception e) {
+                throw new IllegalStateException("Agent Runner response was not valid JSON");
+            }
+
+            if (!Json.bool(data, "success", false)) {
+                throw new IllegalStateException("Agent Runner returned unsuccessful response");
+            }
             return data;
         };
     }
