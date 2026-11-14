@@ -14,8 +14,8 @@ esac
 
 case "$TENVYR_CHECK_MODE" in
   unit)
-    echo "==> Running review-api unit checks (Maven reactor test)..."
-    mvn -B -f backend/pom.xml -pl review-api -am test
+    echo "==> Running review unit checks (Maven reactor test)..."
+    mvn -B -f backend/pom.xml -pl review-api,review-worker -am test
     ;;
   integration)
     DB_URL="${TENVYR_REVIEW_TEST_DATABASE_URL:-}"
@@ -95,8 +95,8 @@ case "$TENVYR_CHECK_MODE" in
       exit 1
     }
 
-    echo "==> Running review-api integration checks against verified disposable test database..."
+    echo "==> Running review integration checks against verified disposable test database..."
     export TENVYR_REVIEW_TEST_DATABASE_URL="$DB_URL"
-    mvn -B -f backend/pom.xml -pl review-api -am verify -Preview-integration
+    mvn -B -f backend/pom.xml -pl review-api,review-worker -am verify -Preview-integration
     ;;
 esac

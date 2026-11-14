@@ -17,7 +17,7 @@ sources:
 
 Dependencies: T03 (including T02 contracts). Estimate: 4–6 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md), [VERIFY](../VERIFY.md), [report](../reports/T05.md), and [Review Worker Architecture](../../../../architecture/workers/review-worker.md) first.
-Status: LOCAL VERIFIED, SERIAL INTEGRATION/ACCEPTANCE PENDING (2026-11-14 Asia/Saigon).
+Status: ACCEPTED (2026-11-14 Asia/Saigon).
 
 ## Deliverable and files
 
@@ -78,9 +78,9 @@ result correlation. Do not copy NestJS-shaped mock heuristics as Java analysis.
   correct invocation/execution/step identity. Verify retryable failure,
   callback duplicate and worker restart behavior without claiming durable
   Worker storage or exactly-once compute.
-- [ ] Extend review-checks runner to execute the module's tests explicitly;
+- [x] Extend review-checks runner to execute the module's tests explicitly;
   ensure no Kafka connection is attempted. Run retained AgentCheck/WorkerCheck
-  and review gates, docs/ledger updates, verifiers, and handoff (reserved for root serial integration).
+  and review gates, docs/ledger updates, verifiers, and handoff.
 
 ## Verification evidence
 
@@ -89,7 +89,7 @@ result correlation. Do not copy NestJS-shaped mock heuristics as Java analysis.
 - **Backend Pure Checks**: `env -u JAVA_TOOL_OPTIONS sh scripts/backend-checks.sh pure` PASS all 9 programs (Foundation 5095, Control 34, Engine 59, Runtime 6, Gateway 115, Agent 95, Worker conformance, Executor host, Operations 67; `retained-pure-no-banner.log` / `.exit0`). Initial pure failure was caused solely by banner on stdout; unsetting env reproduced pure PASS. PostgreSQL retains UTC via explicit JVM settings.
 - **Focused Post-Repair AGY Review**: Conversation `3c9e97a0-803b-44c0-8022-15ea28b7bcee` found 0 actionable defects (file review only).
 - **Metadata Handling**: Null legacy metadata is normalized to absence only in `StrictReviewRunner`; shared `AgentProcessor` is unchanged beyond its bounded factory.
-- **Status**: LOCAL VERIFIED, SERIAL INTEGRATION/ACCEPTANCE PENDING. Final global acceptance and review-checks step 7 remain unchecked until root serial integration.
+- **Status**: ACCEPTED. Final root acceptance completed (combined integration 89 Surefire + 73 real PostgreSQL ITs pass in 5m24s finished 2026-11-14T13:27:09Z).
 
 Representative assertions:
 ```java

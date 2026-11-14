@@ -115,3 +115,14 @@ Worker bounds are strictly enforced:
    under a new `runId`.
 2. **At-Least-Once Delivery**: On transient callback errors (e.g. 503), the worker
    retries with exponential backoff using the identical serialized bytes and delivery ID.
+
+## Verification and Acceptance
+
+The Review Worker was accepted on 2026-11-14 (Asia/Saigon):
+- Combined integration suite (`sh scripts/review-checks.sh integration`): 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 73 real PostgreSQL ITs pass (0 failures, 0 errors, 0 skips) in 5m24s (finished 2026-11-14T13:27:09Z).
+- Canonical review runner commands are registered in root reactor (`backend/pom.xml`).
+- Unit runner without DB URL: 89 Surefire tests pass.
+- Backend build: PASS (2m50s).
+- 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks on serial retry with same 120s timeout.
+- Focused code review `3c9e97a0-803b-44c0-8022-15ea28b7bcee`: 0 actionable findings.
+- Source provenance commit: `a7d66cd` (root `e549485`).

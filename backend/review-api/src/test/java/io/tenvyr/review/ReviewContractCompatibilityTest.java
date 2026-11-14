@@ -291,14 +291,16 @@ public class ReviewContractCompatibilityTest {
         ScriptProcessResult valid = runReviewChecksIntegration("jdbc:postgresql://localhost:5432/review_test?sslmode=disable&currentSchema=public", tempDir);
         assertEquals(91, valid.exitCode(), "Valid test URL with query options must pass guard and reach fake mvn sentinel");
         assertTrue(valid.output().contains("MAVEN_REACHED_SENTINEL"), "Valid test URL must reach fake mvn sentinel");
-        assertTrue(valid.output().contains("Running review-api integration checks against verified disposable test database"),
-                "Valid test URL must proceed to execution step");
+        assertTrue(valid.output().contains("INVOKED_MVN_ARGS: -B -f backend/pom.xml -pl review-api,review-worker -am verify -Preview-integration"),
+                "Fake maven must be invoked with both modules and -Preview-integration profile");
         assertFalse(valid.output().contains("ERROR:"), "Valid test URL must not produce error");
 
         // IPv6 valid URL with query options must also reach sentinel
         ScriptProcessResult validIpv6 = runReviewChecksIntegration("jdbc:postgresql://[::1]:5432/review_test?sslmode=disable&currentSchema=public", tempDir);
         assertEquals(91, validIpv6.exitCode(), "Valid IPv6 test URL with query options must pass guard and reach fake mvn sentinel");
         assertTrue(validIpv6.output().contains("MAVEN_REACHED_SENTINEL"), "Valid IPv6 test URL must reach fake mvn sentinel");
+        assertTrue(validIpv6.output().contains("INVOKED_MVN_ARGS: -B -f backend/pom.xml -pl review-api,review-worker -am verify -Preview-integration"),
+                "Fake maven must be invoked with both modules and -Preview-integration profile for IPv6 URL");
     }
 
     @Test
@@ -357,6 +359,7 @@ public class ReviewContractCompatibilityTest {
         Path fakeMvn = tempDir.resolve("mvn");
         String script = "#!/bin/sh\n" +
                 "echo \"MAVEN_REACHED_SENTINEL\"\n" +
+                "echo \"INVOKED_MVN_ARGS: $@\"\n" +
                 "exit 91\n";
         Files.writeString(fakeMvn, script, StandardCharsets.UTF_8);
         fakeMvn.toFile().setExecutable(true, false);

@@ -14,13 +14,11 @@ sources:
 # Spring Review Portfolio
 
 Lifecycle: approved implementation in progress. Direction: reuse Tenvyr for a
-Java/Spring business-backend portfolio. **4 of 9 tasks are accepted locally:**
-[T00](reports/T00.md), [T01](reports/T01.md), [T02](reports/T02.md), and
-[T03](reports/T03.md). T03 acceptance includes 32 unit tests and 52 real
-PostgreSQL ITs, all with zero failures, errors, or skips. T04 and T05 have not
-started; their approved parallel window follows the reviewed T03 checkpoint.
-T06–T08 remain later tasks. Current contracts and verified reports take
-precedence over this plan.
+Java/Spring business-backend portfolio. **6 of 9 tasks are accepted locally:**
+[T00](reports/T00.md), [T01](reports/T01.md), [T02](reports/T02.md),
+[T03](reports/T03.md), [T04](reports/T04.md), and [T05](reports/T05.md).
+T06–T08 remain planned and unimplemented. Current contracts and verified
+reports take precedence over this plan.
 
 Build one fixed asynchronous code-review request workflow on the existing
 PostgreSQL-authoritative engine. A user submits a code snippet, receives a

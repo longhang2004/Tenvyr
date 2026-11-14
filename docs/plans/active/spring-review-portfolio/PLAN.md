@@ -21,7 +21,7 @@ sources:
 **Tech Stack:** Java 17; Boot 3.5.16 for new API only; JDBC/PostgreSQL; Spring Security sessions; Flyway for business schema only; existing HTTP/HMAC Worker; JUnit/Spring test for new module.
 
 **Spec:** [SPEC.md](SPEC.md). Mandatory existing-API evidence: [DISCOVERY.md](DISCOVERY.md).
-**Status:** In progress. T00 completed ([report](reports/T00.md)); T01 completed and accepted on 2026-11-13 ([report](reports/T01.md)). T02 onward remains planned.
+**Status:** In progress. Accepted: 6 of 9 tasks (T00–T05). T06–T08 remain planned and unimplemented.
 
 ## Global Constraints
 
@@ -74,8 +74,8 @@ than inventing alternate names. No `ReviewRequestService` alias for `ReviewServi
 
 - [x] [T00: runtime/pooled JDBC seam](tasks/T00-runtime-seam.md) ([report](reports/T00.md))
 - [x] [T01: Spring boundary and lifecycle](tasks/T01-spring-boundary.md) — accepted ([report](reports/T01.md))
-- [ ] [T02: schema, fixed pipeline and domain contracts](tasks/T02-review-schema.md)
-- [ ] [T03: session security and stable ownership](tasks/T03-session-security.md)
+- [x] [T02: schema, fixed pipeline and domain contracts](tasks/T02-review-schema.md) — accepted ([report](reports/T02.md))
+- [x] [T03: session security and stable ownership](tasks/T03-session-security.md) — accepted ([report](reports/T03.md))
 
 Gate: retained backend checks pass; new app starts/migrates/drains, rejects
 unsigned callbacks and unauthorized business access. No unauthenticated legacy
@@ -83,8 +83,8 @@ management routes appear on its port.
 
 ## Phase 2 — complete the business workflow
 
-- [ ] [T04: atomic submit and bounded reads](tasks/T04-submit-and-read.md)
-- [ ] [T05: strict HTTP reviewer Worker](tasks/T05-review-worker.md)
+- [x] [T04: atomic submit and bounded reads](tasks/T04-submit-and-read.md) — accepted ([report](reports/T04.md))
+- [x] [T05: strict HTTP reviewer Worker](tasks/T05-review-worker.md) — accepted ([report](reports/T05.md))
 - [ ] [T06: business decisions, cancellation and audit](tasks/T06-decisions-and-audit.md)
 
 T04/T05 can be assigned to separate isolated worktrees after T03. Merge T04 then

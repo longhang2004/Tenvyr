@@ -22,9 +22,9 @@ sources:
 
 Dependencies: T03. Estimate: 6–8 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: **LOCAL VERIFIED; SERIAL INTEGRATION/ACCEPTANCE PENDING**; see the [T04 report](../reports/T04.md).
+Status: **ACCEPTED**; see the [T04 report](../reports/T04.md).
 Documentation link: [review-service.md](../../../../architecture/review-service.md).
-Shared global ledger and integrator steps remain unchecked until root merge gates.
+Combined root verification completed; full retained Kafka/polyglot compatibility suite remains T08.
 
 ## Deliverable and files
 
@@ -73,7 +73,7 @@ successful review attempt and APPLIED inbox row (never Worker progress events).
 - [x] Implement strict report/state projection, including invalid terminal
   result -> FAILED/REVIEW_REPORT_INVALID. Return bounded safe errors, never raw
   engine configuration/credentials. Test status before/after valid result.
-- [ ] Prepare review unit/integration and genuine fixture wiring; verification
-  checks completed locally (PASS: 44 unit + 73 real PostgreSQL ITs; 5m27s; finished
-  2026-11-14T12:52:34Z); final root engine acceptance and global ledger merge
-  pending serial integrator gate.
+- [x] Prepare review unit/integration and genuine fixture wiring; verification
+  checks completed (PASS: combined integration 89 Surefire [44 API + 45 Worker including
+  13 HTTP loopbacks] + 73 real PostgreSQL ITs; 5m24s; finished 2026-11-14T13:27:09Z);
+  final root engine acceptance and global ledger updated.

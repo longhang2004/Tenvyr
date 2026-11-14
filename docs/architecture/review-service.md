@@ -41,7 +41,7 @@ sources:
 
 ## Overview
 
-The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below. T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF, current database actors, and explicit atomic user bootstrap. T04 was verified locally on 2026-11-14 with atomic idempotent submission and authorized bounded reads.
+The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below. T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF, current database actors, and explicit atomic user bootstrap. T04 was accepted on 2026-11-14 with atomic idempotent submission and authorized bounded reads. Combined integration with the review worker (T05) passes 89 Surefire tests (44 API + 45 Worker) and 73 PostgreSQL ITs in 5m24s.
 
 ## Delivered Components
 
@@ -257,7 +257,4 @@ local/HTTPS cookie flags. Two manifest-value leak regressions first failed,
 then passed with field/index-only parser messages. See the
 [T03 report](../plans/active/spring-review-portfolio/reports/T03.md).
 
-T04 was verified locally on 2026-11-14 with 44 unit tests (11 compat + 13 security + 8 types + 12 validation)
-and 73 real PostgreSQL ITs (7 bootstrap + 11 catalog + 9 callback + 4 lifecycle + 10 reads + 6 schema + 15 security + 11 submission),
-zero failures/errors/skips in 5m27s (finished 2026-11-14T12:52:34Z). Independent review aaaf9ca5-ca11-4694-a07c-5eefa68998d3
-returned 0 actionable findings.
+T04 was accepted on 2026-11-14 with combined integration (89 Surefire [44 API + 45 Worker including 13 HTTP loopbacks] + 73 real PostgreSQL ITs) passing with zero failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z). Unit runner without DB URL passes 89 Surefire tests; 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks on serial retry with same 120s timeout. Independent review aaaf9ca5 found 0 actionable findings. Source provenance commit 6e4bec5 (root 049e5cb).

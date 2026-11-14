@@ -11,6 +11,7 @@ sources:
   - docs/reference/implementation-status.json
   - docs/architecture/workers/java-worker-sdk.md
   - docs/architecture/workers/cpp-worker.md
+  - docs/architecture/workers/review-worker.md
   - docs/plans/active/polyglot-http-workers/GOAL.md
   - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
 ---
@@ -39,7 +40,8 @@ prose. The conflict must still be corrected rather than ignored.
 
 - [System overview](architecture/overview.md)
 - [Control plane](architecture/control-plane.md)
-- [Review service architecture seam](architecture/review-service.md)
+- [Review service architecture seam](architecture/review-service.md) and
+  [review worker architecture](architecture/workers/review-worker.md)
 - [Coordinator loop domain](architecture/coordination-loop.md)
 - [Operator Workbench](architecture/workbench.md),
   [workspace execution / isolation](architecture/workspace-execution.md),
@@ -61,7 +63,8 @@ prose. The conflict must still be corrected rather than ignored.
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md),
   [Java](architecture/workers/java-worker-sdk.md),
-  [C++](architecture/workers/cpp-worker.md), and the
+  [C++](architecture/workers/cpp-worker.md),
+  [review worker](architecture/workers/review-worker.md), and the
   [machine parity ledger](architecture/workers/worker-sdk-parity.json)
 
 ## Operations
@@ -100,7 +103,7 @@ Developer tooling is not a Tenvyr production runtime feature.
 ## Roadmap, plans, and history
 
 - Proposed portfolio execution: [Spring review-service worker plan](plans/active/spring-review-portfolio/README.md)
-  (reuse the Java engine for a fixed Spring business workflow; not implemented).
+  (reuse the Java engine for a fixed Spring business workflow; T00–T05 accepted 6/9, T06–T08 planned).
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md) (M8–M10 plans archived; M11 remains active),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),

@@ -1834,6 +1834,91 @@
     ],
     "verification": "Accepted locally 2026-11-14 (Asia/Saigon): final review verification ran 32 unit tests (11 compatibility, 13 security, 8 types) and 52 real PostgreSQL ITs (7 bootstrap, 11 catalog, 9 callback, 4 lifecycle, 6 schema, 15 security), all zero failures/errors/skips, in 4m01. Includes all T01/T02 review regressions. Proves old CSRF token rejection after login/logout, changed non-null session IDs, exact JDBC authority sets, current DB enabled/role lookup, test-only owner/role policies, no implicit bootstrap seeding, atomic conflict rollback without UUID/hash reset, failed-startup pool cleanup/readiness suppression, and local/https cookie flags. Two invalid-manifest-value marker tests first failed then passed after field/index-only error sanitization; malformed JSON causes are also sanitized. Error JSON uses the existing Json serializer. Documentation and identity closure gates run before the local checkpoint. No fresh retained pure/SDK/full compatibility run is claimed for T03."
    }
+  },
+  {
+   "id": "review-submission-and-reads",
+   "status": "implemented",
+   "sources": [
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewReportMapper.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewErrors.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/RequestBodyLimitFilter.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewValidation.java"
+   ],
+   "tests": [
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewValidationTest.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewSubmissionIT.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewReadsIT.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md",
+    "docs/plans/active/spring-review-portfolio/reports/T04.md"
+   ],
+   "limitations": [
+    "Atomic submission, keyset reads, and strict report projection implemented; decision/cancel/audit routes remain T06",
+    "Report projection reads verified SUCCESS attempt and APPLIED inbox row (persisted status is APPLIED, not COMMITTED); terminal output failure returns 409 REVIEW_REPORT_INVALID",
+    "Keyset pagination bounded to 100 items per request with createdAt DESC, id DESC ordering",
+    "Full retained Kafka/polyglot compatibility suite remains T08"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewReportMapper.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewErrors.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/RequestBodyLimitFilter.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewValidation.java"
+    ],
+    "checks": [
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewValidationTest.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewSubmissionIT.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewReadsIT.java"
+    ],
+    "verification": "Accepted 2026-11-14 (Asia/Saigon): combined integration 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 73 real PostgreSQL ITs pass with 0 failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z); unit runner without DB URL passes 89 Surefire; 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks on serial retry with same 120s timeout (initial concurrent Maven run timed out; exact cause unproven); final T04 review aaaf9ca5 found 0 actionable findings; source provenance commit 6e4bec5 (root 049e5cb); root verification and acceptance completed; full retained Kafka/polyglot compatibility suite remains T08."
+   }
+  },
+  {
+   "id": "review-worker",
+   "status": "implemented",
+   "sources": [
+    "backend/review-worker/src/main/java/io/tenvyr/reviewworker/ReviewWorkerMain.java",
+    "backend/review-worker/src/main/java/io/tenvyr/reviewworker/StrictReviewRunner.java",
+    "backend/agents/src/main/java/io/tenvyr/agents/AgentProcessor.java"
+   ],
+   "tests": [
+    "backend/review-worker/src/test/java/io/tenvyr/reviewworker/StrictReviewRunnerTest.java",
+    "backend/review-worker/src/test/java/io/tenvyr/reviewworker/ReviewWorkerConfigurationTest.java",
+    "backend/review-worker/src/test/java/io/tenvyr/reviewworker/ReviewWorkerIntegrationTest.java"
+   ],
+   "docs": [
+    "docs/architecture/workers/review-worker.md",
+    "docs/plans/active/spring-review-portfolio/reports/T05.md"
+   ],
+   "limitations": [
+    "Process-local ephemeral state: runs, queue, and idempotency records are held in memory; restart recomputes",
+    "Fixed concurrency 2 and max queued runs 16; excess requests receive 429",
+    "Strict review output validation rejects malformed JSON, duplicate keys, trailing tokens, and invalid score/findings",
+    "Truthful metadata preserved: MOCK mode explicitly states no real analysis was performed; RUNNER mode connects to fixed private Runner URL",
+    "Full retained Kafka/polyglot compatibility suite remains T08"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-worker/src/main/java/io/tenvyr/reviewworker/ReviewWorkerMain.java",
+     "backend/review-worker/src/main/java/io/tenvyr/reviewworker/StrictReviewRunner.java",
+     "backend/agents/src/main/java/io/tenvyr/agents/AgentProcessor.java"
+    ],
+    "checks": [
+     "backend/review-worker/src/test/java/io/tenvyr/reviewworker/StrictReviewRunnerTest.java",
+     "backend/review-worker/src/test/java/io/tenvyr/reviewworker/ReviewWorkerConfigurationTest.java",
+     "backend/review-worker/src/test/java/io/tenvyr/reviewworker/ReviewWorkerIntegrationTest.java"
+    ],
+    "verification": "Accepted 2026-11-14 (Asia/Saigon): combined integration 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 73 real PostgreSQL ITs pass with 0 failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z); canonical review runner registered in root reactor; backend build pass; 9 retained pure programs pass; final T05 review 3c9e97a0 found 0 actionable findings; source provenance commit a7d66cd (root e549485); root verification and acceptance completed; full retained Kafka/polyglot compatibility suite remains T08."
+   }
   }
  ],
  "backend_migration": {
