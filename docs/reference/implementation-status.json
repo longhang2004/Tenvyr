@@ -1788,6 +1788,52 @@
     ],
     "verification": "Accepted locally 2026-11-14: review unit 19 tests (11 compatibility, 8 types) and real PostgreSQL integration 30 ITs (11 catalog, 9 callback, 4 lifecycle, 6 schema), all zero failures/errors/skips; integration 2m39. Actual V1 duplicate-users migration failure SQLState42P07 prevents runtime construction/readiness and closes the pool; invalid transport configuration creates no base ledger. Two actual concurrent Spring apps serve HTTP readiness with one catalog binding/pipeline and public pool paths. Caller rollback, persisted definition/content-hash drift, exact constraint SQL states/index ordering, and retained 27 ledger identities pass. Unchanged-production evidence from 2026-11-14: 9 retained pure programs (AgentCheck95) and exact original 27 up/down migration identities/physical schema parity. Focused report probe passes all3 cases. Documentation and identity verification run before the local checkpoint; no push or deployment claimed."
    }
+  },
+  {
+   "id": "review-session-security",
+   "status": "implemented",
+   "sources": [
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/security/ActorResolver.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/security/BootstrapUsers.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/AuthController.java",
+    "backend/review-api/src/main/resources/application.yml",
+    "backend/review-api/src/main/resources/application-https.yml"
+   ],
+   "tests": [
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewSecurityTest.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewSecurityIT.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/BootstrapUsersIT.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md",
+    "docs/plans/active/spring-review-portfolio/tasks/T03-session-security.md",
+    "docs/plans/active/spring-review-portfolio/reports/T03.md"
+   ],
+   "limitations": [
+    "Business request/command routes and real repository authorization remain T04/T06; T03 visibility policies are test-only fixtures",
+    "Local HTTP defaults cookie Secure=false; the https deployment profile enforces Secure=true with operator-supplied HTTPS transport",
+    "In-memory session loss across restart requires client re-login; persisted PostgreSQL state survives",
+    "Bootstrap requires an explicit private credential manifest for initial use; later normal starts omit the option and existing users are never silently reset",
+    "Full retained Kafka/polyglot compatibility suite remains the required T08 gate"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/security/ActorResolver.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/security/BootstrapUsers.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/AuthController.java",
+     "backend/review-api/src/main/resources/application.yml",
+     "backend/review-api/src/main/resources/application-https.yml"
+    ],
+    "checks": [
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewSecurityTest.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewSecurityIT.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/BootstrapUsersIT.java"
+    ],
+    "verification": "Accepted locally 2026-11-14 (Asia/Saigon): final review verification ran 32 unit tests (11 compatibility, 13 security, 8 types) and 52 real PostgreSQL ITs (7 bootstrap, 11 catalog, 9 callback, 4 lifecycle, 6 schema, 15 security), all zero failures/errors/skips, in 4m01. Includes all T01/T02 review regressions. Proves old CSRF token rejection after login/logout, changed non-null session IDs, exact JDBC authority sets, current DB enabled/role lookup, test-only owner/role policies, no implicit bootstrap seeding, atomic conflict rollback without UUID/hash reset, failed-startup pool cleanup/readiness suppression, and local/https cookie flags. Two invalid-manifest-value marker tests first failed then passed after field/index-only error sanitization; malformed JSON causes are also sanitized. Error JSON uses the existing Json serializer. Documentation and identity closure gates run before the local checkpoint. No fresh retained pure/SDK/full compatibility run is claimed for T03."
+   }
   }
  ],
  "backend_migration": {

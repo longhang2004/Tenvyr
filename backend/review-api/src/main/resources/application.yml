@@ -1,6 +1,12 @@
 server:
   port: 8080
   address: 127.0.0.1
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: false
 
 management:
   endpoints:

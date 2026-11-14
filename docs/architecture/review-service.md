@@ -12,9 +12,14 @@ sources:
   - backend/review-api/src/main/java/io/tenvyr/review/EngineConfiguration.java
   - backend/review-api/src/main/java/io/tenvyr/review/EngineLifecycle.java
   - backend/review-api/src/main/resources/application.yml
+  - backend/review-api/src/main/resources/application-https.yml
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewMigrationConfiguration.java
   - backend/review-api/src/main/java/io/tenvyr/review/PipelineCatalog.java
   - backend/review-api/src/main/java/io/tenvyr/review/domain/ReviewTypes.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java
+  - backend/review-api/src/main/java/io/tenvyr/review/security/ActorResolver.java
+  - backend/review-api/src/main/java/io/tenvyr/review/security/BootstrapUsers.java
+  - backend/review-api/src/main/java/io/tenvyr/review/AuthController.java
   - backend/review-api/src/main/resources/db/review/V1__review_domain.sql
   - backend/agents/src/main/java/io/tenvyr/agents/ReviewReportContract.java
   - contracts/schemas/review-report.v1.schema.json
@@ -25,7 +30,7 @@ sources:
 
 ## Overview
 
-The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below.
+The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below. T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF, current database actors, and explicit atomic user bootstrap.
 
 ## Delivered Components
 
@@ -70,7 +75,7 @@ The review service reuses the existing Tenvyr execution engine composition witho
   - Grants a strict CSRF exemption specifically and only for `POST /internal/agent-callbacks/http/code-reviewer`.
   - Enforces CSRF protection on all other unsafe routes, returning 403 Forbidden.
   - Permits actuator liveness and readiness probes (`/actuator/health/liveness`, `/actuator/health/readiness`) without credentials.
-  - Disables form login and basic auth fallbacks, denying all legacy and unopened business routes with 401/403 JSON responses and no default generated passwords.
+  - Since T03, enables standard form login and session logout with CSRF, permits anonymous CSRF-token retrieval, and requires authentication for `/api/v1/**`. Basic auth remains disabled; legacy management routes are denied with safe 401/403 JSON and there is no generated default password.
 
 ## Review Domain Slice (T02)
 
@@ -81,8 +86,9 @@ Startup follows this order:
 2. Run the retained `Migrator`, then Flyway's versioned review migrations.
 3. Ensure the fixed catalog in `Db.fromDataSource(ds).transaction(...)`, passing
    the transaction's existing connection to `PipelineCatalog.ensure`.
-4. Construct the runtime after database initialization; start adapters and recovery
-   through lifecycle phase 100, then admit web traffic.
+4. After database initialization, construct the runtime and complete singleton
+   initialization, including explicit bootstrap when configured. Start adapters
+   and recovery through lifecycle phase 100, then admit web traffic.
 
 Flyway owns `tenvyr_review` and its history. V1 creates `users`,
 `pipeline_bindings`, `requests`, `decisions`, and `audit`, without a mutable
@@ -103,8 +109,8 @@ startup. The fixed definition is `review-request-v1`, version `1`, with one
 `review` step targeting `code-reviewer`: two retries, `onFailure: retry`, a
 30-second timeout, and code/language input templates.
 
-`ReviewTypes` supplies immutable records and enums for the later session, API,
-and Worker tasks. `Page.items` and `ReviewReport.findings` copy their lists;
+`ReviewTypes` supplies immutable records and enums for the session, review API,
+and Worker boundaries. `Page.items` and `ReviewReport.findings` copy their lists;
 the exact signatures are in the [T02 handoff](../plans/active/spring-review-portfolio/tasks/T02-review-schema.md#interfaces).
 No submission route, authentication system, or human decision behavior is
 delivered by the schema itself.
@@ -117,6 +123,53 @@ coercion are rejected. The separate business JSON Schema does not change Agent
 Protocol v1. Java additionally enforces Unicode blank detection, UTF-16 limits,
 and total serialized UTF-8 size; standard JSON Schema `maxLength` counts Unicode
 code points and does not express the serialized-byte bound.
+
+## Session Security and User Bootstrap (T03)
+
+T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF,
+current database actors, and explicit atomic user bootstrap.
+
+1. **Authentication and sessions:** Standard `POST /login` uses form credentials
+   and CSRF, returning 204 on success or safe 401 JSON on failure. Standard
+   `POST /logout` requires CSRF, invalidates the session, clears its cookie,
+   and returns 204. Session fixation defense changes the session ID, while
+   the CSRF strategy invalidates the token used before authentication.
+2. **CSRF and errors:** `GET /api/v1/auth/csrf` permits anonymous access and
+   returns `{headerName,parameterName,token}` with `Cache-Control: no-store`.
+   Clients fetch a fresh token after login/logout. Only the exact signed
+   callback POST is exempt. Authentication and denied-access responses use
+   safe `{code,message,requestId}` JSON with a UUID request ID.
+3. **Current actors:** `ActorResolver(JdbcTemplate).current(Authentication)`
+   rejects anonymous/unauthenticated inputs before JDBC and resolves the
+   principal username to its durable UUID, current database role, and enabled
+   state. Disabled/deleted users receive 401. `GET /api/v1/me` returns this
+   actor. The real `JdbcUserDetailsManager` reads `tenvyr_review.users` and
+   maps each stored role to its exact `ROLE_` authority; the shared
+   `JdbcTemplate` has a 5-second query timeout.
+4. **Explicit bootstrap:** `BootstrapUsers.parse(Path)` returns
+   `List<Entry>` with `Entry(String username,String password,Role role)`.
+   The non-empty array has exactly those string fields, lowercase ASCII
+   usernames, nonblank supplied passwords, and the two supported roles.
+   `review.bootstrap-users-file` enables one transactional write of generated
+   UUIDs and bcrypt hashes. Existing users cause a conflict without reset or
+   partial writes. With the option absent, no default users are created.
+   Validation errors expose field/index information, not raw values or JSON
+   causes; failed inserts are translated without raw row/hash details.
+5. **Cookies and sessions:** Local HTTP uses HttpOnly, SameSite=Lax,
+   Secure=false cookies. The `https` profile sets Secure=true for an HTTPS
+   listener or TLS-terminating proxy. In-memory session loss after restart
+   requires re-login; persisted PostgreSQL state survives.
+
+Bootstrap is a non-lazy initializer depending on completed database
+initialization. All such initialization finishes before SmartLifecycle recovery
+start and web admission. Runtime adapters may have been constructed earlier;
+managed cleanup still runs on bootstrap failure.
+
+Use an explicit private credential manifest for the initial configured
+startup, then remove `review.bootstrap-users-file` on later starts. Missing
+credentials fail validation; existing credentials are never silently changed.
+The protected T03 visibility/role fixtures use the actual actor resolver, but
+T04/T06 must verify authorization again against real business repositories.
 
 ## Verification Boundary
 
@@ -143,5 +196,14 @@ The unchanged production code also passed 9 retained pure programs
 (`AgentCheck`: 95 checks), exact parity with the original 27 up/down migrations
 and physical schema, and the focused three-case report probe.
 The [T02 report](../plans/active/spring-review-portfolio/reports/T02.md) records
-the evidence and exact DTO handoff. Session policy and business routes remain
-T03/T04 work.
+the evidence and exact DTO handoff. Business review routes remain T04/T06 work.
+
+T03 was accepted locally on 2026-11-14 with 32 unit tests (11 compatibility,
+13 security, 8 types) and 52 real PostgreSQL ITs (7 bootstrap, 11 catalog,
+9 callback, 4 lifecycle, 6 schema, 15 security), all zero failures/errors/skips.
+The full review run took 4 minutes 1 second and includes the T01/T02 review
+regressions. It verifies real CSRF/session rotation, current DB actors,
+bootstrap rollback/no implicit seeding, failed-startup pool cleanup, and
+local/HTTPS cookie flags. Two manifest-value leak regressions first failed,
+then passed with field/index-only parser messages. See the
+[T03 report](../plans/active/spring-review-portfolio/reports/T03.md).
