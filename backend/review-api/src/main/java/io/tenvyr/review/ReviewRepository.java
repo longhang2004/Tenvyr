@@ -204,7 +204,7 @@ public class ReviewRepository {
         return resolveVerifiedReport(executionId);
     }
 
-    private record ProvenanceRow(
+    public record ProvenanceRow(
             UUID attemptId,
             String attemptInvocationId,
             UUID attemptExecutionId,
@@ -214,12 +214,118 @@ public class ReviewRepository {
             String payloadHash
     ) {}
 
+    public ProvenanceRow findVerifiedProvenance(UUID executionId) {
+        List<ProvenanceRow> rows = jdbcTemplate.query(
+                "SELECT a.id AS attempt_id, " +
+                        "a.\"invocationId\" AS attempt_inv_id, " +
+                        "a.\"executionId\" AS attempt_exec_id, " +
+                        "a.\"logicalStepId\" AS logical_step_id, " +
+                        "i.\"invocationId\" AS inbox_inv_id, " +
+                        "i.payload, " +
+                        "i.\"payloadHash\" " +
+                        "FROM step_attempts a " +
+                        "JOIN step_executions se ON a.\"logicalStepId\" = se.id " +
+                        "JOIN result_inbox i ON i.\"stepAttemptId\" = a.id " +
+                        "WHERE a.\"executionId\" = ? " +
+                        "  AND se.\"stepId\" = 'review' " +
+                        "  AND a.status = 'SUCCESS' " +
+                        "  AND i.status = 'APPLIED' " +
+                        "ORDER BY a.\"attemptNumber\" DESC LIMIT 1",
+                (rs, rowNum) -> new ProvenanceRow(
+                        rs.getObject("attempt_id", UUID.class),
+                        rs.getString("attempt_inv_id"),
+                        rs.getObject("attempt_exec_id", UUID.class),
+                        rs.getObject("logical_step_id", UUID.class),
+                        rs.getString("inbox_inv_id"),
+                        rs.getString("payload"),
+                        rs.getString("payloadHash")
+                ),
+                executionId
+        );
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * Keyset-paginated audit log query sorted ascending: createdAt ASC, id ASC.
+     * Enforces visibility in prepared SQL.
+     */
+    public Page<io.tenvyr.review.domain.ReviewTypes.AuditEntry> listAudit(Actor actor, UUID requestId, int limit, ReviewValidation.Cursor cursor) {
+        List<UUID> visibleCheck;
+        if (actor.role() == Role.REVIEWER) {
+            visibleCheck = jdbcTemplate.query(
+                    "SELECT id FROM tenvyr_review.requests WHERE id = ?",
+                    (rs, rowNum) -> rs.getObject("id", UUID.class),
+                    requestId
+            );
+        } else {
+            visibleCheck = jdbcTemplate.query(
+                    "SELECT id FROM tenvyr_review.requests WHERE id = ? AND owner_id = ?",
+                    (rs, rowNum) -> rs.getObject("id", UUID.class),
+                    requestId,
+                    actor.id()
+            );
+        }
+        if (visibleCheck.isEmpty()) {
+            return null;
+        }
+
+        int fetchLimit = limit + 1;
+        List<io.tenvyr.review.domain.ReviewTypes.AuditEntry> fetched;
+        if (cursor == null) {
+            fetched = jdbcTemplate.query(
+                    "SELECT id, actor_id, action, created_at FROM tenvyr_review.audit " +
+                            "WHERE request_id = ? " +
+                            "ORDER BY created_at ASC, id ASC LIMIT ?",
+                    (rs, rowNum) -> new io.tenvyr.review.domain.ReviewTypes.AuditEntry(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("actor_id", UUID.class),
+                            rs.getString("action"),
+                            rs.getTimestamp("created_at").toInstant()
+                    ),
+                    requestId,
+                    fetchLimit
+            );
+        } else {
+            fetched = jdbcTemplate.query(
+                    "SELECT id, actor_id, action, created_at FROM tenvyr_review.audit " +
+                            "WHERE request_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) " +
+                            "ORDER BY created_at ASC, id ASC LIMIT ?",
+                    (rs, rowNum) -> new io.tenvyr.review.domain.ReviewTypes.AuditEntry(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("actor_id", UUID.class),
+                            rs.getString("action"),
+                            rs.getTimestamp("created_at").toInstant()
+                    ),
+                    requestId,
+                    Timestamp.from(cursor.createdAt()),
+                    Timestamp.from(cursor.createdAt()),
+                    cursor.id(),
+                    fetchLimit
+            );
+        }
+
+        boolean hasMore = fetched.size() > limit;
+        List<io.tenvyr.review.domain.ReviewTypes.AuditEntry> pageRows = hasMore ? fetched.subList(0, limit) : fetched;
+
+        String nextCursor = null;
+        if (hasMore && !pageRows.isEmpty()) {
+            io.tenvyr.review.domain.ReviewTypes.AuditEntry last = pageRows.get(pageRows.size() - 1);
+            String payload = Json.stringify(Json.object(
+                    "createdAt", last.createdAt().toString(),
+                    "id", last.id().toString()
+            ));
+            nextCursor = Base64.getUrlEncoder().encodeToString(payload.getBytes(StandardCharsets.UTF_8));
+        }
+
+        return new Page<>(pageRows, nextCursor);
+    }
+
     /**
      * Shared report provenance helper for both report and status projections.
      * Uses canonical persisted successful review attempt and verified inbox payload output (not attempt.result),
      * checking payload hash and matching execution/step/invocation identity against real schema/engine.
      */
-    private ReviewReport resolveVerifiedReport(UUID executionId) {
+    public ReviewReport resolveVerifiedReport(UUID executionId) {
         List<ProvenanceRow> rows = jdbcTemplate.query(
                 "SELECT a.id AS attempt_id, " +
                         "a.\"invocationId\" AS attempt_inv_id, " +

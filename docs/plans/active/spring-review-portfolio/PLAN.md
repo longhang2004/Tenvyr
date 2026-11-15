@@ -3,7 +3,7 @@ title: "Spring Review Portfolio Implementation Plan"
 status: current
 audience:
   - developer
-last_verified: 2026-11-13
+last_verified: 2026-11-16
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -21,7 +21,7 @@ sources:
 **Tech Stack:** Java 17; Boot 3.5.16 for new API only; JDBC/PostgreSQL; Spring Security sessions; Flyway for business schema only; existing HTTP/HMAC Worker; JUnit/Spring test for new module.
 
 **Spec:** [SPEC.md](SPEC.md). Mandatory existing-API evidence: [DISCOVERY.md](DISCOVERY.md).
-**Status:** In progress. Accepted: 6 of 9 tasks (T00–T05). T06–T08 remain planned and unimplemented.
+**Status:** In progress. Accepted: 7 of 9 tasks (T00–T06). T07–T08 remain planned and unimplemented.
 
 ## Global Constraints
 
@@ -85,7 +85,7 @@ management routes appear on its port.
 
 - [x] [T04: atomic submit and bounded reads](tasks/T04-submit-and-read.md) — accepted ([report](reports/T04.md))
 - [x] [T05: strict HTTP reviewer Worker](tasks/T05-review-worker.md) — accepted ([report](reports/T05.md))
-- [ ] [T06: business decisions, cancellation and audit](tasks/T06-decisions-and-audit.md)
+- [x] [T06: business decisions, cancellation and audit](tasks/T06-decisions-and-audit.md) — accepted ([report](reports/T06.md))
 
 T04/T05 can be assigned to separate isolated worktrees after T03. Merge T04 then
 T05; T05 does not edit ReviewTypes, API services, root POM, or shared docs index.

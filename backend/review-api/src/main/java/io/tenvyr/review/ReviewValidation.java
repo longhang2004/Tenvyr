@@ -25,10 +25,12 @@ public final class ReviewValidation {
 
     private static final Set<String> ALLOWED_LANGUAGES = Set.of("java", "typescript", "python");
     private static final Set<String> ALLOWED_FIELDS = Set.of("title", "language", "code");
+    private static final Set<String> ALLOWED_DECISION_FIELDS = Set.of("action", "comment");
     private static final Pattern CANONICAL_UUID =
             Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
     public static final int MAX_CODE_UTF8_BYTES = 65536;
     public static final int MAX_TITLE_LENGTH = 160;
+    public static final int MAX_COMMENT_LENGTH = 2000;
     public static final int MAX_CURSOR_RAW_LENGTH = 512;
     public static final int MAX_CURSOR_DECODED_BYTES = 256;
     public static final int DEFAULT_LIMIT = 20;
@@ -118,6 +120,52 @@ public final class ReviewValidation {
         CreateReview review = new CreateReview(titleNode.textValue(), languageNode.textValue(), codeNode.textValue());
         validateCreateReview(review);
         return review;
+    }
+
+    /**
+     * Parses and validates raw JSON decision command body strictly.
+     */
+    public static io.tenvyr.review.domain.ReviewTypes.DecisionCommand parseDecisionCommand(String json) throws Exception {
+        if (json == null || json.isBlank()) {
+            throw new IllegalArgumentException("Decision body must not be blank");
+        }
+        JsonNode root = STRICT_MAPPER.readTree(json);
+        if (!root.isObject()) {
+            throw new IllegalArgumentException("Decision body must be a JSON object");
+        }
+        ObjectNode obj = (ObjectNode) root;
+        var fields = obj.fieldNames();
+        while (fields.hasNext()) {
+            String key = fields.next();
+            if (!ALLOWED_DECISION_FIELDS.contains(key)) {
+                throw new IllegalArgumentException("Unrecognized property in decision command: " + key);
+            }
+        }
+        JsonNode actionNode = obj.get("action");
+        if (actionNode == null || !actionNode.isTextual()) {
+            throw new IllegalArgumentException("Field 'action' must be a string");
+        }
+        String actionStr = actionNode.textValue().trim();
+        io.tenvyr.review.domain.ReviewTypes.DecisionAction action;
+        try {
+            action = io.tenvyr.review.domain.ReviewTypes.DecisionAction.valueOf(actionStr);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid action: " + actionStr);
+        }
+
+        JsonNode commentNode = obj.get("comment");
+        String comment = null;
+        if (commentNode != null && !commentNode.isNull()) {
+            if (!commentNode.isTextual()) {
+                throw new IllegalArgumentException("Field 'comment' must be a string");
+            }
+            comment = commentNode.textValue().trim();
+            if (comment.length() > MAX_COMMENT_LENGTH) {
+                throw new IllegalArgumentException("Comment length exceeds " + MAX_COMMENT_LENGTH + " characters");
+            }
+        }
+
+        return new io.tenvyr.review.domain.ReviewTypes.DecisionCommand(action, comment);
     }
 
     /**

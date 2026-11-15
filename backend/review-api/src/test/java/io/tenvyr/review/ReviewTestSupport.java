@@ -36,6 +36,7 @@ import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -51,6 +52,101 @@ public final class ReviewTestSupport {
     public static final String TEST_KEY_ID = "code-reviewer-key-1";
     public static final String TEST_TOKEN = "test-token";
     public static final String CALLBACK_PATH = "/internal/agent-callbacks/http/code-reviewer";
+
+    public record ReviewFixture(UUID requestId, UUID executionId, UUID ownerId) {}
+
+    public record StepAttemptFixture(UUID stepAttemptId, String invocationId, String logicalStepId) {}
+
+    public static ReviewFixture createReviewFixture(
+            Connection conn,
+            ControlPlaneRuntime engineRuntime,
+            Set<UUID> trackedRequests,
+            Set<UUID> trackedExecutions,
+            UUID ownerId,
+            String title,
+            String language,
+            String code,
+            Instant createdAt) throws Exception {
+        ObjectNode pipeline = PipelineCatalog.ensure(conn);
+        ObjectNode execution = engineRuntime.executions().materializeExecutionWithManager(
+                conn, pipeline, Json.object("code", code, "language", language), null);
+        UUID executionId = UUID.fromString(execution.path("id").asText());
+        if (trackedExecutions != null) {
+            trackedExecutions.add(executionId);
+        }
+
+        UUID idempotencyKey = UUID.randomUUID();
+        UUID requestId = createDirectReviewRequest(
+                conn, trackedRequests, ownerId, idempotencyKey, title, language, code, executionId, createdAt);
+
+        String payloadHash = Json.hash(Json.object("title", title, "language", language, "code", code));
+        createDirectAuditEntry(
+                conn, requestId, ownerId, "SUBMIT", idempotencyKey, payloadHash, createdAt);
+
+        return new ReviewFixture(requestId, executionId, ownerId);
+    }
+
+    public static StepAttemptFixture createStepAttemptFixture(
+            Connection conn,
+            org.springframework.core.env.Environment environment,
+            UUID executionId) throws SQLException {
+        Db tx = Db.on(conn);
+        ObjectNode stepExec = tx.one("SELECT * FROM step_executions WHERE \"executionId\" = ?", executionId.toString());
+        ObjectNode revision = tx.one("SELECT * FROM execution_plan_revisions WHERE \"executionId\" = ?", executionId.toString());
+
+        ObjectNode executorSnapshot = new io.tenvyr.control.engine.AgentTransportConfig(
+                EngineConfiguration.validateReviewEnvironment(environment)
+        ).descriptor(TEST_AGENT);
+
+        String logicalStepId = stepExec.path("id").asText();
+        String invocationId = logicalStepId + ":1";
+
+        ObjectNode attempt = Json.object(
+                "executionId", executionId.toString(),
+                "logicalStepId", logicalStepId,
+                "planRevisionId", revision.path("id").asText(),
+                "attemptNumber", 1,
+                "invocationId", invocationId,
+                "frozenSpecHash", Json.hash(PipelineCatalog.definition().path("steps").get(0)),
+                "inputSnapshot", Json.object(),
+                "executorSnapshot", executorSnapshot,
+                "status", "CREATED",
+                "deadlineAt", Instant.now().plusSeconds(180).toString()
+        );
+        ObjectNode created = tx.insert("step_attempts", attempt);
+        UUID stepAttemptId = UUID.fromString(created.path("id").asText());
+        return new StepAttemptFixture(stepAttemptId, invocationId, logicalStepId);
+    }
+
+    public static int awaitPgBlockingPid(DataSource dataSource, int blockerPid, long timeoutMs) throws Exception {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(
+                         "SELECT blocked.pid FROM pg_locks blocked " +
+                                 "JOIN pg_locks blocker ON blocked.locktype = blocker.locktype " +
+                                 "  AND blocked.database IS NOT DISTINCT FROM blocker.database " +
+                                 "  AND blocked.relation IS NOT DISTINCT FROM blocker.relation " +
+                                 "  AND blocked.page IS NOT DISTINCT FROM blocker.page " +
+                                 "  AND blocked.tuple IS NOT DISTINCT FROM blocker.tuple " +
+                                 "  AND blocked.virtualxid IS NOT DISTINCT FROM blocker.virtualxid " +
+                                 "  AND blocked.transactionid IS NOT DISTINCT FROM blocker.transactionid " +
+                                 "  AND blocked.classid IS NOT DISTINCT FROM blocker.classid " +
+                                 "  AND blocked.objid IS NOT DISTINCT FROM blocker.objid " +
+                                 "  AND blocked.objsubid IS NOT DISTINCT FROM blocker.objsubid " +
+                                 "  AND blocked.pid != blocker.pid " +
+                                 "WHERE blocker.pid = ? AND NOT blocked.granted AND blocker.granted LIMIT 1")) {
+                ps.setInt(1, blockerPid);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt(1);
+                    }
+                }
+            }
+            Thread.sleep(25);
+        }
+        throw new TimeoutException("Timed out waiting for process to be blocked by PG holder pid " + blockerPid);
+    }
 
     private static HttpServer mockWorkerServer;
     private static int mockWorkerPort;

@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-11-14
+last_verified: 2026-11-16
 sources:
   - backend/platform/src/main/java/io/tenvyr/platform/Db.java
   - backend/control-plane/src/main/java/io/tenvyr/control/ControlPlaneRuntime.java
@@ -21,6 +21,7 @@ sources:
   - backend/review-api/src/main/java/io/tenvyr/review/security/BootstrapUsers.java
   - backend/review-api/src/main/java/io/tenvyr/review/AuthController.java
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewDecisionService.java
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewReportMapper.java
@@ -34,6 +35,9 @@ sources:
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewValidationTest.java
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewSubmissionIT.java
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewReadsIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewDecisionIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewCancelIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewAuditIT.java
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewTestSupport.java
 ---
 
@@ -41,7 +45,7 @@ sources:
 
 ## Overview
 
-The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. T00 and T01 are accepted local checkpoints. T02 was accepted locally on 2026-11-14 with the domain schema and contracts described below. T03 was accepted locally on 2026-11-14 with standard Spring sessions, CSRF, current database actors, and explicit atomic user bootstrap. T04 was accepted on 2026-11-14 with atomic idempotent submission and authorized bounded reads. Combined integration with the review worker (T05) passes 89 Surefire tests (44 API + 45 Worker) and 73 PostgreSQL ITs in 5m24s.
+The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. Tasks T00 through T06 are accepted local checkpoints (7/9 tasks accepted). T06 delivered concurrent-safe verdicts, owner cancellation, and keyset audit ledger. Combined full standard review gate passes 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 88 real PostgreSQL ITs across 11 suites in 6m18 (0 failures, errors, or skips).
 
 ## Delivered Components
 
@@ -219,6 +223,19 @@ keyset pagination, strict report state projection, and streaming request body li
    rollback, and maps validation, authorization, and conflict exceptions to safe bounded JSON
    `{code, message, requestId}`. Transient DB read/write errors produce 503 Retry-After: 1,
    preventing false permanent report failure.
+6. **Human decisions, cancellation and audit ledger (`ReviewDecisionService`):**
+   - Verdicts (`POST /api/v1/reviews/{id}/decisions`): only `REVIEWER` distinct from request owner
+     can decide on `COMPLETED` execution with valid verified report. Advisory lock `(actorId, "DECIDE", key)`
+     followed by request row lock `FOR UPDATE`. Atomically inserts one decision and one `DECIDE` audit
+     entry. First decision returns 201 Created with Location; equivalent replay returns 200 OK; conflicting
+     payload or cross-request replay returns 409 `IDEMPOTENCY_CONFLICT`. Never calls `ApprovalService`.
+   - Cancellation (`POST /api/v1/reviews/{id}/cancel`): only owner `SUBMITTER` can cancel while in
+     `PROCESSING`. Advisory lock `(actorId, "CANCEL", key)` followed by request row lock `FOR UPDATE`.
+     Invokes `cancelExecutionWithManager` on the same connection. If concurrent completion won, rolls back
+     `CANCEL` audit and returns 409 Conflict. `CANCEL` audit is recorded only if cancellation truly won.
+   - Keyset audit pagination (`GET /api/v1/reviews/{id}/audit`): keyset sorted `createdAt ASC, id ASC`,
+     limit 1..100. Enforces SQL visibility (owner `SUBMITTER` and `REVIEWER` allowed; foreign submitters 404).
+     Exposes only `{id, actorId, action, createdAt}`, strictly excluding source code, comments, reports, or secrets.
 
 ## Verification Boundary
 
@@ -258,3 +275,5 @@ then passed with field/index-only parser messages. See the
 [T03 report](../plans/active/spring-review-portfolio/reports/T03.md).
 
 T04 was accepted on 2026-11-14 with combined integration (89 Surefire [44 API + 45 Worker including 13 HTTP loopbacks] + 73 real PostgreSQL ITs) passing with zero failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z). Unit runner without DB URL passes 89 Surefire tests; 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks on serial retry with same 120s timeout. Independent review aaaf9ca5 found 0 actionable findings. Source provenance commit 6e4bec5 (root 049e5cb).
+
+T06 was accepted locally on 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 88 real PostgreSQL ITs across 11 suites, 0 failures, 0 errors, 0 skipped in 6m18 (finished 2026-11-15T17:05:14Z). 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks. Independent review retracted all 3 initial findings after verifying parent request `FOR UPDATE` serialization, same-DataSource Spring transaction binding, monotonic terminal state, and authoritative cancel result (0 remaining verified production defects). Cancellation-winning test fixture blocks audit `INSERT` after engine locks; callback proven blocked by cancel PostgreSQL backend; release yields 200/204 REJECTED. T00–T06 accepted 7/9; T07 and T08 planned.

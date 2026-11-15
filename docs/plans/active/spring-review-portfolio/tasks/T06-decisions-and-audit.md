@@ -1,12 +1,18 @@
 ---
 title: "T06 — Implement business verdicts, cancellation and atomic command audit"
-status: planned
+status: current
 audience:
   - developer
-last_verified: 2026-11-11
+last_verified: 2026-11-16
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewDecisionService.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewDecisionIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewCancelIT.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewAuditIT.java
   - scripts/backend-checks.sh
 ---
 
@@ -14,7 +20,7 @@ sources:
 
 Dependencies: T04, T05. Estimate: 5–7 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: planned, not implemented.
+Status: accepted locally (T00–T06 accepted 7/9; T07–T08 planned).
 
 ## Deliverable and files
 
@@ -45,28 +51,28 @@ command lock order and distinguish business decision from dispatch ApprovalServi
 
 ## Steps and acceptance
 
-- [ ] Write failing tests for roles, foreign UUID, self-decision, pending/failed/
+- [x] Write failing tests for roles, foreign UUID, self-decision, pending/failed/
   invalid report, same-key replay, changed payload and two final verdicts.
-- [ ] Take operation advisory lock then request row lock. Recheck actor,
+- [x] Take operation advisory lock then request row lock. Recheck actor,
   execution completion and exact committed successful attempt/result hash in
   the transaction. Insert one decision and one DECIDE audit atomically. No
   execution state change and no call to engine ApprovalService.
-- [ ] Test parallel APPROVE vs REQUEST_CHANGES from two reviewers: one decision
+- [x] Test parallel APPROVE vs REQUEST_CHANGES from two reviewers: one decision
   wins, loser409, one audit. Same actor/key/payload converges to one identity;
   same key on a different request/payload conflicts. Disable/role checks still
   apply to an old session.
-- [ ] Implement owner cancellation through existing cancelExecutionWithManager
+- [x] Implement owner cancellation through existing cancelExecutionWithManager
   on the same Connection plus CANCEL audit. Re-read actual cancellation result:
   if result completion won, rollback audit and return409. Best-effort transport
   notification can happen only after commit. No automatic new execution.
-- [ ] Use barriers with real PostgreSQL plus signed callback to exercise both
+- [x] Use barriers with real PostgreSQL plus signed callback to exercise both
   cancel-vs-result outcomes and a deadlock/lock-timeout failure path. Assert no
   contradictory audit/decision and the application can continue afterward.
-- [ ] Implement visibility-filtered, prepared keyset audit pagination ascending
+- [x] Implement visibility-filtered, prepared keyset audit pagination ascending
   createdAt/id, limit1..100. Include identifiers/actions/times only. SUBMIT,
   DECIDE,CANCEL audit duplicates are suppressed by durable command identity;
   failed unauthorized/conflicting commands do not create success audit.
-- [ ] Run review unit/integration, retained cancellation/inbox checks, update
+- [x] Run review unit/integration, retained cancellation/inbox checks, update
   current docs/ledger and verifiers, then handoff.
 
 Representative assertions:

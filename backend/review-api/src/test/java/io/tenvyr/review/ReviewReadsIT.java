@@ -6,6 +6,8 @@ import io.tenvyr.control.ControlPlaneRuntime;
 import io.tenvyr.control.engine.AgentTransportConfig;
 import io.tenvyr.platform.Db;
 import io.tenvyr.platform.Json;
+import io.tenvyr.review.ReviewTestSupport.ReviewFixture;
+import io.tenvyr.review.ReviewTestSupport.StepAttemptFixture;
 import io.tenvyr.review.domain.ReviewTypes.Actor;
 import io.tenvyr.review.domain.ReviewTypes.ReviewDetail;
 import io.tenvyr.review.domain.ReviewTypes.ReviewReport;
@@ -101,10 +103,6 @@ public class ReviewReadsIT {
         ReviewTestSupport.cleanup(dataSource, trackedUsers, trackedRequests, trackedExecutions);
     }
 
-    private record ReviewFixture(UUID requestId, UUID executionId, UUID ownerId) {}
-
-    private record StepAttemptFixture(UUID stepAttemptId, String invocationId, String logicalStepId) {}
-
     private ReviewFixture createReviewFixture(
             Connection conn,
             UUID ownerId,
@@ -112,50 +110,12 @@ public class ReviewReadsIT {
             String language,
             String code,
             Instant createdAt) throws Exception {
-        ObjectNode pipeline = PipelineCatalog.ensure(conn);
-        ObjectNode execution = engineRuntime.executions().materializeExecutionWithManager(
-                conn, pipeline, Json.object("code", code, "language", language), null);
-        UUID executionId = UUID.fromString(execution.path("id").asText());
-        trackedExecutions.add(executionId);
-
-        UUID idempotencyKey = UUID.randomUUID();
-        UUID requestId = ReviewTestSupport.createDirectReviewRequest(
-                conn, trackedRequests, ownerId, idempotencyKey, title, language, code, executionId, createdAt);
-
-        String payloadHash = Json.hash(Json.object("title", title, "language", language, "code", code));
-        ReviewTestSupport.createDirectAuditEntry(
-                conn, requestId, ownerId, "SUBMIT", idempotencyKey, payloadHash, createdAt);
-
-        return new ReviewFixture(requestId, executionId, ownerId);
+        return ReviewTestSupport.createReviewFixture(conn, engineRuntime, trackedRequests, trackedExecutions,
+                ownerId, title, language, code, createdAt);
     }
 
     private StepAttemptFixture createStepAttemptFixture(Connection conn, UUID executionId) throws SQLException {
-        Db tx = Db.on(conn);
-        ObjectNode stepExec = tx.one("SELECT * FROM step_executions WHERE \"executionId\" = ?", executionId.toString());
-        ObjectNode revision = tx.one("SELECT * FROM execution_plan_revisions WHERE \"executionId\" = ?", executionId.toString());
-
-        ObjectNode executorSnapshot = new AgentTransportConfig(
-                EngineConfiguration.validateReviewEnvironment(environment)
-        ).descriptor(ReviewTestSupport.TEST_AGENT);
-
-        String logicalStepId = stepExec.path("id").asText();
-        String invocationId = logicalStepId + ":1";
-
-        ObjectNode attempt = Json.object(
-                "executionId", executionId.toString(),
-                "logicalStepId", logicalStepId,
-                "planRevisionId", revision.path("id").asText(),
-                "attemptNumber", 1,
-                "invocationId", invocationId,
-                "frozenSpecHash", Json.hash(PipelineCatalog.definition().path("steps").get(0)),
-                "inputSnapshot", Json.object(),
-                "executorSnapshot", executorSnapshot,
-                "status", "CREATED",
-                "deadlineAt", Instant.now().plusSeconds(180).toString()
-        );
-        ObjectNode created = tx.insert("step_attempts", attempt);
-        UUID stepAttemptId = UUID.fromString(created.path("id").asText());
-        return new StepAttemptFixture(stepAttemptId, invocationId, logicalStepId);
+        return ReviewTestSupport.createStepAttemptFixture(conn, environment, executionId);
     }
 
     @Test

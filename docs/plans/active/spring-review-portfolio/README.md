@@ -4,7 +4,7 @@ status: planned
 audience:
   - developer
   - product
-last_verified: 2026-11-14
+last_verified: 2026-11-16
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -14,10 +14,10 @@ sources:
 # Spring Review Portfolio
 
 Lifecycle: approved implementation in progress. Direction: reuse Tenvyr for a
-Java/Spring business-backend portfolio. **6 of 9 tasks are accepted locally:**
+Java/Spring business-backend portfolio. **7 of 9 tasks are accepted locally:**
 [T00](reports/T00.md), [T01](reports/T01.md), [T02](reports/T02.md),
-[T03](reports/T03.md), [T04](reports/T04.md), and [T05](reports/T05.md).
-T06–T08 remain planned and unimplemented. Current contracts and verified
+[T03](reports/T03.md), [T04](reports/T04.md), [T05](reports/T05.md), and [T06](reports/T06.md).
+T07–T08 remain planned and unimplemented. Current contracts and verified
 reports take precedence over this plan.
 
 Build one fixed asynchronous code-review request workflow on the existing

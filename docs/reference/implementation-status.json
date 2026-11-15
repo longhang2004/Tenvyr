@@ -1882,6 +1882,47 @@
    }
   },
   {
+   "id": "review-decisions-and-audit",
+   "status": "implemented",
+   "sources": [
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewDecisionService.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewValidation.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewErrors.java"
+   ],
+   "tests": [
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewDecisionIT.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewCancelIT.java",
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewAuditIT.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md",
+    "docs/plans/active/spring-review-portfolio/reports/T06.md"
+   ],
+   "limitations": [
+    "Verdicts, owner cancellation, and keyset audit implemented and accepted locally (7/9 tasks accepted); showcase/metrics (T07) and final polyglot/Kafka compatibility suite (T08) remain planned",
+     "Verdicts require distinct REVIEWER and terminal COMPLETED execution with valid verified report; engine ApprovalService is not called and engine terminal state is not rewritten",
+     "Owner cancellation is restricted to SUBMITTER during PROCESSING; cancellation races against concurrent result completion fail closed with 409 Conflict if completion won"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewDecisionService.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewController.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewValidation.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewErrors.java"
+    ],
+    "checks": [
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewDecisionIT.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewCancelIT.java",
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewAuditIT.java"
+    ],
+    "verification": "Accepted locally 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire (44 API + 45 Worker incl 13 HTTP loopbacks) + 88 real PostgreSQL ITs across 11 suites, 0 failures/errors/skips in 6m18 (finished 2026-11-15T17:05:14Z). 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks. Independent AGY review retracted all 3 initial findings after verifying parent request FOR UPDATE serialization, same-DataSource Spring transaction binding, monotonic terminal state, and authoritative cancel result (0 remaining verified production defects). Cancellation-winning test fixture blocks audit INSERT after engine locks; callback proven blocked by cancel PostgreSQL backend; release yields 200/204 REJECTED. T00-T06 accepted 7/9; T07 and T08 planned."
+   }
+  },
+  {
    "id": "review-worker",
    "status": "implemented",
    "sources": [

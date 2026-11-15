@@ -1,7 +1,10 @@
 package io.tenvyr.review;
 
 import io.tenvyr.review.domain.ReviewTypes.Actor;
+import io.tenvyr.review.domain.ReviewTypes.AuditEntry;
 import io.tenvyr.review.domain.ReviewTypes.CreateReview;
+import io.tenvyr.review.domain.ReviewTypes.DecisionCommand;
+import io.tenvyr.review.domain.ReviewTypes.DecisionView;
 import io.tenvyr.review.domain.ReviewTypes.Page;
 import io.tenvyr.review.domain.ReviewTypes.ReviewDetail;
 import io.tenvyr.review.domain.ReviewTypes.ReviewReport;
@@ -35,10 +38,12 @@ import java.util.UUID;
 public class ReviewController {
 
     private final ReviewService reviewService;
+    private final ReviewDecisionService reviewDecisionService;
     private final ActorResolver actorResolver;
 
-    public ReviewController(ReviewService reviewService, ActorResolver actorResolver) {
+    public ReviewController(ReviewService reviewService, ReviewDecisionService reviewDecisionService, ActorResolver actorResolver) {
         this.reviewService = reviewService;
+        this.reviewDecisionService = reviewDecisionService;
         this.actorResolver = actorResolver;
     }
 
@@ -90,5 +95,54 @@ public class ReviewController {
         Actor actor = actorResolver.current(authentication);
         ReviewReport report = reviewService.report(actor, id);
         return ResponseEntity.ok(report);
+    }
+
+    @PostMapping("/{id}/decisions")
+    public ResponseEntity<DecisionView> decide(
+            @PathVariable("id") UUID id,
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKeyHeader,
+            @RequestBody(required = false) String rawBody,
+            Authentication authentication) throws Exception {
+
+        Actor actor = actorResolver.current(authentication);
+        UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
+        DecisionCommand command = ReviewValidation.parseDecisionCommand(rawBody);
+
+        ReviewDecisionService.DecisionResult result = reviewDecisionService.decide(actor, id, idempotencyKey, command);
+
+        if (result.replay()) {
+            return ResponseEntity.ok(result.decision());
+        }
+
+        URI location = URI.create("/api/v1/reviews/" + id + "/decisions/" + result.decision().id());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .location(location)
+                .body(result.decision());
+    }
+
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<ReviewDetail> cancel(
+            @PathVariable("id") UUID id,
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKeyHeader,
+            Authentication authentication) {
+
+        Actor actor = actorResolver.current(authentication);
+        UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
+
+        ReviewDetail detail = reviewDecisionService.cancel(actor, id, idempotencyKey);
+        return ResponseEntity.ok(detail);
+    }
+
+    @GetMapping("/{id}/audit")
+    public ResponseEntity<Page<AuditEntry>> audit(
+            @PathVariable("id") UUID id,
+            @RequestParam(name = "limit", required = false) Integer limit,
+            @RequestParam(name = "after", required = false) String after,
+            Authentication authentication) {
+
+        Actor actor = actorResolver.current(authentication);
+        int parsedLimit = limit != null ? limit : 20;
+        Page<AuditEntry> page = reviewDecisionService.audit(actor, id, parsedLimit, after);
+        return ResponseEntity.ok(page);
     }
 }
