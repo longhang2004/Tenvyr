@@ -49,6 +49,23 @@ if (!verb || !["up", "down", "status"].includes(verb)) {
   process.exit(1);
 }
 
+// Port configuration validation (strict ASCII integer 1..65535, default 8080)
+function parseAndValidatePort(raw) {
+  if (raw === undefined || raw === null || raw === "") return 8080;
+  if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) {
+    process.stderr.write("Invalid TENVYR_REVIEW_PORT: must be a strict integer between 1 and 65535\n");
+    process.exit(1);
+  }
+  const port = Number.parseInt(raw, 10);
+  if (port < 1 || port > 65535) {
+    process.stderr.write("Invalid TENVYR_REVIEW_PORT: must be a strict integer between 1 and 65535\n");
+    process.exit(1);
+  }
+  return port;
+}
+
+const reviewPort = parseAndValidatePort(process.env.TENVYR_REVIEW_PORT);
+
 // 1. Resolve runtime directory
 let runtimeDir = process.env.TENVYR_REVIEW_RUNTIME_DIR;
 if (!runtimeDir || runtimeDir.trim() === "") {
@@ -263,6 +280,7 @@ function runCommand(bin, args, options = {}) {
 function loadCredentialsEnv(failClosed = true) {
   const customEnv = {
     TENVYR_REVIEW_RUNTIME_DIR: runtimeDir,
+    TENVYR_REVIEW_PORT: String(reviewPort),
   };
   let credLstat = null;
   try {
@@ -384,7 +402,7 @@ if (verb === "status") {
   if (credLstat) {
     validateSecureFile(credentialsFile);
   }
-  const statusEnv = credLstat ? loadCredentialsEnv(false) : { TENVYR_REVIEW_RUNTIME_DIR: runtimeDir };
+  const statusEnv = credLstat ? loadCredentialsEnv(false) : { TENVYR_REVIEW_RUNTIME_DIR: runtimeDir, TENVYR_REVIEW_PORT: String(reviewPort) };
   const res = runCommand("docker", ["compose", "-p", PROJECT_NAME, "-f", COMPOSE_FILE, "ps"], { env: statusEnv });
   if (res.stdout) process.stdout.write(res.stdout);
   if (res.stderr) process.stderr.write(sanitizeLog(res.stderr));
@@ -836,7 +854,7 @@ try {
   const rawUsers = JSON.parse(readFileSync(bootstrapFile, "utf8"));
   const authenticatedIds = {};
   for (const u of rawUsers) {
-    const id = await authenticateUser("http://127.0.0.1:8080", u.username, u.password, u.role);
+    const id = await authenticateUser(`http://127.0.0.1:${reviewPort}`, u.username, u.password, u.role);
     authenticatedIds[u.username] = id;
   }
 
@@ -888,5 +906,5 @@ try {
   process.exit(1);
 }
 
-process.stdout.write("Tenvyr Review Showcase running successfully on http://127.0.0.1:8080 (revision: " + commitHash + ")\n");
+process.stdout.write("Tenvyr Review Showcase running successfully on http://127.0.0.1:" + reviewPort + " (revision: " + commitHash + ")\n");
 process.exit(0);

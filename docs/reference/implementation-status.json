@@ -1996,7 +1996,7 @@
     "checks": [
      "backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java"
     ],
-    "verification": "Candidate verification 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Docker Compose showcase launcher (15/17 unit cases pass; 2 fixture stub operand issues being fixed) and actual dual-cycle Docker up/smoke/down remain pending."
+    "verification": "Candidate verification 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Launcher contract suite passes 21 of 21 tests (102.5s) verifying default 8080 and custom 18080 ports. Docker images built from committed 6b206e8; initial up blocked on occupied host port 8080 (handled via TENVYR_REVIEW_PORT configuration); dual-cycle Docker up/smoke/down runtime acceptance remains pending."
    }
   }
  ],

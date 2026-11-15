@@ -20,7 +20,23 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 
-const BASE_URL = process.env.TENVYR_REVIEW_BASE_URL || "http://127.0.0.1:8080";
+// Port configuration validation (strict ASCII integer 1..65535, default 8080)
+function parseAndValidatePort(raw) {
+  if (raw === undefined || raw === null || raw === "") return 8080;
+  if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) {
+    process.stderr.write("Invalid TENVYR_REVIEW_PORT: must be a strict integer between 1 and 65535\n");
+    process.exit(1);
+  }
+  const port = Number.parseInt(raw, 10);
+  if (port < 1 || port > 65535) {
+    process.stderr.write("Invalid TENVYR_REVIEW_PORT: must be a strict integer between 1 and 65535\n");
+    process.exit(1);
+  }
+  return port;
+}
+
+const defaultPort = parseAndValidatePort(process.env.TENVYR_REVIEW_PORT);
+const BASE_URL = process.env.TENVYR_REVIEW_BASE_URL || `http://127.0.0.1:${defaultPort}`;
 let RUNTIME_DIR = process.env.TENVYR_REVIEW_RUNTIME_DIR;
 if (!RUNTIME_DIR || RUNTIME_DIR.trim() === "") {
   const home = homedir() || process.env.HOME || process.env.USERPROFILE || "/tmp";

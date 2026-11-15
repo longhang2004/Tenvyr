@@ -35,6 +35,14 @@ used or required.
 ## Commands
 
 ```bash
+# Default binding to 127.0.0.1:8080:
+sh scripts/review-showcase.sh up
+node scripts/review-smoke.mjs
+sh scripts/review-showcase.sh status
+sh scripts/review-showcase.sh down
+
+# When host port 8080 is occupied (e.g., host httpd listener), configure custom port:
+export TENVYR_REVIEW_PORT=18080
 sh scripts/review-showcase.sh up
 node scripts/review-smoke.mjs
 sh scripts/review-showcase.sh status
@@ -59,6 +67,7 @@ or configured via `TENVYR_REVIEW_RUNTIME_DIR`).
 - **Service labels:** Docker Compose automatically assigns canonical `com.docker.compose.project: "tenvyr-review"`, and service containers specify custom label `io.tenvyr.review.owner: "tenvyr-review"`.
 - **API restart policy:** `review-api` is configured with `restart: "no"`. If the API crashes, rerun `sh scripts/review-showcase.sh up` to restart it; this prevents an infinite restart loop with retained bootstrap environment variables on an already-bootstrapped database. `postgres` and `review-worker` use `restart: unless-stopped`.
 - **Startup and health waits:** `review-showcase.sh up` uses native bounded Compose `--wait` to ensure PostgreSQL readiness and worker/API liveness before proceeding.
+- **Port configuration:** Host publish port binds to `127.0.0.1:${TENVYR_REVIEW_PORT:-8080}:8080`. Internal container port 8080, inter-service networking, and callback URLs remain unchanged. Smoke tests automatically derive the default base URL from `TENVYR_REVIEW_PORT` while preserving explicit `TENVYR_REVIEW_BASE_URL` overrides.
 - **Identities and smoke proof:** `review-smoke.mjs` verifies three distinct bootstrap users (`submitter_a`, `submitter_b`, `reviewer`) with real CSRF tokens, session cookies, and `/api/v1/auth/me` checks; exact user UUIDs and credentials are preserved across cycles.
 
 ## Capacity and Metrics Architecture
@@ -71,4 +80,4 @@ or configured via `TENVYR_REVIEW_RUNTIME_DIR`).
 
 ## Verification Status
 
-Candidate implementation is delivered: 89 Surefire tests (44 API + 45 Worker) and 98 real PostgreSQL ITs (including 10 ReviewMetricsIT tests) pass with 0 failures, 0 errors, 0 skipped in 6m47 (2026-11-16 Asia/Saigon). Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 19 of 19 tests in 83.8s with 0 failures. Independent AGY review `b1fad5be` confirmed all 5 prior critical findings resolved with clean production bypass audit. Actual dual-cycle Docker `up` / `smoke` / `down` has not yet run; it will execute following the candidate commit for final T07 acceptance.
+Candidate implementation is delivered: 89 Surefire tests (44 API + 45 Worker) and 98 real PostgreSQL ITs (including 10 ReviewMetricsIT tests) pass with 0 failures, 0 errors, 0 skipped in 6m47 (2026-11-16 Asia/Saigon). Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 21 of 21 tests in 102.5s with 0 failures, verifying Compose configurations for both default 8080 and custom 18080 ports. Independent AGY review `b1fad5be` confirmed 0 open findings with clean bypass audit. First Docker attempt built both images from committed `6b206e8`, but `up` failed binding host port 8080 due to an existing host httpd listener; failure cleanup safely removed new containers while preserving the PG volume and credentials. Two successful Docker cycles with `TENVYR_REVIEW_PORT` remain pending.

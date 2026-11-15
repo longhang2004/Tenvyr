@@ -51,22 +51,38 @@ function createStubDockerHarness(parentTempDir, initialState = {}) {
     removedContainers: [],
     removedVolumes: [],
     buildContexts: [],
+    authUrls: [],
   };
   writeFileSync(stateFile, JSON.stringify(state), "utf8");
 
   // Preloader script for simulating CSRF/session login/me in launcher tests
   const preloadScript = `
+import { readFileSync, writeFileSync } from "node:fs";
+
 const MOCK_IDS = {
   submitter_a: "00000000-0000-0000-0000-000000000001",
   submitter_b: "00000000-0000-0000-0000-000000000002",
   reviewer: "00000000-0000-0000-0000-000000000003",
 };
 
+const stateFile = process.env.STUB_DOCKER_STATE_FILE;
+function recordAuthUrl(urlStr) {
+  if (stateFile) {
+    try {
+      const s = JSON.parse(readFileSync(stateFile, "utf8"));
+      s.authUrls = s.authUrls || [];
+      s.authUrls.push(urlStr);
+      writeFileSync(stateFile, JSON.stringify(s), "utf8");
+    } catch {}
+  }
+}
+
 globalThis.fetch = async function(url, options = {}) {
   const urlStr = String(url);
+  recordAuthUrl(urlStr);
   const failMode = process.env.STUB_AUTH_FAIL; // "unreachable", "401", "wrong_role"
   if (failMode === "unreachable") {
-    const err = new Error("connect ECONNREFUSED 127.0.0.1:8080");
+    const err = new Error("connect ECONNREFUSED " + urlStr);
     err.code = "ECONNREFUSED";
     throw err;
   }
@@ -130,7 +146,7 @@ if (logFile) {
   appendFileSync(logFile, JSON.stringify({ ts: Date.now(), args }) + "\\n");
 }
 
-let state = { volumes: [], containers: [], removedContainers: [], removedVolumes: [], buildContexts: [] };
+let state = { volumes: [], containers: [], removedContainers: [], removedVolumes: [], buildContexts: [], authUrls: [] };
 if (stateFile) {
   try {
     state = JSON.parse(readFileSync(stateFile, "utf8"));
@@ -139,6 +155,12 @@ if (stateFile) {
 
 const saveState = () => {
   if (stateFile) {
+    try {
+      const disk = JSON.parse(readFileSync(stateFile, "utf8"));
+      if (disk && Array.isArray(disk.authUrls)) {
+        state.authUrls = disk.authUrls;
+      }
+    } catch {}
     writeFileSync(stateFile, JSON.stringify(state), "utf8");
   }
 };
@@ -645,8 +667,14 @@ describe("T07 Showcase Compose Contract (SPEC & VERIFY)", () => {
 
     const apiPorts = servicePorts["review-api"] || [];
     assert.ok(
-      apiPorts.some((p) => p.startsWith("127.0.0.1:8080:8080") || p === "127.0.0.1:8080:8080"),
-      `review-api must publish loopback port 127.0.0.1:8080:8080, found: ${apiPorts.join(", ")}`
+      apiPorts.some(
+        (p) =>
+          p === "127.0.0.1:8080:8080" ||
+          p.startsWith("127.0.0.1:8080:8080") ||
+          p === "127.0.0.1:${TENVYR_REVIEW_PORT:-8080}:8080" ||
+          p.startsWith("127.0.0.1:${TENVYR_REVIEW_PORT:-8080}:8080")
+      ),
+      `review-api must publish loopback port default 8080 or template 127.0.0.1:\${TENVYR_REVIEW_PORT:-8080}:8080, found: ${apiPorts.join(", ")}`
     );
 
     const workerPorts = servicePorts["review-worker"] || [];
@@ -834,6 +862,87 @@ describe("T07 Launcher Shell Blackbox Lifecycle (scripts/review-showcase.sh)", (
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("port configuration: launcher respects TENVYR_REVIEW_PORT=18080 and verifies auth on chosen port", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "tenvyr-test-port18080-"));
+    try {
+      const harness = createStubDockerHarness(tempDir);
+      const runtimeDir = join(tempDir, "runtime");
+      mkdirSync(runtimeDir, { mode: 0o700 });
+
+      const res = runLauncher("up", {
+        binDir: harness.binDir,
+        preloadFile: harness.preloadFile,
+        runtimeDir,
+        logFile: harness.logFile,
+        stateFile: harness.stateFile,
+        env: { TENVYR_REVIEW_PORT: "18080" },
+      });
+
+      assert.equal(res.status, 0, `Launcher up must succeed with TENVYR_REVIEW_PORT=18080, stderr: ${safeStderr(res.stderr)}`);
+      assert.doesNotMatch(res.stdout, /password|secret|token/i, "stdout must never print credentials");
+      assert.doesNotMatch(res.stderr, /password|secret|token/i, "stderr must never print credentials");
+      assert.match(res.stdout + res.stderr, /18080/, "Launcher output must reference chosen port 18080");
+
+      const state = JSON.parse(readFileSync(harness.stateFile, "utf8"));
+      assert.ok(state.authUrls && state.authUrls.length > 0, "Preload must have captured auth verification fetch calls");
+      for (const u of state.authUrls) {
+        assert.ok(
+          u.startsWith("http://127.0.0.1:18080/"),
+          `Captured auth URL must target loopback on chosen port 18080, got: ${u}`
+        );
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("port configuration: rejects out-of-range and malformed TENVYR_REVIEW_PORT before mutations", () => {
+    const invalidPorts = ["0", "65536", "8080evil"];
+    for (const invalidPort of invalidPorts) {
+      const tempDir = mkdtempSync(join(tmpdir(), "tenvyr-test-badport-"));
+      try {
+        const harness = createStubDockerHarness(tempDir);
+        const runtimeDir = join(tempDir, "runtime");
+        mkdirSync(runtimeDir, { mode: 0o700 });
+
+        const res = runLauncher("up", {
+          binDir: harness.binDir,
+          preloadFile: harness.preloadFile,
+          runtimeDir,
+          logFile: harness.logFile,
+          stateFile: harness.stateFile,
+          env: { TENVYR_REVIEW_PORT: invalidPort },
+        });
+
+        assert.notEqual(
+          res.status,
+          0,
+          `Launcher must reject invalid TENVYR_REVIEW_PORT='${invalidPort}' with non-zero exit`
+        );
+        assert.match(
+          res.stderr + res.stdout,
+          /(?:port|invalid|range|1\.\.65535|integer|number)/i,
+          `Stderr/stdout must report port validation failure for '${invalidPort}'`
+        );
+
+        // Verify no credentials mutation
+        const bootstrapCreated = existsSync(join(runtimeDir, "bootstrap.json"));
+        const credsCreated = existsSync(join(runtimeDir, "credentials.env"));
+        assert.equal(bootstrapCreated, false, `Must not mutate bootstrap.json on invalid port '${invalidPort}'`);
+        assert.equal(credsCreated, false, `Must not mutate credentials.env on invalid port '${invalidPort}'`);
+
+        // Verify no Docker up mutation
+        const state = JSON.parse(readFileSync(harness.stateFile, "utf8"));
+        assert.equal(state.containers.length, 0, `Must not create Docker containers on invalid port '${invalidPort}'`);
+        const logs = readDockerLog(harness.logFile);
+        const didUp = logs.some((l) => l.args.includes("up"));
+        assert.equal(didUp, false, `Must not invoke docker compose up on invalid port '${invalidPort}'`);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     }
   });
 

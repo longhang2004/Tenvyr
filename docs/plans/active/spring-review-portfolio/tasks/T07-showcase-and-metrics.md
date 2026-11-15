@@ -16,7 +16,7 @@ sources:
 
 Dependencies: T06. Estimate: 4–6 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: candidate implementation delivered; launcher contract tests 19/19 PASS (83.8s); review findings closed; actual dual-cycle Docker verification pending.
+Status: candidate implementation delivered; launcher contract tests 21/21 PASS (102.5s); image build pass, first up blocked on occupied host 8080; two successful Docker cycles with TENVYR_REVIEW_PORT pending.
 
 ## Deliverable and files
 

@@ -50,7 +50,7 @@ services:
     labels:
       io.tenvyr.review.owner: "tenvyr-review"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${TENVYR_REVIEW_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -f -s http://127.0.0.1:8080/actuator/health || exit 1"]
       interval: 3s
