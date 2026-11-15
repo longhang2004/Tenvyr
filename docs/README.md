@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-09-15
+last_verified: 2026-11-16
 sources:
   - package.json
   - docs/reference/implementation-status.json
@@ -47,7 +47,7 @@ prose. The conflict must still be corrected rather than ignored.
   [workspace execution / isolation](architecture/workspace-execution.md),
   the [attention queue](architecture/attention.md), and the
   [portable handoff](architecture/handoff.md)
-- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md), [supervised coding team runs](operations/supervised-coding-team.md)
+- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md), [supervised coding team runs](operations/supervised-coding-team.md), [review showcase operations](operations/review-showcase.md)
 - [Agents and runners](architecture/agents-and-runners.md)
 - Contracts: [agent protocol v1](architecture/contracts/agent-protocol-v1.md)
   and [JSON interoperability](architecture/contracts/json-interoperability.md)
@@ -103,7 +103,7 @@ Developer tooling is not a Tenvyr production runtime feature.
 ## Roadmap, plans, and history
 
 - Proposed portfolio execution: [Spring review-service worker plan](plans/active/spring-review-portfolio/README.md)
-  (reuse the Java engine for a fixed Spring business workflow; T00–T06 accepted 7/9, T07–T08 planned).
+  (reuse the Java engine for a fixed Spring business workflow; T00–T06 accepted 7/9, T07 in progress, T08 planned).
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md) (M8–M10 plans archived; M11 remains active),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),

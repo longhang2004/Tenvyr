@@ -39,6 +39,11 @@ sources:
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewCancelIT.java
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewAuditIT.java
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewTestSupport.java
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewMetrics.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java
+  - docker-compose.review.yml
+  - scripts/review-showcase.sh
+  - scripts/review-smoke.mjs
 ---
 
 # Review Service Architecture and Seam
@@ -237,6 +242,13 @@ keyset pagination, strict report state projection, and streaming request body li
      limit 1..100. Enforces SQL visibility (owner `SUBMITTER` and `REVIEWER` allowed; foreign submitters 404).
      Exposes only `{id, actorId, action, createdAt}`, strictly excluding source code, comments, reports, or secrets.
 
+### 7. Review Observability, Metrics and Bounded Capacity (T07)
+- **Actuator web exposure:** Strictly `health` and `metrics` are exposed under `/actuator/*`. Public health `/actuator/health` is anonymous and reveals minimal status (`show-details: never`) with liveness and readiness probe support. Sensitive operational endpoints (`/actuator/env`, `/beans`, `/mappings`, etc.) remain unexposed and return 404/403.
+- **Role-based access control for metrics:** `/actuator/metrics` is restricted strictly to authenticated users with `REVIEWER` role. Anonymous requests receive 401 Unauthorized; `SUBMITTER` requests receive 403 Forbidden. Session actors are dynamically re-validated against current PostgreSQL user state on every request: a disabled user returns 401, and a demoted user returns 403.
+- **Low-cardinality command timer (`review.commands`):** Pre-registers all 15 fixed tag pairs at startup with baseline 0.0 count: tags are strictly `command` in `("SUBMIT", "DECIDE", "CANCEL")` and `outcome` in `("success", "replay", "conflict", "invalid", "error")`. Zero high-cardinality or sensitive labels are attached (no actor IDs, request IDs, code snippets, comments, auth tokens, or request URLs).
+- **Dynamic backlog gauge (`review.backlog`):** Measures requests strictly in `AWAITING_REVIEW` status (completed execution with verified `APPLIED` matching report and no recorded decision) via read-only repository projections. Candidate evaluation scans eligible rows and verifies execution status via $N+1$ per-request queries, identifying an honest architectural ceiling rather than claiming $O(1)$ performance.
+- **Bounded runtime capacity:** Tomcat web server is bounded to 50 max worker threads and 50 accept-count (`server.tomcat.threads.max: 50`, `server.tomcat.accept-count: 50`). Hikari connection pool is bounded to 10 connections with a 2,000 ms acquisition timeout (`maximum-pool-size: 10`, `connection-timeout: 2000`). Review Worker concurrency is fixed at 2 with a queue capacity of 16. These bounds prevent resource exhaustion; they are not unmeasured throughput claims.
+
 ## Verification Boundary
 
 T01 was accepted on 2026-11-13 with 11 unit tests, 13 integration tests,
@@ -277,3 +289,5 @@ then passed with field/index-only parser messages. See the
 T04 was accepted on 2026-11-14 with combined integration (89 Surefire [44 API + 45 Worker including 13 HTTP loopbacks] + 73 real PostgreSQL ITs) passing with zero failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z). Unit runner without DB URL passes 89 Surefire tests; 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks on serial retry with same 120s timeout. Independent review aaaf9ca5 found 0 actionable findings. Source provenance commit 6e4bec5 (root 049e5cb).
 
 T06 was accepted locally on 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 88 real PostgreSQL ITs across 11 suites, 0 failures, 0 errors, 0 skipped in 6m18 (finished 2026-11-15T17:05:14Z). 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks. Independent review retracted all 3 initial findings after verifying parent request `FOR UPDATE` serialization, same-DataSource Spring transaction binding, monotonic terminal state, and authoritative cancel result (0 remaining verified production defects). Cancellation-winning test fixture blocks audit `INSERT` after engine locks; callback proven blocked by cancel PostgreSQL backend; release yields 200/204 REJECTED. T00–T06 accepted 7/9; T07 and T08 planned.
+
+T07 (in progress, candidate implementation delivered, pending verification): full standard review gate PASS with 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including 10 ReviewMetricsIT tests) in 6m47 (0 failures/errors/skips, current date 2026-11-16 Asia/Saigon). Delivers HTTP-only showcase topology (API + Worker + PostgreSQL), `scripts/review-showcase.sh`, `scripts/review-smoke.mjs`, `ReviewMetrics.java` (`review.commands` timer with exact fixed tags, `review.backlog` gauge), and bounded capacity settings (Tomcat 50/50, Hikari 10/2000). Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 19/19 cases in 83.8s, independent AGY review `b1fad5be` confirmed 0 open findings, and actual dual-cycle Docker up/smoke/down remains pending. T00–T06 accepted 7/9; T07 in progress; T08 planned.

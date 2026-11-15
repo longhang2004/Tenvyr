@@ -106,12 +106,18 @@ public class ReviewService {
         return deriveAdvisoryLockKey(actorId, "SUBMIT", idempotencyKey);
     }
 
+    public record SubmissionOutcome(Submission submission, boolean replay) {}
+
+    public Submission submit(Actor actor, UUID key, CreateReview input) {
+        return submitWithOutcome(actor, key, input).submission();
+    }
+
     /**
      * Executes atomic idempotent review submission.
      * Enforces SUBMITTER role, applies timeouts, advisory locking, idempotency check,
      * engine materialization on SAME connection, and request + SUBMIT audit insertion.
      */
-    public Submission submit(Actor actor, UUID key, CreateReview input) {
+    public SubmissionOutcome submitWithOutcome(Actor actor, UUID key, CreateReview input) {
         if (actor.role() != Role.SUBMITTER) {
             throw new AccessDeniedException("Only SUBMITTER role can submit reviews; current role is " + actor.role());
         }
@@ -164,7 +170,7 @@ public class ReviewService {
                                 UUID existingId = rs.getObject("id", UUID.class);
                                 UUID existingExecId = rs.getObject("execution_id", UUID.class);
                                 Instant existingCreated = rs.getTimestamp("created_at").toInstant();
-                                return new Submission(existingId, "PROCESSING", existingCreated, existingExecId);
+                                return new SubmissionOutcome(new Submission(existingId, "PROCESSING", existingCreated, existingExecId), true);
                             }
                         }
                     }
@@ -216,7 +222,7 @@ public class ReviewService {
                         ps.executeUpdate();
                     }
 
-                    return new Submission(requestId, "PROCESSING", createdAt, executionId);
+                    return new SubmissionOutcome(new Submission(requestId, "PROCESSING", createdAt, executionId), false);
 
                 } catch (SQLException e) {
                     if (ReviewErrors.isTransient(e)) {

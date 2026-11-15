@@ -21,7 +21,7 @@ sources:
 **Tech Stack:** Java 17; Boot 3.5.16 for new API only; JDBC/PostgreSQL; Spring Security sessions; Flyway for business schema only; existing HTTP/HMAC Worker; JUnit/Spring test for new module.
 
 **Spec:** [SPEC.md](SPEC.md). Mandatory existing-API evidence: [DISCOVERY.md](DISCOVERY.md).
-**Status:** In progress. Accepted: 7 of 9 tasks (T00–T06). T07–T08 remain planned and unimplemented.
+**Status:** In progress. Accepted: 7 of 9 tasks (T00–T06). T07 candidate implementation in progress (launcher tests 19/19 PASS, metrics/topology delivered, review closed; actual dual-cycle Docker runs pending). T08 planned.
 
 ## Global Constraints
 
@@ -97,7 +97,7 @@ idempotency, visibility and cancel-vs-result checks on real PostgreSQL.
 
 ## Phase 3 — runnable showcase and final verification
 
-- [ ] [T07: showcase, capacity and metrics](tasks/T07-showcase-and-metrics.md)
+- [ ] [T07: showcase, capacity and metrics](tasks/T07-showcase-and-metrics.md) (candidate implementation delivered; launcher 19/19 PASS; actual dual-cycle Docker runs pending)
 - [ ] [T08: final acceptance and portfolio delivery](tasks/T08-final-acceptance.md)
 
 Gate: [VERIFY.md](VERIFY.md) passes; unsupported infrastructure is reported as

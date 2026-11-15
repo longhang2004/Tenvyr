@@ -454,6 +454,35 @@ public class ReviewRepository {
         return new StatusAndError(ReviewStatus.PROCESSING, null);
     }
 
+    private record RequestCandidate(UUID id, UUID executionId) {}
+
+    /**
+     * Counts the current number of requests in AWAITING_REVIEW status.
+     * Evaluates only COMPLETED executions with no recorded decision, strictly projecting
+     * business status via resolveVerifiedReport. Read-only; performs zero writes.
+     * ponytail: O(N) candidate scan and per-request projection/provenance queries; upgrade to bounded windowing or batched aggregation SQL when volume grows.
+     */
+    public int countAwaitingReview() {
+        List<RequestCandidate> candidates = jdbcTemplate.query(
+                "SELECT r.id, r.execution_id FROM tenvyr_review.requests r " +
+                        "JOIN executions e ON r.execution_id = e.id " +
+                        "WHERE e.status = 'COMPLETED' " +
+                        "  AND NOT EXISTS (SELECT 1 FROM tenvyr_review.decisions d WHERE d.request_id = r.id)",
+                (rs, rowNum) -> new RequestCandidate(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("execution_id", UUID.class)
+                )
+        );
+        int count = 0;
+        for (RequestCandidate c : candidates) {
+            StatusAndError se = projectExecutionStatus(c.id(), c.executionId());
+            if (se.status() == ReviewStatus.AWAITING_REVIEW) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private int queryAttemptCount(UUID executionId) {
         Integer count = jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM step_attempts WHERE \"executionId\" = ?",

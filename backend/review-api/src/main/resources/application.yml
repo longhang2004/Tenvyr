@@ -1,6 +1,10 @@
 server:
   port: 8080
   address: 127.0.0.1
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 50
   servlet:
     session:
       cookie:
@@ -12,7 +16,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,metrics
   endpoint:
     health:
       show-details: never

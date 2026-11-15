@@ -1960,6 +1960,44 @@
     ],
     "verification": "Accepted 2026-11-14 (Asia/Saigon): combined integration 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 73 real PostgreSQL ITs pass with 0 failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z); canonical review runner registered in root reactor; backend build pass; 9 retained pure programs pass; final T05 review 3c9e97a0 found 0 actionable findings; source provenance commit a7d66cd (root e549485); root verification and acceptance completed; full retained Kafka/polyglot compatibility suite remains T08."
    }
+  },
+  {
+   "id": "review-observability",
+   "status": "implemented",
+   "sources": [
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewMetrics.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java",
+    "backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java",
+    "backend/review-api/src/main/resources/application.yml"
+   ],
+   "tests": [
+    "backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java"
+   ],
+   "docs": [
+    "docs/architecture/review-service.md",
+    "docs/operations/review-showcase.md"
+   ],
+   "limitations": [
+    "Actuator exposes strictly health and metrics endpoints; public health reveals minimal status without details",
+    "Metrics endpoint requires authenticated REVIEWER role with fresh DB status and role checks; anonymous returns 401, submitter returns 403, disabled user returns 401, demoted user returns 403",
+    "review.commands Timer records low-cardinality fixed command (SUBMIT, DECIDE, CANCEL) and outcome (success, replay, conflict, invalid, error) tags with zero baseline at startup; sensitive/high-cardinality labels (actor, request ID, code, comment, URL) are strictly excluded",
+    "review.backlog Gauge counts current AWAITING_REVIEW requests with verified APPLIED matching report and no recorded decision via read-only repository projections (zero database writes); candidate evaluation performs an N+1 per-request verification scan which sets an honest throughput ceiling rather than O(1) performance",
+    "Bounded capacity configured to Tomcat 50 threads / 50 accept-count, Hikari 10 connections / 2s timeout, Worker concurrency 2 / queue 16; no throughput or high-load claims",
+    "Showcase launcher and dual-cycle Docker smoke verification remain pending Docker execution in T07 candidate closure"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewMetrics.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java",
+     "backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java",
+     "backend/review-api/src/main/resources/application.yml"
+    ],
+    "checks": [
+     "backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java"
+    ],
+    "verification": "Candidate verification 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Docker Compose showcase launcher (15/17 unit cases pass; 2 fixture stub operand issues being fixed) and actual dual-cycle Docker up/smoke/down remain pending."
+   }
   }
  ],
  "backend_migration": {

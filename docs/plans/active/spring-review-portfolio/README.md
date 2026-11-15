@@ -17,7 +17,8 @@ Lifecycle: approved implementation in progress. Direction: reuse Tenvyr for a
 Java/Spring business-backend portfolio. **7 of 9 tasks are accepted locally:**
 [T00](reports/T00.md), [T01](reports/T01.md), [T02](reports/T02.md),
 [T03](reports/T03.md), [T04](reports/T04.md), [T05](reports/T05.md), and [T06](reports/T06.md).
-T07–T08 remain planned and unimplemented. Current contracts and verified
+T07 candidate implementation delivered and in progress ([T07 candidate report](reports/T07.md), pending launcher/Docker verification);
+T08 remains planned. Current contracts and verified
 reports take precedence over this plan.
 
 Build one fixed asynchronous code-review request workflow on the existing

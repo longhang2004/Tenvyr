@@ -1,5 +1,6 @@
 package io.tenvyr.review;
 
+import io.micrometer.core.instrument.Timer;
 import io.tenvyr.review.domain.ReviewTypes.Actor;
 import io.tenvyr.review.domain.ReviewTypes.AuditEntry;
 import io.tenvyr.review.domain.ReviewTypes.CreateReview;
@@ -11,7 +12,6 @@ import io.tenvyr.review.domain.ReviewTypes.ReviewReport;
 import io.tenvyr.review.domain.ReviewTypes.ReviewSummary;
 import io.tenvyr.review.domain.ReviewTypes.Submission;
 import io.tenvyr.review.security.ActorResolver;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -32,6 +32,7 @@ import java.util.UUID;
  * Handles review submission (POST /api/v1/reviews), keyset listing (GET /api/v1/reviews),
  * detail reading (GET /api/v1/reviews/{id}), and report projection (GET /api/v1/reviews/{id}/report).
  * Resolves current Actor from authentication via ActorResolver on every request.
+ * Measures review.commands metrics latency and outcome on mutations.
  */
 @RestController
 @RequestMapping("/api/v1/reviews")
@@ -40,11 +41,17 @@ public class ReviewController {
     private final ReviewService reviewService;
     private final ReviewDecisionService reviewDecisionService;
     private final ActorResolver actorResolver;
+    private final ReviewMetrics reviewMetrics;
 
-    public ReviewController(ReviewService reviewService, ReviewDecisionService reviewDecisionService, ActorResolver actorResolver) {
+    public ReviewController(
+            ReviewService reviewService,
+            ReviewDecisionService reviewDecisionService,
+            ActorResolver actorResolver,
+            ReviewMetrics reviewMetrics) {
         this.reviewService = reviewService;
         this.reviewDecisionService = reviewDecisionService;
         this.actorResolver = actorResolver;
+        this.reviewMetrics = reviewMetrics;
     }
 
     @PostMapping
@@ -53,16 +60,29 @@ public class ReviewController {
             @RequestBody(required = false) String rawBody,
             Authentication authentication) throws Exception {
 
-        Actor actor = actorResolver.current(authentication);
-        UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
-        CreateReview input = ReviewValidation.parseCreateReview(rawBody);
+        Timer.Sample sample = reviewMetrics.start();
+        try {
+            Actor actor = actorResolver.current(authentication);
+            UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
+            CreateReview input = ReviewValidation.parseCreateReview(rawBody);
 
-        Submission submission = reviewService.submit(actor, idempotencyKey, input);
+            ReviewService.SubmissionOutcome outcome = reviewService.submitWithOutcome(actor, idempotencyKey, input);
+            reviewMetrics.record("SUBMIT", outcome.replay() ? "replay" : "success", sample);
 
-        URI location = URI.create("/api/v1/reviews/" + submission.id());
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .location(location)
-                .body(submission);
+            URI location = URI.create("/api/v1/reviews/" + outcome.submission().id());
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .location(location)
+                    .body(outcome.submission());
+        } catch (ReviewErrors.IdempotencyConflictException e) {
+            reviewMetrics.record("SUBMIT", "conflict", sample);
+            throw e;
+        } catch (IllegalArgumentException | com.fasterxml.jackson.core.JsonProcessingException e) {
+            reviewMetrics.record("SUBMIT", "invalid", sample);
+            throw e;
+        } catch (Exception e) {
+            reviewMetrics.record("SUBMIT", "error", sample);
+            throw e;
+        }
     }
 
     @GetMapping
@@ -104,20 +124,33 @@ public class ReviewController {
             @RequestBody(required = false) String rawBody,
             Authentication authentication) throws Exception {
 
-        Actor actor = actorResolver.current(authentication);
-        UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
-        DecisionCommand command = ReviewValidation.parseDecisionCommand(rawBody);
+        Timer.Sample sample = reviewMetrics.start();
+        try {
+            Actor actor = actorResolver.current(authentication);
+            UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
+            DecisionCommand command = ReviewValidation.parseDecisionCommand(rawBody);
 
-        ReviewDecisionService.DecisionResult result = reviewDecisionService.decide(actor, id, idempotencyKey, command);
+            ReviewDecisionService.DecisionResult result = reviewDecisionService.decide(actor, id, idempotencyKey, command);
+            reviewMetrics.record("DECIDE", result.replay() ? "replay" : "success", sample);
 
-        if (result.replay()) {
-            return ResponseEntity.ok(result.decision());
+            if (result.replay()) {
+                return ResponseEntity.ok(result.decision());
+            }
+
+            URI location = URI.create("/api/v1/reviews/" + id + "/decisions/" + result.decision().id());
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .location(location)
+                    .body(result.decision());
+        } catch (ReviewErrors.IdempotencyConflictException e) {
+            reviewMetrics.record("DECIDE", "conflict", sample);
+            throw e;
+        } catch (IllegalArgumentException | com.fasterxml.jackson.core.JsonProcessingException e) {
+            reviewMetrics.record("DECIDE", "invalid", sample);
+            throw e;
+        } catch (Exception e) {
+            reviewMetrics.record("DECIDE", "error", sample);
+            throw e;
         }
-
-        URI location = URI.create("/api/v1/reviews/" + id + "/decisions/" + result.decision().id());
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .location(location)
-                .body(result.decision());
     }
 
     @PostMapping("/{id}/cancel")
@@ -126,11 +159,24 @@ public class ReviewController {
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKeyHeader,
             Authentication authentication) {
 
-        Actor actor = actorResolver.current(authentication);
-        UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
+        Timer.Sample sample = reviewMetrics.start();
+        try {
+            Actor actor = actorResolver.current(authentication);
+            UUID idempotencyKey = ReviewValidation.validateIdempotencyKey(idempotencyKeyHeader);
 
-        ReviewDetail detail = reviewDecisionService.cancel(actor, id, idempotencyKey);
-        return ResponseEntity.ok(detail);
+            ReviewDecisionService.CancelResult result = reviewDecisionService.cancelWithResult(actor, id, idempotencyKey);
+            reviewMetrics.record("CANCEL", result.replay() ? "replay" : "success", sample);
+            return ResponseEntity.ok(result.detail());
+        } catch (ReviewErrors.IdempotencyConflictException e) {
+            reviewMetrics.record("CANCEL", "conflict", sample);
+            throw e;
+        } catch (IllegalArgumentException e) {
+            reviewMetrics.record("CANCEL", "invalid", sample);
+            throw e;
+        } catch (Exception e) {
+            reviewMetrics.record("CANCEL", "error", sample);
+            throw e;
+        }
     }
 
     @GetMapping("/{id}/audit")

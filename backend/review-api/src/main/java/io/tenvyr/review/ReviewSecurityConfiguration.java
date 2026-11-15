@@ -6,9 +6,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.authentication.DisabledException;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -18,19 +22,23 @@ import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import javax.sql.DataSource;
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * Spring Security configuration for review API boundary.
  * Configures standard form login with session establishment, CSRF protection,
- * JdbcUserDetailsManager queries, session fixation defense, and safe JSON error responses.
+ * JdbcUserDetailsManager queries, session fixation defense, safe JSON error responses,
+ * and dynamic database-backed authorization for REVIEWER metrics.
  */
 @Configuration
 @EnableWebSecurity
 public class ReviewSecurityConfiguration {
 
+    private record UserStatus(String role, boolean enabled) {}
+
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, JdbcTemplate jdbcTemplate) throws Exception {
         http
                 .csrf(csrf -> csrf
                         .ignoringRequestMatchers(new AntPathRequestMatcher("/internal/agent-callbacks/http/code-reviewer", "POST"))
@@ -59,6 +67,31 @@ public class ReviewSecurityConfiguration {
                         .requestMatchers(AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/actuator/health/**")).permitAll()
                         .requestMatchers(AntPathRequestMatcher.antMatcher(HttpMethod.POST, "/internal/agent-callbacks/http/code-reviewer")).permitAll()
                         .requestMatchers(AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/api/v1/auth/csrf")).permitAll()
+                        .requestMatchers(
+                                AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/actuator/metrics"),
+                                AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/actuator/metrics/**")
+                        ).access((authentication, context) -> {
+                            Authentication a = authentication.get();
+                            if (a == null || !a.isAuthenticated() || a instanceof AnonymousAuthenticationToken) {
+                                return new AuthorizationDecision(false);
+                            }
+                            String username = a.getName();
+                            if (username == null || username.isBlank()) {
+                                return new AuthorizationDecision(false);
+                            }
+                            List<UserStatus> rows = jdbcTemplate.query(
+                                    "SELECT role, enabled FROM tenvyr_review.users WHERE username = ?",
+                                    (rs, rowNum) -> new UserStatus(rs.getString("role"), rs.getBoolean("enabled")),
+                                    username
+                            );
+                            if (rows.isEmpty() || !rows.get(0).enabled()) {
+                                throw new DisabledException("User account is disabled or missing: " + username);
+                            }
+                            if (!"REVIEWER".equalsIgnoreCase(rows.get(0).role())) {
+                                return new AuthorizationDecision(false);
+                            }
+                            return new AuthorizationDecision(true);
+                        })
                         .requestMatchers(AntPathRequestMatcher.antMatcher("/api/v1/**")).authenticated()
                         .anyRequest().denyAll()
                 )
@@ -99,14 +132,15 @@ public class ReviewSecurityConfiguration {
         return manager;
     }
 
-    static void writeSafeError(HttpServletResponse response, int status, String code, String message) throws IOException {
-        if (response.isCommitted()) {
-            return;
-        }
+    private static void writeSafeError(HttpServletResponse response, int status, String code, String message) throws IOException {
         response.setStatus(status);
-        response.setContentType("application/json;charset=UTF-8");
-        String requestId = UUID.randomUUID().toString();
-        String body = Json.stringify(Json.object("code", code, "message", message, "requestId", requestId));
-        response.getWriter().write(body);
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        String json = Json.stringify(Json.object(
+                "code", code,
+                "message", message,
+                "requestId", UUID.randomUUID().toString()
+        ));
+        response.getWriter().write(json);
     }
 }

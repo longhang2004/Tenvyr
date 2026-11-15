@@ -286,6 +286,12 @@ public class ReviewDecisionService {
         }
     }
 
+    public record CancelResult(ReviewDetail detail, boolean replay) {}
+
+    public ReviewDetail cancel(Actor actor, UUID requestId, UUID key) {
+        return cancelWithResult(actor, requestId, key).detail();
+    }
+
     /**
      * Cancels an ongoing review.
      * Requirements:
@@ -298,7 +304,7 @@ public class ReviewDecisionService {
      * - Idempotent replay with same key returns 200 with stored outcome.
      * - Same key on different request returns 409 conflict.
      */
-    public ReviewDetail cancel(Actor actor, UUID requestId, UUID key) {
+    public CancelResult cancelWithResult(Actor actor, UUID requestId, UUID key) {
         if (actor.role() != Role.SUBMITTER) {
             throw new AccessDeniedException("Only SUBMITTER role can cancel reviews; current role is " + actor.role());
         }
@@ -356,7 +362,7 @@ public class ReviewDecisionService {
                                 }
                                 // Replay: return current review detail
                                 ReviewDetail detail = reviewRepository.get(actor, requestId);
-                                return detail;
+                                return new CancelResult(detail, true);
                             }
                         }
                     }
@@ -433,7 +439,7 @@ public class ReviewDecisionService {
                     }
 
                     ReviewDetail detail = reviewRepository.get(actor, requestId);
-                    return detail;
+                    return new CancelResult(detail, false);
 
                 } catch (SQLException e) {
                     if (ReviewErrors.isTransient(e)) {

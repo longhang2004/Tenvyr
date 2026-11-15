@@ -3,18 +3,20 @@ title: "T07 — Ship HTTP-only review showcase with bounded resources and metric
 status: planned
 audience:
   - developer
-last_verified: 2026-11-11
+last_verified: 2026-11-16
 sources:
-  - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
-  - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
-  - scripts/backend-checks.sh
+  - backend/review-api/src/main/java/io/tenvyr/review/ReviewMetrics.java
+  - backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java
+  - docker-compose.review.yml
+  - scripts/review-showcase.sh
+  - scripts/review-smoke.mjs
 ---
 
 # T07: Ship HTTP-only review showcase with bounded resources and metrics
 
 Dependencies: T06. Estimate: 4–6 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: planned, not implemented.
+Status: candidate implementation delivered; launcher contract tests 19/19 PASS (83.8s); review findings closed; actual dual-cycle Docker verification pending.
 
 ## Deliverable and files
 
