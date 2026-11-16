@@ -1983,7 +1983,7 @@
     "review.commands Timer records low-cardinality fixed command (SUBMIT, DECIDE, CANCEL) and outcome (success, replay, conflict, invalid, error) tags with zero baseline at startup; sensitive/high-cardinality labels (actor, request ID, code, comment, URL) are strictly excluded",
     "review.backlog Gauge counts current AWAITING_REVIEW requests with verified APPLIED matching report and no recorded decision via read-only repository projections (zero database writes); candidate evaluation performs an N+1 per-request verification scan which sets an honest throughput ceiling rather than O(1) performance",
     "Bounded capacity configured to Tomcat 50 threads / 50 accept-count, Hikari 10 connections / 2s timeout, Worker concurrency 2 / queue 16; no throughput or high-load claims",
-    "Showcase launcher and dual-cycle Docker smoke verification remain pending Docker execution in T07 candidate closure"
+    "Docker Compose review showcase launcher and dual-cycle runtime smoke verified on revision 237e8b6 on port 18080"
    ],
    "java_go": {
     "disposition": "migrated",
@@ -1996,10 +1996,49 @@
     "checks": [
      "backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java"
     ],
-    "verification": "Candidate verification 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Launcher contract suite passes 21 of 21 tests (102.5s) verifying default 8080 and custom 18080 ports. Docker images built from committed 6b206e8; initial up blocked on occupied host port 8080 (handled via TENVYR_REVIEW_PORT configuration); dual-cycle Docker up/smoke/down runtime acceptance remains pending."
+    "verification": "Accepted 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Launcher contract suite passes 21 of 21 tests (102.5s) verifying default 8080 and custom 18080 ports. Two consecutive Docker up/smoke/down cycles verified on committed revision 237e8b6 on 127.0.0.1:18080 with exact preserved identities and volume integrity. T00-T07 accepted 8/9; T08 planned."
    }
-  }
- ],
+  },
+  {
+   "id": "review-http-showcase",
+   "status": "implemented",
+   "sources": [
+    "docker-compose.review.yml",
+    "backend/review-api/Dockerfile",
+    "backend/review-worker/Dockerfile",
+    "scripts/review-showcase.sh",
+    "scripts/review-smoke.mjs"
+   ],
+   "tests": [
+    "scripts/review-showcase.test.mjs"
+   ],
+   "docs": [
+    "docs/operations/review-showcase.md",
+    "docs/architecture/review-service.md"
+   ],
+   "limitations": [
+    "Strictly three container services: review-api, review-worker, postgres; API loopback published to host 127.0.0.1:${TENVYR_REVIEW_PORT:-8080}:8080; Worker and database are private and unpublished",
+    "Worker operates in default MOCK mode with explicit truthful metadata; no external LLM or paid provider calls",
+    "API uses restart: 'no' to prevent bootstrap conflict loops after crashes; rerun review-showcase.sh up to restart",
+    "Runtime directory requires POSIX filesystem with mode 0700 and secret files mode 0600; world-writable or WSL /mnt/c workspace directories fail closed",
+    "Global release, external exposure gate, and full polyglot/Kafka compatibility suite remain T08 scope"
+   ],
+   "java_go": {
+    "disposition": "migrated",
+    "sources": [
+     "docker-compose.review.yml",
+     "backend/review-api/Dockerfile",
+     "backend/review-worker/Dockerfile",
+     "scripts/review-showcase.sh",
+     "scripts/review-smoke.mjs"
+    ],
+    "checks": [
+     "scripts/review-showcase.test.mjs"
+    ],
+    "verification": "Accepted 2026-11-16 (Asia/Saigon): contract tests pass 21 of 21 cases in 102.5s; two consecutive Docker up/smoke/down cycles executed successfully on revision 237e8b6 on 127.0.0.1:18080 with exit 0 on all steps. Verified new login, CSRF tokens, idempotent submission, MOCK report generation, reviewer decision/audit, and foreign submitter 404 access denial. Verified volume CreatedAt and private credential bytes/hashes remained identical across cycles without user data reset. Initial 8080 host httpd collision resolved via TENVYR_REVIEW_PORT=18080. Independent review b1fad5be confirmed 0 open defects. T00-T07 accepted 8/9; T08 planned."
+    }
+   }
+  ],
  "backend_migration": {
   "status": "implemented",
   "default_runtime": "java-go",

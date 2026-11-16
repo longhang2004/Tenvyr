@@ -1,6 +1,6 @@
 ---
 title: "T07 — Ship HTTP-only review showcase with bounded resources and metrics"
-status: planned
+status: current
 audience:
   - developer
 last_verified: 2026-11-16
@@ -16,7 +16,7 @@ sources:
 
 Dependencies: T06. Estimate: 4–6 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: candidate implementation delivered; launcher contract tests 21/21 PASS (102.5s); image build pass, first up blocked on occupied host 8080; two successful Docker cycles with TENVYR_REVIEW_PORT pending.
+Status: accepted locally (T00–T07 accepted 8/9; T08 planned).
 
 ## Deliverable and files
 
@@ -43,30 +43,30 @@ Actuator metrics docs. Reuse WorkerConfig fields, not invented queue options.
 
 ## Steps and acceptance
 
-- [ ] Add launcher contract tests before implementation: exact Compose project,
+- [x] Add launcher contract tests before implementation: exact Compose project,
   API loopback publication, Worker/DB unpublished, no Kafka/Gateway/paid-model
   requirement, down preserves volumes, failure exits nonzero and cleans only
   newly owned temporary resources.
-- [ ] Generate secrets and three users (submitter A/B and reviewer) into an
+- [x] Generate secrets and three users (submitter A/B and reviewer) into an
   ignored permission-restricted runtime directory without printing them.
   Explicitly pass bootstrap file on up. Repeated up does not overwrite existing
   users or lose IDs; design bootstrap invocation to skip already-bootstrapped
   installations without converting a general bootstrap conflict into reset.
-- [ ] Build images from committed source/runtime dependencies, independent of
+- [x] Build images from committed source/runtime dependencies, independent of
   developer target directories. Set source revision evidence. Health waits are
   bounded and fail with safe reason/status; never dump environment or secrets.
-- [ ] Smoke drives real sessions and CSRF tokens, submit/replay, processing,
+- [x] Smoke drives real sessions and CSRF tokens, submit/replay, processing,
   MOCK report, different reviewer verdict, audit, foreign submitter denial.
   Include safe fixed fixtures; use request-scoped IDs and do not rely on prior
   dashboard state. Labels make demo/mock mode visible.
-- [ ] Set Tomcat max threads50/accept-count50, Hikari pool10/acquisition2s and
+- [x] Set Tomcat max threads50/accept-count50, Hikari pool10/acquisition2s and
   existing Worker2/queue16. Map transient admission/database unavailability
   to503+Retry-After. Do not turn these defaults into unmeasured capacity claims.
-- [ ] Publish authenticated Actuator metrics to REVIEWER only; public health
+- [x] Publish authenticated Actuator metrics to REVIEWER only; public health
   reveals minimal status. Add low-cardinality command outcomes/latency and
   current review backlog gauge. No actor/request IDs, code, comments, tokens or
   user URLs as metric labels. No new telemetry pipeline or Prometheus server.
-- [ ] Execute launcher tests, actual up/smoke/down twice and inspect process/
+- [x] Execute launcher tests, actual up/smoke/down twice and inspect process/
   port/container evidence for absence of Kafka/native/Node backend requirements.
   Update docs/ledger, both verifiers and handoff.
 
