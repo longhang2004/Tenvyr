@@ -224,6 +224,7 @@ const wireProtocolPaths = new Set([
   "docs/plans/active/polyglot-http-workers/SPEC.md",
   "docs/plans/active/polyglot-http-workers/PLAN.md",
   "docs/plans/active/polyglot-http-workers/VERIFY.md",
+  "docs/reference/review-api.openapi.yaml",
 ]);
 const kafkaPathRules = new Map([
   [`${legacyLower}-dev`, new Set([".env.example"])],

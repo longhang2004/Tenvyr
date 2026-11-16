@@ -3,7 +3,7 @@ title: "T08 — Close crash/security acceptance and publish truthful portfolio d
 status: planned
 audience:
   - developer
-last_verified: 2026-11-11
+last_verified: 2026-11-16
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -14,7 +14,7 @@ sources:
 
 Dependencies: T07. Estimate: 5–7 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: planned, not implemented.
+Status: in progress (8 of 9 tasks accepted; full review gate 89+120 PASS in 10m23s; full backend `--integration` running; benchmark pending).
 
 ## Deliverable and files
 

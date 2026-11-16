@@ -516,3 +516,150 @@ jobs:
         run: sh scripts/backend-build.sh
       - name: Original-to-Java upgrade and source identity
         run: node scripts/backend-upgrade-check.mjs
+
+  review-workflow:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tenvyr_review_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tenvyr_review_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TZ: UTC
+      MAVEN_OPTS: "-Duser.timezone=UTC"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Review unit checks
+        run: sh scripts/review-checks.sh unit
+
+      - name: Review integration checks
+        env:
+          TENVYR_REVIEW_TEST_DATABASE_URL: jdbc:postgresql://127.0.0.1:5432/tenvyr_review_test
+        run: sh scripts/review-checks.sh integration
+
+      - name: Assert Surefire and Failsafe reports
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+
+            function checkReports(dir) {
+              if (!fs.existsSync(dir)) {
+                throw new Error("Reports directory does not exist: " + dir);
+              }
+              const files = fs.readdirSync(dir).filter(f => f.startsWith("TEST-") && f.endsWith(".xml"));
+              if (files.length === 0) {
+                throw new Error("No XML reports found in: " + dir);
+              }
+              let totalTests = 0;
+              let totalFailures = 0;
+              let totalErrors = 0;
+              let totalSkipped = 0;
+
+              for (const file of files) {
+                const content = fs.readFileSync(path.join(dir, file), "utf8");
+                const m = content.match(/<testsuite[^>]*\btests="(\d+)"[^>]*\bfailures="(\d+)"[^>]*\berrors="(\d+)"(?:[^>]*\bskipped="(\d+)")?/);
+                if (!m) continue;
+                const tests = parseInt(m[1], 10);
+                const failures = parseInt(m[2], 10);
+                const errors = parseInt(m[3], 10);
+                const skipped = m[4] ? parseInt(m[4], 10) : 0;
+                totalTests += tests;
+                totalFailures += failures;
+                totalErrors += errors;
+                totalSkipped += skipped;
+
+                if (failures > 0 || errors > 0) {
+                  throw new Error(`Test report ${file} had failures (${failures}) or errors (${errors})`);
+                }
+              }
+
+              if (totalTests === 0) {
+                throw new Error("Total tests in " + dir + " was 0 (fail-closed)");
+              }
+              console.log(`Verified ${dir}: ${files.length} suites, ${totalTests} tests, 0 failures, 0 errors, ${totalSkipped} skipped`);
+              return files;
+            }
+
+            checkReports("backend/review-api/target/surefire-reports");
+            checkReports("backend/review-worker/target/surefire-reports");
+
+            const failsafeFiles = checkReports("backend/review-api/target/failsafe-reports");
+
+            const targeted = ["ReviewRecoveryIT", "ReviewAccessMatrixIT", "ReviewConcurrencyIT"];
+            for (const name of targeted) {
+              const srcFile = `backend/review-api/src/test/java/io/tenvyr/review/${name}.java`;
+              const reportFile = failsafeFiles.find(f => f.includes(name));
+              if (fs.existsSync(srcFile) || reportFile) {
+                if (!reportFile) {
+                  throw new Error(`Targeted test suite ${name} exists on disk but produced no Failsafe report`);
+                }
+                const content = fs.readFileSync(path.join("backend/review-api/target/failsafe-reports", reportFile), "utf8");
+                const m = content.match(/<testsuite[^>]*\btests="(\d+)"[^>]*\bfailures="(\d+)"[^>]*\berrors="(\d+)"(?:[^>]*\bskipped="(\d+)")?/);
+                if (!m) {
+                  throw new Error(`Could not parse testsuite XML for ${reportFile}`);
+                }
+                const tests = parseInt(m[1], 10);
+                const failures = parseInt(m[2], 10);
+                const errors = parseInt(m[3], 10);
+                const skipped = m[4] ? parseInt(m[4], 10) : 0;
+                if (tests <= 0) {
+                  throw new Error(`Targeted test suite ${name} reported 0 tests executed`);
+                }
+                if (failures > 0 || errors > 0) {
+                  throw new Error(`Targeted test suite ${name} had failures (${failures}) or errors (${errors})`);
+                }
+                if (skipped > 0) {
+                  throw new Error(`Targeted test suite ${name} had skipped tests (${skipped}); skips forbidden`);
+                }
+                console.log(`Targeted acceptance verified: ${name} (${tests} tests passed, 0 skipped)`);
+              }
+            }
+          '
+
+      - name: Review showcase and launcher contract tests
+        run: node --test scripts/review-showcase.test.mjs
+
+      - name: Preserve test diagnostics artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-test-diagnostics
+          path: |
+            backend/review-api/target/surefire-reports/*.txt
+            backend/review-api/target/surefire-reports/*.xml
+            backend/review-api/target/failsafe-reports/*.txt
+            backend/review-api/target/failsafe-reports/*.xml
+            backend/review-worker/target/surefire-reports/*.txt
+            backend/review-worker/target/surefire-reports/*.xml
+          if-no-files-found: ignore

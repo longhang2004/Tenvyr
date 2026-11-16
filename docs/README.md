@@ -78,9 +78,10 @@ prose. The conflict must still be corrected rather than ignored.
 
 ## Showcase
 
-- [5–10 minute demo guide](showcase/demo-guide.md)
-- [Using model providers](showcase/using-model-providers.md)
+- [Review service & showcase demo guide](showcase/demo-guide.md)
 - [Portfolio case study](showcase/case-study.md)
+- [Review showcase operations](operations/review-showcase.md)
+- [Using model providers](showcase/using-model-providers.md)
 
 ## Development and tooling
 
@@ -102,8 +103,8 @@ Developer tooling is not a Tenvyr production runtime feature.
 
 ## Roadmap, plans, and history
 
-- Proposed portfolio execution: [Spring review-service worker plan](plans/active/spring-review-portfolio/README.md)
-  (reuse the Java engine for a fixed Spring business workflow; T00–T07 accepted 8/9, T08 planned).
+- Portfolio execution: [Spring review-service worker plan](plans/active/spring-review-portfolio/README.md)
+  (reuse the Java engine for a fixed Spring business workflow; T00–T07 accepted 8/9, T08 in progress).
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md) (M8–M10 plans archived; M11 remains active),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),

@@ -7,7 +7,7 @@
  *
  * Run with: node --test scripts/review-showcase.test.mjs
  */
-import { test, describe } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -554,10 +554,57 @@ function safeStderr(stderr) {
     .slice(0, 500);
 }
 
+/**
+ * Creates a minimal, isolated temporary Git repository containing copies of
+ * the launcher, Compose, Dockerfiles, and a committed source sentinel.
+ *
+ * This avoids spawning `git archive` on the entire monorepo during blackbox UP tests
+ * on WSL v9fs, eliminating massive filesystem I/O while preserving real Git archive execution.
+ */
+function createGitFixture(parentDir) {
+  const gitDir = join(parentDir, "repo");
+  mkdirSync(gitDir, { recursive: true });
+
+  spawnSync("git", ["init"], { cwd: gitDir });
+  spawnSync("git", ["config", "user.name", "Test User"], { cwd: gitDir });
+  spawnSync("git", ["config", "user.email", "test@tenvyr.io"], { cwd: gitDir });
+
+  mkdirSync(join(gitDir, "scripts"), { recursive: true });
+  mkdirSync(join(gitDir, "backend", "review-api"), { recursive: true });
+  mkdirSync(join(gitDir, "backend", "review-worker"), { recursive: true });
+
+  if (existsSync(LAUNCHER_SH)) {
+    writeFileSync(join(gitDir, "scripts", "review-showcase.sh"), readFileSync(LAUNCHER_SH, "utf8"), { mode: 0o755 });
+    try { chmodSync(join(gitDir, "scripts", "review-showcase.sh"), 0o755); } catch {}
+  }
+  const launcherMjs = join(ROOT, "scripts", "review-showcase.mjs");
+  if (existsSync(launcherMjs)) {
+    writeFileSync(join(gitDir, "scripts", "review-showcase.mjs"), readFileSync(launcherMjs, "utf8"), { mode: 0o755 });
+    try { chmodSync(join(gitDir, "scripts", "review-showcase.mjs"), 0o755); } catch {}
+  }
+  if (existsSync(COMPOSE_REVIEW)) {
+    writeFileSync(join(gitDir, "docker-compose.review.yml"), readFileSync(COMPOSE_REVIEW, "utf8"));
+  }
+  if (existsSync(API_DOCKERFILE)) {
+    writeFileSync(join(gitDir, "backend", "review-api", "Dockerfile"), readFileSync(API_DOCKERFILE, "utf8"));
+  }
+  if (existsSync(WORKER_DOCKERFILE)) {
+    writeFileSync(join(gitDir, "backend", "review-worker", "Dockerfile"), readFileSync(WORKER_DOCKERFILE, "utf8"));
+  }
+
+  writeFileSync(join(gitDir, "committed.txt"), "clean committed source", "utf8");
+  spawnSync("git", ["add", "."], { cwd: gitDir });
+  spawnSync("git", ["commit", "-m", "initial commit"], { cwd: gitDir });
+
+  return gitDir;
+}
+
+let sharedFixtureDir = null;
+let sharedGitDir = null;
+
 function runLauncher(verb, options = {}) {
-  const launcherPath = options.cwd
-    ? join(options.cwd, "scripts", "review-showcase.sh")
-    : LAUNCHER_SH;
+  const effectiveCwd = options.cwd || sharedGitDir || ROOT;
+  const launcherPath = join(effectiveCwd, "scripts", "review-showcase.sh");
 
   assert.ok(
     existsSync(launcherPath),
@@ -585,7 +632,7 @@ function runLauncher(verb, options = {}) {
   }
 
   const res = spawnSync("sh", args, {
-    cwd: options.cwd || ROOT,
+    cwd: effectiveCwd,
     env,
     encoding: "utf8",
     timeout: 15000,
@@ -595,8 +642,8 @@ function runLauncher(verb, options = {}) {
     throw res.error;
   }
   if (res.status === null) {
-    const boundOut = (res.stdout || "").slice(0, 500);
-    const boundErr = (res.stderr || "").slice(0, 500);
+    const boundOut = safeStderr(res.stdout || "");
+    const boundErr = safeStderr(res.stderr || "");
     assert.fail(`Process timed out or killed with signal ${res.signal}. stdout: ${boundOut}, stderr: ${boundErr}`);
   }
   return res;
@@ -704,6 +751,21 @@ describe("T07 Showcase Compose Contract (SPEC & VERIFY)", () => {
 });
 
 describe("T07 Launcher Shell Blackbox Lifecycle (scripts/review-showcase.sh)", () => {
+  before(() => {
+    sharedFixtureDir = mkdtempSync(join(tmpdir(), "tenvyr-shared-git-"));
+    sharedGitDir = createGitFixture(sharedFixtureDir);
+  });
+
+  after(() => {
+    if (sharedFixtureDir) {
+      try {
+        rmSync(sharedFixtureDir, { recursive: true, force: true });
+      } catch {}
+      sharedFixtureDir = null;
+      sharedGitDir = null;
+    }
+  });
+
   test("launcher script review-showcase.sh exists and is executable", () => {
     assert.ok(existsSync(LAUNCHER_SH), `Launcher script must exist at ${LAUNCHER_SH}`);
     const content = readFileSync(LAUNCHER_SH, "utf8");
@@ -1166,37 +1228,7 @@ describe("T07 Launcher Shell Blackbox Lifecycle (scripts/review-showcase.sh)", (
   test("source build uses committed Git source of chosen revision, independent of dirty workspace targets", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "tenvyr-test-git-"));
     try {
-      const gitDir = join(tempDir, "repo");
-      mkdirSync(gitDir, { recursive: true });
-
-      spawnSync("git", ["init"], { cwd: gitDir });
-      spawnSync("git", ["config", "user.name", "Test User"], { cwd: gitDir });
-      spawnSync("git", ["config", "user.email", "test@tenvyr.io"], { cwd: gitDir });
-
-      mkdirSync(join(gitDir, "scripts"), { recursive: true });
-      mkdirSync(join(gitDir, "backend", "review-api"), { recursive: true });
-      mkdirSync(join(gitDir, "backend", "review-worker"), { recursive: true });
-
-      if (existsSync(LAUNCHER_SH)) {
-        writeFileSync(join(gitDir, "scripts", "review-showcase.sh"), readFileSync(LAUNCHER_SH, "utf8"), { mode: 0o755 });
-      }
-      const launcherMjs = join(ROOT, "scripts", "review-showcase.mjs");
-      if (existsSync(launcherMjs)) {
-        writeFileSync(join(gitDir, "scripts", "review-showcase.mjs"), readFileSync(launcherMjs, "utf8"), { mode: 0o755 });
-      }
-      if (existsSync(COMPOSE_REVIEW)) {
-        writeFileSync(join(gitDir, "docker-compose.review.yml"), readFileSync(COMPOSE_REVIEW, "utf8"));
-      }
-      if (existsSync(API_DOCKERFILE)) {
-        writeFileSync(join(gitDir, "backend", "review-api", "Dockerfile"), readFileSync(API_DOCKERFILE, "utf8"));
-      }
-      if (existsSync(WORKER_DOCKERFILE)) {
-        writeFileSync(join(gitDir, "backend", "review-worker", "Dockerfile"), readFileSync(WORKER_DOCKERFILE, "utf8"));
-      }
-
-      writeFileSync(join(gitDir, "committed.txt"), "clean committed source", "utf8");
-      spawnSync("git", ["add", "."], { cwd: gitDir });
-      spawnSync("git", ["commit", "-m", "initial commit"], { cwd: gitDir });
+      const gitDir = createGitFixture(tempDir);
 
       const revRes = spawnSync("git", ["rev-parse", "HEAD"], { cwd: gitDir, encoding: "utf8" });
       const commitHash = revRes.stdout.trim();

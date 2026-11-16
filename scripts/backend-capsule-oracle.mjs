@@ -3,6 +3,94 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
+export function assertCoordinationDeadline(a, b, timeA, timeB) {
+  assert.ok(
+    a && Number.isFinite(a.remainingDeadlineMs) && a.remainingDeadlineMs >= 0,
+    "original remainingDeadlineMs must be finite and nonnegative",
+  );
+  assert.ok(
+    b && Number.isFinite(b.remainingDeadlineMs) && b.remainingDeadlineMs >= 0,
+    "candidate remainingDeadlineMs must be finite and nonnegative",
+  );
+  assert.ok(
+    Number.isFinite(timeA) && Number.isFinite(timeB),
+    "observation timestamps must be valid",
+  );
+  const commonTime = Math.max(timeA, timeB);
+  const countdownA = Math.max(0, a.remainingDeadlineMs - (commonTime - timeA));
+  const countdownB = Math.max(0, b.remainingDeadlineMs - (commonTime - timeB));
+  assert.ok(
+    Math.abs(countdownA - countdownB) < 5000,
+    `coordination remainingDeadlineMs at common observation time mismatch: original=${countdownA} candidate=${countdownB}`,
+  );
+}
+
+export function selfCheck() {
+  const baseTime = 1_700_000_000_000;
+  // Case 1: >5s inter-snapshot startup lag with identical deadline passes
+  const timeB1 = baseTime;
+  const timeA1 = baseTime + 8_000; // 8s startup lag (> 5s)
+  assertCoordinationDeadline(
+    { remainingDeadlineMs: 52_000 },
+    { remainingDeadlineMs: 60_000 },
+    timeA1,
+    timeB1,
+  );
+
+  // Case 2: Expiry crossing during inter-snapshot lag clamps to 0 and passes
+  const timeB2 = baseTime;
+  const timeA2 = baseTime + 8_000;
+  assertCoordinationDeadline(
+    { remainingDeadlineMs: 0 },
+    { remainingDeadlineMs: 4_000 },
+    timeA2,
+    timeB2,
+  );
+
+  // Case 3: Genuinely inconsistent deadline fails
+  assert.throws(
+    () =>
+      assertCoordinationDeadline(
+        { remainingDeadlineMs: 22_000 },
+        { remainingDeadlineMs: 60_000 },
+        timeA1,
+        timeB1,
+      ),
+    /mismatch|AssertionError/,
+  );
+
+  // Case 4: Negative, non-finite, or missing candidates fail
+  assert.throws(
+    () =>
+      assertCoordinationDeadline(
+        { remainingDeadlineMs: -1 },
+        { remainingDeadlineMs: 60_000 },
+        timeA1,
+        timeB1,
+      ),
+    /AssertionError/,
+  );
+  assert.throws(
+    () =>
+      assertCoordinationDeadline(
+        { remainingDeadlineMs: 52_000 },
+        null,
+        timeA1,
+        timeB1,
+      ),
+    /AssertionError/,
+  );
+
+  console.log(
+    "backend-capsule-oracle self-check PASS: >5s lag, expiry crossing, and inconsistent deadline rejection verified",
+  );
+}
+
+if (process.argv.includes("--self-check")) {
+  selfCheck();
+  process.exit(0);
+}
+
 const require = createRequire(
   new URL("../services/orchestrator/package.json", import.meta.url),
 );
@@ -81,6 +169,8 @@ try {
   const candidate = JSON.parse(
     readFileSync(process.env.TENVYR_JAVA_CAPSULE_PATH, "utf8"),
   );
+  const timeA = Date.parse(original.projection?.serverTime);
+  const timeB = Date.parse(candidate.projection?.serverTime);
   for (const value of [original, candidate]) {
     for (const [object, field] of [
       [value.capsule, "capturedAt"],
@@ -97,10 +187,7 @@ try {
   if (original.projection.coordination) {
     const a = original.projection.coordination.run;
     const b = candidate.projection.coordination?.run;
-    assert.ok(
-      b && Number.isFinite(b.remainingDeadlineMs) && b.remainingDeadlineMs >= 0,
-    );
-    assert.ok(Math.abs(a.remainingDeadlineMs - b.remainingDeadlineMs) < 5000);
+    assertCoordinationDeadline(a, b, timeA, timeB);
     a.remainingDeadlineMs = b.remainingDeadlineMs = 0;
   }
   assert.deepEqual(

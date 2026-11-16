@@ -98,7 +98,7 @@ idempotency, visibility and cancel-vs-result checks on real PostgreSQL.
 ## Phase 3 — runnable showcase and final verification
 
 - [x] [T07: showcase, capacity and metrics](tasks/T07-showcase-and-metrics.md) — accepted ([report](reports/T07.md))
-- [ ] [T08: final acceptance and portfolio delivery](tasks/T08-final-acceptance.md) (planned / next in progress)
+- [ ] [T08: final acceptance and portfolio delivery](tasks/T08-final-acceptance.md) (in progress; 8/9 accepted; full review gate 89+120 PASS in 10m23s; full backend `--integration` running; benchmark pending)
 
 Gate: [VERIFY.md](VERIFY.md) passes; unsupported infrastructure is reported as
 blocked/failing, never skipped. Record commands, environment and actual output.

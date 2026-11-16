@@ -15,10 +15,11 @@
  * 9. Exports safe identities proof for multi-cycle verification without printing passwords/tokens.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 // Port configuration validation (strict ASCII integer 1..65535, default 8080)
 function parseAndValidatePort(raw) {
@@ -336,7 +337,30 @@ async function main() {
   process.stdout.write("[Smoke] All review showcase smoke gates passed successfully.\n");
 }
 
-main().catch((err) => {
-  process.stderr.write(`[Smoke] Failure: ${err.message}\n`);
-  process.exit(1);
-});
+const isDirectExecution = Boolean(
+  process.argv[1] &&
+  resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()
+);
+
+if (isDirectExecution) {
+  main().catch((err) => {
+    process.stderr.write(`[Smoke] Failure: ${err.message}\n`);
+    process.exit(1);
+  });
+}
+
+export {
+  parseAndValidatePort,
+  TestHttpClient,
+  getCsrf,
+  login,
+  defaultPort,
+  BASE_URL,
+  RUNTIME_DIR,
+  BOOTSTRAP_FILE,
+  bootstrapUsers,
+  submitterA,
+  reviewer,
+  submitterB,
+  main,
+};

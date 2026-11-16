@@ -60,20 +60,33 @@ public final class GatewayCheck {
     }
     private static String session()throws Exception {String packet=request("GET","/socket.io/?EIO=4&transport=polling",null).body();check(packet.startsWith("0"),"Engine open");JsonNode open=Json.parse(packet.substring(1));check(open.path("maxPayload").asInt()==1_000_000,"maxPayload");check(open.path("upgrades").equals(Json.array("websocket")),"upgrade advertisement");return open.path("sid").asText();}
     private static String pollingPath(String sid) {return "/socket.io/?EIO=4&transport=polling&sid="+sid;}
+    private static String poll(String sid,String expected)throws Exception {
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+        while(System.nanoTime()<deadline) {
+            String body=request("GET",pollingPath(sid),null).body(),found=null;
+            for(String p:body.split("\u001e")) {
+                if(p.equals("2"))request("POST",pollingPath(sid),"3");
+                else if(found==null){check(p.startsWith(expected),"expected "+expected+", got "+p);found=p;}
+                else check(false,"unexpected extra packet: "+p);
+            }
+            if(found!=null)return found;
+        }
+        throw new AssertionError("Timed out waiting for "+expected);
+    }
     private static void polling()throws Exception {
-        String sid=session();check(request("POST",pollingPath(sid),"40").body().equals("ok"),"polling POST acknowledged");String connected=request("GET",pollingPath(sid),null).body();check(connected.startsWith("40{"),"Socket.IO connect");
-        request("POST","/api/webhooks/execution-update","{\"executionId\":\"execution-test\"}");String update=request("GET",pollingPath(sid),null).body();check(update.startsWith("42["),"Socket.IO event envelope");event(update);
+        String sid=session();check(request("POST",pollingPath(sid),"40").body().equals("ok"),"polling POST acknowledged");check(poll(sid,"40{").startsWith("40{"),"Socket.IO connect");
+        request("POST","/api/webhooks/execution-update","{\"executionId\":\"execution-test\"}");String update=poll(sid,"42[");check(update.startsWith("42["),"Socket.IO event envelope");event(update);
         request("POST",pollingPath(sid),"1");
     }
     private static void websocket()throws Exception {
         Frames frames=new Frames();WebSocket socket=CLIENT.newWebSocketBuilder().header("Origin","http://localhost:4000").buildAsync(URI.create(base.replace("http","ws")+"/socket.io/?EIO=4&transport=websocket"),frames).get(3,TimeUnit.SECONDS);
-        check(frames.next().startsWith("0{"),"WebSocket Engine handshake");socket.sendText("40",true).join();check(frames.next().startsWith("40{"),"WebSocket namespace connect");request("POST","/api/webhooks/execution-update","{\"executionId\":\"execution-test\"}");event(frames.next());socket.sendClose(1000,"done").join();
+        check(frames.next().startsWith("0{"),"WebSocket Engine handshake");frames.send(socket,"40").join();check(frames.next().startsWith("40{"),"WebSocket namespace connect");check(frames.heartbeat.await(3,TimeUnit.SECONDS),"heartbeat answered (state="+frames.heartbeatState+", opcodes="+frames.opcodes+")");request("POST","/api/webhooks/execution-update","{\"executionId\":\"execution-test\"}");event(frames.next());frames.close(socket,1000,"done").join();
     }
     private static void upgrade()throws Exception {
-        String sid=session();request("POST",pollingPath(sid),"40");request("GET",pollingPath(sid),null);
+        String sid=session();request("POST",pollingPath(sid),"40");poll(sid,"40{");
         CompletableFuture<HttpResponse<String>> poll=CLIENT.sendAsync(HttpRequest.newBuilder(URI.create(base+pollingPath(sid))).build(),HttpResponse.BodyHandlers.ofString());
         Frames frames=new Frames();WebSocket socket=CLIENT.newWebSocketBuilder().buildAsync(URI.create(base.replace("http","ws")+"/socket.io/?EIO=4&transport=websocket&sid="+sid),frames).get(3,TimeUnit.SECONDS);
-        socket.sendText("2probe",true).join();check(frames.next().equals("3probe"),"upgrade probe pong");check(poll.get(3,TimeUnit.SECONDS).body().equals("6"),"polling noop drains during upgrade");socket.sendText("5",true).join();request("POST","/api/webhooks/execution-update","{\"executionId\":\"execution-test\"}");event(frames.next());socket.sendClose(1000,"done").join();
+        frames.send(socket,"2probe").join();check(frames.next().equals("3probe"),"upgrade probe pong");check(poll.get(3,TimeUnit.SECONDS).body().equals("6"),"polling noop drains during upgrade");frames.send(socket,"5").join();request("POST","/api/webhooks/execution-update","{\"executionId\":\"execution-test\"}");event(frames.next());frames.close(socket,1000,"done").join();
     }
     private static void heartbeat()throws Exception {
         String sid=session();String ping=request("GET",pollingPath(sid),null).body();check(ping.equals("2"),"server heartbeat ping");request("POST",pollingPath(sid),"3");check(request("GET",pollingPath(sid),null).body().equals("2"),"pong schedules next ping");check(request("GET",pollingPath(sid),null).body().equals("1"),"missed pong closes session");check(request("GET",pollingPath(sid),null).statusCode()==400,"timed out session removed");
@@ -86,8 +99,40 @@ public final class GatewayCheck {
     private static void check(boolean value,String label) {if(!value)throw new AssertionError(label);}
     private static final class Frames implements WebSocket.Listener {
         final BlockingQueue<String> frames=new LinkedBlockingQueue<>();final StringBuilder partial=new StringBuilder();
+        final CountDownLatch heartbeat=new CountDownLatch(1);
+        volatile String heartbeatState="no-ping";
+        final List<String> opcodes=new CopyOnWriteArrayList<>();
+        private CompletableFuture<?> outbound=CompletableFuture.completedFuture(null);
+        synchronized CompletableFuture<WebSocket> send(WebSocket socket,String text) {
+            CompletableFuture<WebSocket> next=outbound.thenCompose(ignored->socket.sendText(text,true));
+            outbound=next.exceptionally(ignored->null);
+            return next;
+        }
+        synchronized CompletableFuture<WebSocket> close(WebSocket socket,int status,String reason) {
+            CompletableFuture<WebSocket> next=outbound.thenCompose(ignored->socket.sendClose(status,reason));
+            outbound=next.exceptionally(ignored->null);
+            return next;
+        }
         @Override public void onOpen(WebSocket socket){socket.request(1);}
-        @Override public CompletionStage<?> onText(WebSocket socket,CharSequence data,boolean last){partial.append(data);if(last){frames.add(partial.toString());partial.setLength(0);}socket.request(1);return null;}
+        @Override public CompletionStage<?> onText(WebSocket socket,CharSequence data,boolean last){
+            partial.append(data);
+            if(last){
+                String packet=partial.toString();partial.setLength(0);
+                if(packet.equals("2")){
+                    heartbeatState="ping-received";
+                    send(socket,"3").whenComplete((res,err)->{
+                        if(err==null){heartbeatState="pong-sent";heartbeat.countDown();}
+                        else heartbeatState="send-failed:"+err.getClass().getSimpleName();
+                    });
+                } else {
+                    opcodes.add(packet.isEmpty()?"empty":packet.charAt(0)+":"+packet.length());
+                    frames.add(packet);
+                }
+            }
+            socket.request(1);return null;
+        }
+        @Override public CompletionStage<?> onClose(WebSocket socket,int status,String reason){heartbeatState+=";closed:"+status;return null;}
+        @Override public void onError(WebSocket socket,Throwable error){heartbeatState+=";error:"+error.getClass().getSimpleName();}
         String next()throws InterruptedException {String packet=frames.poll(3,TimeUnit.SECONDS);if(packet==null)throw new AssertionError("Expected WebSocket frame");return packet;}
     }
 }

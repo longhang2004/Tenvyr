@@ -1,0 +1,1267 @@
+openapi: 3.0.3
+info:
+  title: Tenvyr Asynchronous Code Review API
+  description: |
+    Production HTTP and persistence contract for the Tenvyr asynchronous code review backend.
+    Enforces atomic idempotent submissions, keyset-paginated reads, verified report projections,
+    role-based access control, CSRF protection, and signed HMAC worker callbacks.
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:8080
+    description: Default local development and embedded integration loopback port.
+  - url: http://127.0.0.1:18080
+    description: Showcase compose loopback port override.
+
+tags:
+  - name: Authentication
+    description: Session establishment, CSRF distribution, and actor resolution.
+  - name: Reviews
+    description: Review submission, keyset listing, detail lookup, report projection, decisions, cancellation, and audit log.
+  - name: Internal Callbacks
+    description: HMAC-SHA256 authenticated Worker callback ingestion.
+  - name: Observability
+    description: Minimal liveness health probes and role-protected Micrometer metrics.
+
+paths:
+  /login:
+    post:
+      tags:
+        - Authentication
+      summary: Authenticate and establish HTTP session
+      description: |
+        Standard Spring Security form login establishing a container-managed `JSESSIONID` cookie.
+        Requires CSRF protection provided via canonical `X-CSRF-TOKEN` header or `_csrf` form parameter.
+        Local loopback defaults to `cookie.secure: false`; production TLS configurations enforce `cookie.secure: true`.
+        No OAuth or JWT authentication is implemented.
+      security:
+        - csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  example: submitter_a
+                password:
+                  type: string
+                  format: password
+                  example: generated-private-password
+                _csrf:
+                  type: string
+                  description: Optional form parameter alternative to canonical X-CSRF-TOKEN request header.
+                  example: mock-csrf-token
+      responses:
+        '204':
+          description: Authentication successful. Sets `JSESSIONID` session cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "JSESSIONID=abc123xyz; Path=/; HttpOnly; SameSite=Lax"
+        '401':
+          description: Invalid credentials or inactive user account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /logout:
+    post:
+      tags:
+        - Authentication
+      summary: Terminate session
+      description: Invalidates current HTTP session and clears the `JSESSIONID` cookie.
+      security:
+        - cookieAuth: []
+          csrfToken: []
+      responses:
+        '204':
+          description: Logout successful.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "JSESSIONID=; Path=/; Max-Age=0"
+
+  /api/v1/auth/csrf:
+    get:
+      tags:
+        - Authentication
+      summary: Retrieve CSRF token
+      description: Public anonymous endpoint returning current Spring Security CSRF parameter and header tokens.
+      responses:
+        '200':
+          description: CSRF token details.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsrfResponse'
+
+  /api/v1/me:
+    get:
+      tags:
+        - Authentication
+      summary: Resolve current actor
+      description: |
+        Resolves identity and role for the authenticated session. Queries the PostgreSQL `users`
+        table on each request to prevent stale privilege if disabled or re-roled.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Authenticated actor details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Actor'
+        '401':
+          description: Unauthenticated or disabled user account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reviews:
+    post:
+      tags:
+        - Reviews
+      summary: Submit review request
+      description: |
+        Atomically records review request and materializes engine execution in a single PostgreSQL
+        transaction under an operation advisory lock. Restricted to SUBMITTER role.
+        Replaying the exact same request body with the same Idempotency-Key returns 202 with the
+        original review ID. Differing payloads with the same key return 409 conflict.
+      security:
+        - cookieAuth: []
+          csrfToken: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Canonical 36-character UUID string scoped to the authenticated submitter.
+          schema:
+            type: string
+            format: uuid
+            example: 11111111-1111-1111-1111-111111111111
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReview'
+      responses:
+        '202':
+          description: Review submission accepted.
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /api/v1/reviews/33333333-3333-3333-3333-333333333333
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+        '400':
+          description: Invalid JSON, unknown fields, missing idempotency key, or schema bounds violated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required or session expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Actor is not SUBMITTER or account is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency key already used with differing payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body exceeds maximum allowed 1 MiB boundary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Transient database lock or connection timeout.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Reviews
+      summary: Keyset-paginated list of reviews
+      description: |
+        Returns paginated review summaries ordered descending by (created_at DESC, id DESC).
+        SUBMITTER sees only own submissions; REVIEWER sees all submissions across users.
+        Source code and report findings are omitted from summary items.
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          description: Number of items per page (default 20, minimum 1, maximum 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: after
+          required: false
+          description: |
+            Opaque URL-safe Base64 keyset cursor encoding {"createdAt": "<ISO-8601>", "id": "<UUID>"}.
+            Max 512 raw characters, <= 256 bytes decoded.
+          schema:
+            type: string
+            maxLength: 512
+      responses:
+        '200':
+          description: Paginated review summaries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewSummaryPage'
+        '400':
+          description: Invalid limit or malformed cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Database temporarily unavailable.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reviews/{id}:
+    get:
+      tags:
+        - Reviews
+      summary: Get review detail
+      description: |
+        Returns full review record including source code, execution state, attempt count, and verdict.
+        SUBMITTER can only read own reviews; foreign reviews return 404 to avoid leaking existence.
+        REVIEWER can read any review.
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Review request UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Review detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDetail'
+        '400':
+          description: Malformed UUID path parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Review not found or invisible to current actor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Database temporarily unavailable.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reviews/{id}/report:
+    get:
+      tags:
+        - Reviews
+      summary: Get review report projection
+      description: |
+        Projects typed review report from the verified APPLIED result inbox payload.
+        Available only after engine execution reaches terminal COMPLETED status.
+        Same visibility rules as review detail (SUBMITTER own only, REVIEWER all).
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Review request UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Validated review report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewReport'
+        '400':
+          description: Malformed UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Review not found or invisible to current actor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: |
+            Report not ready (execution has not completed) or review report invalid
+            (corrupted payload or hash mismatch).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Database temporarily unavailable.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reviews/{id}/decisions:
+    post:
+      tags:
+        - Reviews
+      summary: Record reviewer verdict
+      description: |
+        Records final human business decision (APPROVE or REQUEST_CHANGES).
+        Restricted to REVIEWER role. Reviewer cannot decide on their own submitted review (self-review defense).
+        Preconditions: Execution must be COMPLETED with valid verified report.
+        Idempotency: Replaying with identical key, actor, request, and command returns 200 OK.
+        Conflicting payloads or key reuse across different reviews returns 409 conflict.
+      security:
+        - cookieAuth: []
+          csrfToken: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Review request UUID.
+          schema:
+            type: string
+            format: uuid
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Canonical 36-character UUID string scoped to the reviewer.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionCommand'
+      responses:
+        '201':
+          description: Decision successfully recorded.
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /api/v1/reviews/33333333-3333-3333-3333-333333333333/decisions/44444444-4444-4444-4444-444444444444
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionView'
+        '200':
+          description: Idempotent replay of previously recorded decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionView'
+        '400':
+          description: Invalid command payload, unknown fields, missing action, or comment > 2000 chars.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Actor is not REVIEWER, account disabled, or self-review attempted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Review request not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency conflict, report not ready, or decision already recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body exceeds maximum allowed 1 MiB boundary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Database temporarily unavailable.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reviews/{id}/cancel:
+    post:
+      tags:
+        - Reviews
+      summary: Cancel review request
+      description: |
+        Cancels an ongoing review in PROCESSING status. Restricted to the submitting owner.
+        Applies advisory lock and cancels engine execution on the same connection.
+        If concurrent worker completion won the race, cancellation aborts and returns 409.
+        Idempotent replay with same key returns 200 with stored outcome.
+      security:
+        - cookieAuth: []
+          csrfToken: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Review request UUID.
+          schema:
+            type: string
+            format: uuid
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Canonical 36-character UUID string scoped to the submitter.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Review successfully cancelled or idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDetail'
+        '400':
+          description: Missing or malformed UUID header/path parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Actor is not SUBMITTER or account disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Review not found or caller is not owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Review is not in PROCESSING, key used on another request, or completion won the race.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body exceeds maximum allowed 1 MiB boundary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Database temporarily unavailable.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reviews/{id}/audit:
+    get:
+      tags:
+        - Reviews
+      summary: Keyset-paginated audit trail
+      description: |
+        Retrieves durable audit events (SUBMIT, DECIDE, CANCEL) sorted ascending by (created_at ASC, id ASC).
+        SUBMITTER can only read audit for own review; REVIEWER can read audit for any review.
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Review request UUID.
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: limit
+          required: false
+          description: Number of items per page (default 20, minimum 1, maximum 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: after
+          required: false
+          description: |
+            Opaque URL-safe Base64 keyset cursor encoding {"createdAt": "<ISO-8601>", "id": "<UUID>"}.
+            Max 512 raw characters, <= 256 bytes decoded.
+          schema:
+            type: string
+            maxLength: 512
+      responses:
+        '200':
+          description: Paginated audit entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntryPage'
+        '400':
+          description: Invalid limit or malformed cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Review not found or invisible to current actor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Database temporarily unavailable.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                example: "1"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/agent-callbacks/http/code-reviewer:
+    post:
+      tags:
+        - Internal Callbacks
+      summary: Ingest Worker result callback
+      description: |
+        Internal HTTP agent callback receiver for Worker results.
+        Authentication uses raw received request bytes signed with HMAC-SHA256.
+        Exempt from CSRF protection; maximum request body size is bounded to 1 MiB (1,048,576 bytes).
+      security:
+        - hmacAuth: []
+      parameters:
+        - in: header
+          name: x-agentweave-key-id
+          required: true
+          description: Configured agent key ID matching executor profile.
+          schema:
+            type: string
+            example: code-reviewer-key-1
+        - in: header
+          name: x-agentweave-timestamp
+          required: true
+          description: Unix epoch seconds string. Must be within allowed skew window.
+          schema:
+            type: string
+            example: "1731770000"
+        - in: header
+          name: x-agentweave-delivery-id
+          required: true
+          description: Unique delivery identifier (<= 255 characters).
+          schema:
+            type: string
+            maxLength: 255
+            example: "55555555-5555-5555-5555-555555555555"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Serialized Worker callback payload conforming to Agent Protocol v1 (<= 1 MiB).
+      responses:
+        '204':
+          description: Callback processed or duplicate safely acknowledged.
+        '400':
+          description: Malformed JSON, schema validation failure, delivery ID > 255 chars, or ambiguous payload.
+        '401':
+          description: Invalid signature, expired timestamp skew, or unknown key ID.
+        '413':
+          description: Request body exceeds maximum allowed 1 MiB boundary.
+        '500':
+          description: Unexpected adapter processing error.
+        '503':
+          description: Engine callback handlers temporarily unavailable.
+
+  /actuator/health:
+    get:
+      tags:
+        - Observability
+      summary: Application liveness health probe
+      description: "Public anonymous health endpoint. Details are suppressed (show-details: never)."
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    example: UP
+        '503':
+          description: Service is unhealthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    example: DOWN
+
+  /actuator/metrics:
+    get:
+      tags:
+        - Observability
+      summary: List available metrics
+      description: Restricted to authenticated REVIEWER role. Verifies user enabled status and role dynamically against DB.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of registered metric names.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - names
+                properties:
+                  names:
+                    type: array
+                    items:
+                      type: string
+                    example: ["review.commands", "jvm.memory.used"]
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access denied (non-REVIEWER role).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actuator/metrics/{name}:
+    get:
+      tags:
+        - Observability
+      summary: Query metric detail
+      description: Restricted to authenticated REVIEWER role. Allows inspecting measurements and tag values.
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: name
+          required: true
+          description: "Target metric name (e.g. review.commands)."
+          schema:
+            type: string
+            example: review.commands
+      responses:
+        '200':
+          description: Metric measurements and available tags.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - measurements
+                  - availableTags
+                properties:
+                  name:
+                    type: string
+                  measurements:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - statistic
+                        - value
+                      properties:
+                        statistic:
+                          type: string
+                        value:
+                          type: number
+                  availableTags:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - tag
+                        - values
+                      properties:
+                        tag:
+                          type: string
+                        values:
+                          type: array
+                          items:
+                            type: string
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access denied (non-REVIEWER role).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Metric name not found.
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: JSESSIONID
+      description: Container session cookie established via POST /login.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-TOKEN
+      description: Anti-CSRF token retrieved via GET /api/v1/auth/csrf.
+    hmacAuth:
+      type: apiKey
+      in: header
+      name: x-agentweave-signature
+      description: >-
+        HMAC-SHA256 signature in format v1=<64-hex> calculated over (timestamp + "." + deliveryId + ".") and raw received body bytes.
+
+  schemas:
+    Actor:
+      type: object
+      required:
+        - id
+        - username
+        - role
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 00000000-0000-0000-0000-000000000001
+        username:
+          type: string
+          example: submitter_a
+        role:
+          type: string
+          enum:
+            - SUBMITTER
+            - REVIEWER
+          example: SUBMITTER
+
+    CreateReview:
+      type: object
+      required:
+        - title
+        - language
+        - code
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Review title (trimmed length 1..160 UTF-16 code units).
+          example: Refactor user authentication service
+        language:
+          type: string
+          enum:
+            - java
+            - typescript
+            - python
+          description: Programming language input label (not analytical coverage claim).
+          example: java
+        code:
+          type: string
+          minLength: 1
+          description: Source code under review (non-blank, maximum 65,536 UTF-8 bytes).
+          example: "public class Sample { ... }"
+
+    Submission:
+      type: object
+      required:
+        - id
+        - status
+        - createdAt
+        - executionId
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 33333333-3333-3333-3333-333333333333
+        status:
+          type: string
+          example: PROCESSING
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-16T12:00:00Z"
+        executionId:
+          type: string
+          format: uuid
+          example: 22222222-2222-2222-2222-222222222222
+
+    ReviewSummary:
+      type: object
+      required:
+        - id
+        - title
+        - language
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 33333333-3333-3333-3333-333333333333
+        title:
+          type: string
+          example: Refactor user authentication service
+        language:
+          type: string
+          example: java
+        status:
+          type: string
+          enum:
+            - PROCESSING
+            - FAILED
+            - CANCELLED
+            - AWAITING_REVIEW
+            - APPROVED
+            - CHANGES_REQUESTED
+          example: AWAITING_REVIEW
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-16T12:00:00Z"
+
+    ReviewDetail:
+      type: object
+      required:
+        - id
+        - title
+        - language
+        - code
+        - status
+        - createdAt
+        - executionId
+        - attemptCount
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 33333333-3333-3333-3333-333333333333
+        title:
+          type: string
+          example: Refactor user authentication service
+        language:
+          type: string
+          example: java
+        code:
+          type: string
+          example: "public class Sample { ... }"
+        status:
+          type: string
+          enum:
+            - PROCESSING
+            - FAILED
+            - CANCELLED
+            - AWAITING_REVIEW
+            - APPROVED
+            - CHANGES_REQUESTED
+          example: AWAITING_REVIEW
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-16T12:00:00Z"
+        executionId:
+          type: string
+          format: uuid
+          example: 22222222-2222-2222-2222-222222222222
+        attemptCount:
+          type: integer
+          example: 1
+        errorCode:
+          type: string
+          nullable: true
+          example: null
+        decision:
+          description: Final recorded human verdict, or null if review is not yet decided.
+          oneOf:
+            - $ref: '#/components/schemas/DecisionView'
+            - type: object
+              nullable: true
+              enum: [null]
+
+    DecisionCommand:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          enum:
+            - APPROVE
+            - REQUEST_CHANGES
+          example: APPROVE
+        comment:
+          type: string
+          nullable: true
+          maxLength: 2000
+          description: Optional review feedback (trimmed <= 2,000 characters).
+          example: Code conforms to architectural standards.
+
+    DecisionView:
+      type: object
+      required:
+        - id
+        - requestId
+        - actorId
+        - action
+        - stepAttemptId
+        - resultHash
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 44444444-4444-4444-4444-444444444444
+        requestId:
+          type: string
+          format: uuid
+          example: 33333333-3333-3333-3333-333333333333
+        actorId:
+          type: string
+          format: uuid
+          example: 00000000-0000-0000-0000-000000000003
+        action:
+          type: string
+          enum:
+            - APPROVE
+            - REQUEST_CHANGES
+          example: APPROVE
+        comment:
+          type: string
+          nullable: true
+          example: Code conforms to architectural standards.
+        stepAttemptId:
+          type: string
+          format: uuid
+          example: 55555555-5555-5555-5555-555555555555
+        resultHash:
+          type: string
+          example: 6a2c...b1e
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-16T12:05:00Z"
+
+    ReportEvidence:
+      type: object
+      required:
+        - fallbackUsed
+      properties:
+        mode:
+          type: string
+          nullable: true
+          description: Truthful execution mode (e.g. mock).
+          example: mock
+        provider:
+          type: string
+          nullable: true
+          description: Truthful model provider identifier.
+          example: mock
+        model:
+          type: string
+          nullable: true
+          description: Truthful model identifier.
+          example: mock-code-reviewer
+        fallbackUsed:
+          type: boolean
+          default: false
+          description: Whether automated model fallback was engaged.
+          example: false
+        usageSource:
+          type: string
+          nullable: true
+          description: Usage and billing reporting source.
+          example: mock
+
+    ReviewReport:
+      type: object
+      required:
+        - score
+        - findings
+        - evidence
+      properties:
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Quality score from 0 to 100.
+          example: 85
+        findings:
+          type: array
+          maxItems: 50
+          description: Array of findings (max 50 items, each non-blank string <= 1000 characters; total JSON <= 65536 UTF-8 bytes).
+          items:
+            type: string
+            maxLength: 1000
+          example:
+            - "Method validateCredentials does not sanitize input."
+        evidence:
+          $ref: '#/components/schemas/ReportEvidence'
+
+    AuditEntry:
+      type: object
+      required:
+        - id
+        - actorId
+        - action
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 66666666-6666-6666-6666-666666666666
+        actorId:
+          type: string
+          format: uuid
+          example: 00000000-0000-0000-0000-000000000001
+        action:
+          type: string
+          enum:
+            - SUBMIT
+            - DECIDE
+            - CANCEL
+          example: SUBMIT
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-16T12:00:00Z"
+
+    ReviewSummaryPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewSummary'
+        nextCursor:
+          type: string
+          nullable: true
+          description: >-
+            Opaque URL-safe Base64 cursor encoding {"createdAt": "<ISO-8601>", "id": "<UUID>"}. Maximum 512 raw characters, <= 256 bytes decoded.
+          example: eyJjcmVhdGVkQXQiOiIyMDI2LTExLTE2VDEyOjAwOjAwWiIsImlkIjoiMzMzMzMzMzMtMzMzMy0zMzMzLTMzMzMtMzMzMzMzMzMzMzMzIn0
+
+    AuditEntryPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        nextCursor:
+          type: string
+          nullable: true
+          description: >-
+            Opaque URL-safe Base64 cursor encoding {"createdAt": "<ISO-8601>", "id": "<UUID>"}. Maximum 512 raw characters, <= 256 bytes decoded.
+          example: eyJjcmVhdGVkQXQiOiIyMDI2LTExLTE2VDEyOjAwOjAwWiIsImlkIjoiNjY2NjY2NjYtNjY2Ni02NjY2LTY2NjYtNjY2NjY2NjY2NjY2In0
+
+    CsrfResponse:
+      type: object
+      required:
+        - headerName
+        - parameterName
+        - token
+      properties:
+        headerName:
+          type: string
+          example: X-CSRF-TOKEN
+        parameterName:
+          type: string
+          example: _csrf
+        token:
+          type: string
+          example: mock-csrf-token
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+        - requestId
+      properties:
+        code:
+          type: string
+          enum:
+            - BAD_REQUEST
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - REPORT_NOT_READY
+            - REVIEW_REPORT_INVALID
+            - PAYLOAD_TOO_LARGE
+            - DATABASE_UNAVAILABLE
+            - INTERNAL_ERROR
+          example: BAD_REQUEST
+        message:
+          type: string
+          example: Invalid request payload or parameters
+        requestId:
+          type: string
+          format: uuid
+          example: 99999999-9999-9999-9999-999999999999

@@ -72,7 +72,11 @@ JavaScript `Date` values: non-null attempt terminal dates contribute `{}` to the
 hash, while the wire DTO still contains ISO dates. The capsule oracle calls the
 original production services against the same PostgreSQL rows and compares the
 entire DTO/hash, connections, execution summaries/projection, and Attention.
-Worker deliveries are drained first so the two captures observe settled rows. Node is a comparison tool here, not a backend dependency
+Dynamic coordination countdowns are verified at a common observation time using
+each projection's `serverTime`, proving identical underlying loop deadlines and
+expiry clamping even when inter-snapshot startup latency exceeds 5s (root actual
+final gate remains pending). Worker deliveries are drained first so the two captures
+observe settled rows. Node is a comparison tool here, not a backend dependency
 behind the Java service.
 
 ## Real acceptance checks
@@ -107,7 +111,8 @@ The runner forwards the required engine integration flag and fails on missing
 checks. Its gates include real HTTP security; original TypeORM versus Java up/
 down schema and ledger comparison; engine authority; composition and restart;
 coordinator/operator commands; all four public SDK processes; gateway protocol
-tests and actual Socket.IO v4 clients; Kafka agent delivery/offsets; Worker
+tests and actual Socket.IO v4 clients (with Engine.IO heartbeat ping/pong
+handled across event deliveries; actual full gate still pending); Kafka agent delivery/offsets; Worker
 HTTP/stress/shutdown; native host HTTP/process execution; and Docker maintenance.
 Unavailable infrastructure is a failed gate, never a skipped success.
 

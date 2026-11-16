@@ -1996,7 +1996,7 @@
     "checks": [
      "backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java"
     ],
-    "verification": "Accepted 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Launcher contract suite passes 21 of 21 tests (102.5s) verifying default 8080 and custom 18080 ports. Two consecutive Docker up/smoke/down cycles verified on committed revision 237e8b6 on 127.0.0.1:18080 with exact preserved identities and volume integrity. T00-T07 accepted 8/9; T08 planned."
+    "verification": "Accepted 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including ReviewMetricsIT 10 tests), 0 failures, 0 errors, 0 skipped in 6m47. Proves minimal public health, REVIEWER-only metrics RBAC with fresh DB session re-validation, pre-registered 0.0 baseline review.commands timer tags, read-only review.backlog gauge, and bounded resource configuration. Launcher contract suite passes 21 of 21 tests (10.9s after calibration) verifying default 8080 and custom 18080 ports. Two consecutive Docker up/smoke/down cycles verified on committed revision 237e8b6 on 127.0.0.1:18080 with exact preserved identities and volume integrity. T00-T07 accepted 8/9; T08 in progress (full review gate passes 89 Surefire + 120 real PostgreSQL ITs in 10m23s; full backend `--integration` running; benchmark pending)."
    }
   },
   {
@@ -2035,7 +2035,7 @@
     "checks": [
      "scripts/review-showcase.test.mjs"
     ],
-    "verification": "Accepted 2026-11-16 (Asia/Saigon): contract tests pass 21 of 21 cases in 102.5s; two consecutive Docker up/smoke/down cycles executed successfully on revision 237e8b6 on 127.0.0.1:18080 with exit 0 on all steps. Verified new login, CSRF tokens, idempotent submission, MOCK report generation, reviewer decision/audit, and foreign submitter 404 access denial. Verified volume CreatedAt and private credential bytes/hashes remained identical across cycles without user data reset. Initial 8080 host httpd collision resolved via TENVYR_REVIEW_PORT=18080. Independent review b1fad5be confirmed 0 open defects. T00-T07 accepted 8/9; T08 planned."
+    "verification": "Accepted 2026-11-16 (Asia/Saigon): contract tests pass 21 of 21 cases in 10.9s; two consecutive Docker up/smoke/down cycles executed successfully on revision 237e8b6 on 127.0.0.1:18080 with exit 0 on all steps. Verified new login, CSRF tokens, idempotent submission, MOCK report generation, reviewer decision/audit, and foreign submitter 404 access denial. Verified volume CreatedAt and private credential bytes/hashes remained identical across cycles without user data reset. Initial 8080 host httpd collision resolved via TENVYR_REVIEW_PORT=18080. Independent review b1fad5be confirmed 0 open defects. T00-T07 accepted 8/9; T08 in progress (full review gate passes 89 Surefire + 120 real PostgreSQL ITs in 10m23s; full backend `--integration` running; benchmark pending)."
     }
    }
   ],
