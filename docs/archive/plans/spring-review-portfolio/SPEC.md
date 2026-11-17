@@ -1,10 +1,12 @@
 ---
 title: "Spring Review Portfolio — proposed specification"
-status: planned
+status: historical
 audience:
   - developer
   - product
 last_verified: 2026-11-11
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ResultInboxService.java

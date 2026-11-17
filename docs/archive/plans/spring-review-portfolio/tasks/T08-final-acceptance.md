@@ -1,9 +1,11 @@
 ---
 title: "T08 — Close crash/security acceptance and publish truthful portfolio docs"
-status: planned
+status: historical
 audience:
   - developer
-last_verified: 2026-11-16
+last_verified: 2026-11-17
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -14,7 +16,7 @@ sources:
 
 Dependencies: T07. Estimate: 5–7 focused engineering hours.
 Read [SPEC](../SPEC.md), [DISCOVERY](../DISCOVERY.md), [WORKER](../WORKER.md) and [VERIFY](../VERIFY.md) first.
-Status: in progress (8 of 9 tasks accepted; full review gate 89+120 PASS in 10m23s; full backend `--integration` running; benchmark pending).
+Status: accepted (all 9 of 9 tasks accepted locally; plan completed and archived).
 
 ## Deliverable and files
 
@@ -41,31 +43,31 @@ CI's explicit check invocation. Read all previous task reports before closing.
 
 ## Steps and acceptance
 
-- [ ] Add deterministic process-crash checks: (a) kill before submit transaction
+- [x] Add deterministic process-crash checks: (a) kill before submit transaction
   commit -> no bound request/execution; (b) kill after commit before HTTP
   response -> replay same owner/key returns same identity and recovery starts
   work. Re-login after restart; never rely on in-memory session persistence.
-- [ ] Exercise selected Worker death before callback and duplicate/conflicting/
+- [x] Exercise selected Worker death before callback and duplicate/conflicting/
   stale callbacks after retry. Assert bounded retry or truthful terminal
   failure, same immutable plan, and no stale result overwriting the final state.
   No claim that Worker compute/paid calls execute exactly once.
-- [ ] Run the complete role/object/state matrix, including old session after
+- [x] Run the complete role/object/state matrix, including old session after
   user disable, missing/stale CSRF, hidden UUID on report/audit/cancel, malicious
   unknown fields/path/URL and chunked/Unicode limits. Reuse existing test helpers
   rather than adding parallel suites for the same behavior.
-- [ ] Run both cancellation/decision race outcomes under real transaction
+- [x] Run both cancellation/decision race outcomes under real transaction
   barriers. Prove SIGTERM stops admission, drains held DB work, closes pool
   last, and restarts into consistent work. Record failure logs safely.
-- [ ] Add explicit CI jobs/steps for review-checks unit/integration and launcher
+- [x] Add explicit CI jobs/steps for review-checks unit/integration and launcher
   tests with dedicated disposable PostgreSQL. Verify Surefire/Failsafe reports
   contain actual tests; unavailable infrastructure fails. Retain the full
   original Java/Go/SDK/Kafka compatibility gates.
-- [ ] Write OpenAPI for exactly implemented API/status/errors, session+CSRF,
+- [x] Write OpenAPI for exactly implemented API/status/errors, session+CSRF,
   cursor ordering, idempotency and limits. Update README to lead with the fixed
   business workflow and accurate Java/Spring source paths; keep legacy demo
   documented separately. Add measured 100-request/concurrency4 evidence
   (environment,p50,p95,throughput,rejections), no invented SLA.
-- [ ] Execute all final gates in VERIFY, preserve exact results and limitations,
+- [x] Execute all final gates in VERIFY, preserve exact results and limitations,
   run docs/identity verifiers. Review spec coverage and effective dependencies.
   Mark only delivered capabilities implemented; global exposure/release gates
   and process-local Worker limitations remain open. On acceptance archive this

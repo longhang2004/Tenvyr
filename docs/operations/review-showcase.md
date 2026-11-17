@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-11-16
+last_verified: 2026-11-17
 sources:
   - docker-compose.review.yml
   - scripts/review-showcase.sh
@@ -95,8 +95,19 @@ node scripts/review-benchmark.mjs --output docs/_scratch/review-benchmark.json
 - **State Impact & Data Mutation:** The benchmark creates 100 distinct review requests with corresponding execution attempts and audit rows. It does not perform automatic deletion or reset, preserving database volume and audit integrity.
 - **Admission Latency:** Measures wall-clock time from sending `POST /api/v1/reviews` with an `Idempotency-Key` through receiving the complete HTTP 202 Accepted response. Captures session authentication, CSRF validation, request parsing, and the atomic database transaction enrolling the request and engine execution.
 - **Worker Completion Time:** Monitored separately via background polling/drain until the review transitions to `AWAITING_REVIEW`. Separating admission from worker completion ensures asynchronous processing does not distort web tier latency metrics.
-- **Empirical Status:** The benchmark runner passes offline self-check. Empirical benchmark measurements (nearest-rank p50, p95, throughput, and 503 rejection rates) are explicitly pending root execution in WSL; no synthetic or unverified SLA numbers are recorded.
+- **Measured Empirical Results:** The benchmark was executed on revision SHA `e7c57dfef2237dc948d71791f5fce111f3600167` with 100 submissions at concurrency limit 4 (wall-clock 1525.986 ms):
+  - 100 HTTP 202 Accepted, 0 HTTP 503 Service Unavailable (0% rejection rate).
+  - Throughput: 65.53 requests/sec (max observed in-flight: 4).
+  - Latency (nearest-rank): p50 54.605 ms, p95 102.088 ms, mean 60.112 ms (min 42.561 ms, max 147.790 ms).
+  - Asynchronous background worker progression: Immediate bounded post-submit snapshot at 5000 ms timeout inspected 100 accepted records: 5 `AWAITING_REVIEW`, 95 `PROCESSING`. This immediate bounded post-submit snapshot is NOT a claim of completed throughput or an end-to-end drain SLA; worker progression is measured separately from admission latency.
+  - Environment: Local WSL2 kernel `6.18.58.1-microsoft-standard-WSL2`, Node `v24.22.0`, 12 logical CPUs, Docker Server `29.8.2` memory 7,986,753,536 bytes (~7.44 GiB), PostgreSQL 16.16. Other user-owned containers were retained; no claim of an isolated benchmark host or capacity SLA. Benchmark leaves 100 DEMO records in the database with no reset.
 
 ## Verification Status
 
-Accepted locally on 2026-11-16 (Asia/Saigon): full review gate PASSED in 10m23s with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites with 0 failures, 0 errors, 0 skipped. Proves complete access matrix (16 tests), concurrency serialization (2 tests), and deterministic process recovery (4 tests). Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 21 of 21 tests in 10.9s with 0 failures, verifying Compose configurations for both default 8080 and custom 18080 ports. Independent AGY review `b1fad5be` confirmed 0 open findings with clean bypass audit. Initial candidate `6b206e8` image build succeeded, but host `up` on 8080 was blocked by an existing Windows httpd listener; failure cleanup safely removed new containers while preserving the PG volume and credentials. Resolved via `TENVYR_REVIEW_PORT=18080` in revision `237e8b6`. Two consecutive Docker `up` / `smoke` / `down` cycles executed on revision `237e8b6` on `127.0.0.1:18080` with exit code 0 on all steps, verifying complete end-to-end HTTP review workflow, persisted identical volume CreatedAt timestamp, and unchanged private credential byte hashes without user data reset. T00–T07 accepted 8/9; T08 in progress (full review gate 89+120 passed; full legacy backend `--integration` running serially; 100-request benchmark pending).
+Accepted locally on 2026-11-17 (Asia/Saigon): all 9 of 9 tasks accepted; plan completed and archived under `docs/archive/plans/spring-review-portfolio/`.
+- Full review gate PASSED in 10m23s with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites with 0 failures, 0 errors, 0 skipped. Proves complete access matrix (16 tests), concurrency serialization (2 tests), and deterministic process recovery (4 tests).
+- Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 21 of 21 tests in 10.885s with 0 failures, verifying Compose configurations for both default 8080 and custom 18080 ports.
+- Full retained backend checks (`sh scripts/backend-checks.sh --integration`) executed and PASSED (exit code 0 in 1189s, 21 programs across Node, Python, Java, C++) plus 17 Docker recovery tests (0 fail/skip).
+- Automated 3-actor smoke test (`scripts/review-smoke.mjs`) and documented metrics querying example passed against loopback `127.0.0.1:18080`.
+- Two consecutive Docker `up` / `smoke` / `down` cycles executed on revision `e7c57dfef2237dc948d71791f5fce111f3600167` on `127.0.0.1:18080` with exit code 0 on all steps, verifying complete end-to-end HTTP review workflow, persisted identical volume CreatedAt timestamp, and unchanged private credential byte hashes without user data reset. Down retention verified with volume preserved and private permissions (0700/0600) intact.
+- Supplemental development check (`scripts/backend-dev-check.mjs`) safely refused existing user-owned default stack (recorded as NOT passed and not modified). Hosted CI configured in `.github/workflows/release-ci.yml` but not run or pushed to remote host.

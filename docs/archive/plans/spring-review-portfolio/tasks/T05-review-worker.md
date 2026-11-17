@@ -1,9 +1,11 @@
 ---
 title: "T05 — Reuse AgentProcessor in a strict HTTP review Worker"
-status: planned
+status: historical
 audience:
   - developer
 last_verified: 2026-11-14
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/review-worker/src/main/java/io/tenvyr/reviewworker/ReviewWorkerMain.java
   - backend/review-worker/src/main/java/io/tenvyr/reviewworker/StrictReviewRunner.java

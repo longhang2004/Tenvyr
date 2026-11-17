@@ -1,9 +1,11 @@
 ---
 title: "T07 — Ship HTTP-only review showcase with bounded resources and metrics"
-status: current
+status: historical
 audience:
   - developer
 last_verified: 2026-11-16
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewMetrics.java
   - backend/review-api/src/test/java/io/tenvyr/review/ReviewMetricsIT.java

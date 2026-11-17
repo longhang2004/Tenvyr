@@ -1,9 +1,11 @@
 ---
 title: "T04 — Deliver atomic idempotent submission and authorized bounded reads"
-status: current
+status: historical
 audience:
   - developer
 last_verified: 2026-11-14
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java

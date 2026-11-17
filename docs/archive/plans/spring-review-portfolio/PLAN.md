@@ -1,9 +1,11 @@
 ---
 title: "Spring Review Portfolio Implementation Plan"
-status: current
+status: historical
 audience:
   - developer
-last_verified: 2026-11-16
+last_verified: 2026-11-17
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -21,7 +23,7 @@ sources:
 **Tech Stack:** Java 17; Boot 3.5.16 for new API only; JDBC/PostgreSQL; Spring Security sessions; Flyway for business schema only; existing HTTP/HMAC Worker; JUnit/Spring test for new module.
 
 **Spec:** [SPEC.md](SPEC.md). Mandatory existing-API evidence: [DISCOVERY.md](DISCOVERY.md).
-**Status:** In progress. Accepted: 8 of 9 tasks (T00–T07 accepted locally). T08 planned (next in progress).
+**Status:** Completed and archived. Accepted: 9 of 9 tasks (T00–T08 accepted locally).
 
 ## Global Constraints
 
@@ -50,7 +52,7 @@ Tests for these cases are assigned to T01/T03/T04/T05/T06/T08 below; none is an 
 - [x] Inspect existing reviewer input/output and lenient fallback parser.
 - [x] Identify isolated Boot build/test and migration namespace requirements.
 - [x] Verify primary Spring documentation and Java 17 compatibility.
-- [ ] Executing worker records current HEAD/dirty paths and confirms symbol drift before modifying its task.
+- [x] Executing worker records current HEAD/dirty paths and confirms symbol drift before modifying its task.
 
 ## File ownership and produced interfaces
 
@@ -98,7 +100,7 @@ idempotency, visibility and cancel-vs-result checks on real PostgreSQL.
 ## Phase 3 — runnable showcase and final verification
 
 - [x] [T07: showcase, capacity and metrics](tasks/T07-showcase-and-metrics.md) — accepted ([report](reports/T07.md))
-- [ ] [T08: final acceptance and portfolio delivery](tasks/T08-final-acceptance.md) (in progress; 8/9 accepted; full review gate 89+120 PASS in 10m23s; full backend `--integration` running; benchmark pending)
+- [x] [T08: final acceptance and portfolio delivery](tasks/T08-final-acceptance.md) — accepted ([report](reports/T08-final-acceptance.md))
 
 Gate: [VERIFY.md](VERIFY.md) passes; unsupported infrastructure is reported as
 blocked/failing, never skipped. Record commands, environment and actual output.

@@ -1,10 +1,12 @@
 ---
 title: "Spring Review Portfolio — verification gates"
-status: planned
+status: historical
 audience:
   - developer
   - operator
 last_verified: 2026-11-11
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - scripts/backend-build.sh
   - scripts/backend-checks.sh

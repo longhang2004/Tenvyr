@@ -1,9 +1,11 @@
 ---
 title: "Spring Review Portfolio — Phase 0 discovery"
-status: planned
+status: historical
 audience:
   - developer
 last_verified: 2026-11-11
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/platform/src/main/java/io/tenvyr/platform/Db.java
   - backend/platform/src/main/java/io/tenvyr/platform/Migrator.java

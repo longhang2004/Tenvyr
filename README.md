@@ -16,7 +16,7 @@ flowchart LR
 
 ## Business Workflow & Core Architecture
 
-1. **Idempotent Submission & Request Binding:** Submitters authenticate via form session with CSRF protection and submit code snippets. Submissions are deduplicated via client `Idempotency-Key` headers inside a single database transaction binding the business request and underlying engine execution attempt (preventing duplicate request/execution records; compute retries remain lease-driven without exactly-once worker compute claims).
+1. **Idempotent Submission & Request Binding:** Submitters authenticate via form session with CSRF protection and submit code snippets. Submissions are deduplicated via client `Idempotency-Key` headers inside a single database transaction binding the business request and underlying engine execution (preventing duplicate request/execution records; compute retries remain lease-driven without exactly-once worker compute claims).
 2. **Private Asynchronous Review Worker:** A dedicated Java HTTP worker processes code submissions against bounded queues (concurrency: 2, capacity: 16). In default showcase mode, it runs offline with an explicit `MOCK` score and diagnostic findings fixture (no code analysis, external LLM, or live code execution).
 3. **Signed HMAC Callback:** The worker delivers results to `/internal/agent-callbacks/http/code-reviewer` authenticated with SHA-256 HMAC signatures over canonical raw body bytes, bounded to 1 MiB with replay protection.
 4. **Report Provenance & Keyset Reads:** Reports are projected strictly from verified `APPLIED` inbox rows matching the execution step. Listings use stable keyset pagination (`createdAt DESC, id DESC`).
@@ -77,13 +77,19 @@ node scripts/review-benchmark.mjs --self-check
 # Run benchmark against active showcase (output JSON evidence)
 node scripts/review-benchmark.mjs --output docs/_scratch/review-benchmark.json
 ```
-*(Actual 100-request / concurrency-4 empirical measurements are pending root gate execution; no synthetic SLA or throughput is claimed.)*
 
-## Current Status & Verification (16 Nov 2026)
+Measured 100-request / concurrency 4 admission results (`MOCK` mode, wall-clock 1525.986 ms):
+- **Admission Status:** 100 HTTP 202 Accepted, 0 HTTP 503 Service Unavailable (rejection rate: 0%).
+- **Observed Throughput:** 65.53 requests/sec (max observed in-flight: 4).
+- **Admission Latency (nearest-rank):** p50: 54.605 ms, p95: 102.088 ms, mean: 60.112 ms (min: 42.561 ms, max: 147.790 ms).
+- **Asynchronous Worker Progression:** Immediate post-submit snapshot at 5000 ms timeout inspected 100 accepted records: 5 `AWAITING_REVIEW`, 95 `PROCESSING`. This immediate bounded post-submit snapshot is NOT a claim of completed throughput or an end-to-end drain SLA; worker progression is measured separately from admission latency.
+- **Environment:** Local WSL2 Linux kernel `6.18.58.1-microsoft-standard-WSL2`, Node `v24.22.0`, 12 logical CPUs, Docker Server `29.8.2` memory 7,986,753,536 bytes (~7.44 GiB), PostgreSQL 16.16. Other user-owned containers were retained; no claim of an isolated benchmark host or capacity SLA. The benchmark leaves 100 DEMO records in the database with no automatic reset.
 
-- **Portfolio Plan:** 8 of 9 tasks accepted locally ([T00–T07](docs/plans/active/spring-review-portfolio/README.md)); T08 final acceptance in progress.
-- **Automated Verification:** Full review gate PASSED in 10m23s: 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites with 0 failures, 0 errors, 0 skipped (including 16 Access Matrix, 2 Concurrency, and 4 Process Crash & Recovery). Full retained backend `--integration` check is running serially; benchmark 100-request C4 numbers remain pending.
-- **Open Limitations:** External production exposure gate, HTTPS live provider integrations, and worker process-local outbox durability remain open boundaries.
+## Current Status & Verification (17 Nov 2026)
+
+- **Portfolio Plan:** 9 of 9 tasks accepted locally ([T00–T08 completed plan](docs/archive/plans/spring-review-portfolio/README.md)); plan completed and archived.
+- **Automated Verification:** Source and runtime revision SHA `e7c57dfef2237dc948d71791f5fce111f3600167`. Combined review gate PASSED in 10m23s: 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites with 0 failures, 0 errors, 0 skipped (including 16 Access Matrix, 2 Concurrency, and 4 Process Crash & Recovery). Launcher contract suite passed 21/21 in 10.885s. Retained polyglot backend checks (`sh scripts/backend-checks.sh --integration`) executed and PASSED (21 programs across Node, Python, Java, C++ in 1189s) plus 17 Docker recovery tests (0 fail/skip). Actual 3-actor smoke test and documented metrics example passed against loopback `127.0.0.1:18080`. Stable 3 UUIDs, private credential byte hashes, and volume integrity vs T07 preserved across down retention. Supplemental development check safely refused existing user default stack (not passed and not modified); hosted CI configured but not run / no push or deploy.
+- **Open Boundaries & Ceilings:** Default `MOCK` mode does not analyze source code / no paid calls; no exactly-once compute claim (worker queue is process-local; lease-based retry can duplicate compute); backlog gauge evaluates candidate submissions via an honest $N+1$ per-request scan ceiling; global release, package publishing, and external production exposure gates remain open.
 
 ## Architecture Documentation & Retained Legacy
 

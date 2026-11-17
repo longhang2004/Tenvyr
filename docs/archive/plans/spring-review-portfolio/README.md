@@ -1,10 +1,12 @@
 ---
 title: "Spring Review Portfolio — worker entry point"
-status: planned
+status: historical
 audience:
   - developer
   - product
-last_verified: 2026-11-16
+last_verified: 2026-11-17
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java
@@ -13,12 +15,12 @@ sources:
 
 # Spring Review Portfolio
 
-Lifecycle: approved implementation in progress. Direction: reuse Tenvyr for a
-Java/Spring business-backend portfolio. **8 of 9 tasks are accepted locally:**
+Lifecycle: completed and archived. Direction: reuse Tenvyr for a
+Java/Spring business-backend portfolio. **9 of 9 tasks are accepted locally:**
 [T00](reports/T00.md), [T01](reports/T01.md), [T02](reports/T02.md),
-[T03](reports/T03.md), [T04](reports/T04.md), [T05](reports/T05.md), [T06](reports/T06.md), and [T07](reports/T07.md).
-[T08](reports/T08-final-acceptance.md) is currently in progress (full review gate 89+120 PASS in 10m23s; full backend `--integration` running; benchmark pending). Current contracts and verified
-reports take precedence over this plan.
+[T03](reports/T03.md), [T04](reports/T04.md), [T05](reports/T05.md), [T06](reports/T06.md), [T07](reports/T07.md), and
+[T08](reports/T08-final-acceptance.md). Current contracts and verified
+architecture take precedence over this archived plan.
 
 Build one fixed asynchronous code-review request workflow on the existing
 PostgreSQL-authoritative engine. A user submits a code snippet, receives a

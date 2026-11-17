@@ -3,7 +3,7 @@ title: Documentation Archive
 status: current
 audience:
   - developer
-last_verified: 2026-08-12
+last_verified: 2026-11-17
 sources:
   - docs/plans/README.md
 ---
@@ -21,6 +21,7 @@ an API, operations, or architecture source of truth. Start with the
 
 ## Records
 
+- [Spring Review Portfolio completed plan](plans/spring-review-portfolio/README.md)
 - [Java/Go backend migration closure and original handoff](plans/backend-language-migration/CONTINUE.md)
 
 - [M2A durable artifact references and producer lineage](plans/2026-08-11-tenvyr-m2a-durable-artifact-references.md)

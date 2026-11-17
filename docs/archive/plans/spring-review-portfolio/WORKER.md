@@ -1,9 +1,11 @@
 ---
 title: "Spring Review Portfolio — worker execution instructions"
-status: planned
+status: historical
 audience:
   - developer
 last_verified: 2026-11-11
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - AGENTS.md
   - docs/plans/README.md
@@ -19,11 +21,11 @@ defines proposed behavior; the [task graph](README.md) defines dependencies.
 
 ```text
 Repository: Tenvyr. Execute ONLY task <Txx> from:
-docs/plans/active/spring-review-portfolio/tasks/<task-file>.md
+docs/archive/plans/spring-review-portfolio/tasks/<task-file>.md
 
 Read before editing:
 1. Root AGENTS.md and any applicable nested instructions.
-2. docs/README.md; docs/plans/active/spring-review-portfolio/SPEC.md.
+2. docs/README.md; docs/archive/plans/spring-review-portfolio/SPEC.md.
 3. DISCOVERY.md, WORKER.md, VERIFY.md in that same plan directory.
 4. Your complete task file and the prerequisite workers' handoff records.
 

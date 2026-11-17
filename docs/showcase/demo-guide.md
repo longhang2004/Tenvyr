@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-11-16
+last_verified: 2026-11-17
 sources:
   - docker-compose.review.yml
   - scripts/review-showcase.sh
@@ -75,7 +75,7 @@ The automated smoke test (`scripts/review-smoke.mjs`) exercises the complete rev
 | **5. Reviewer Login** | `POST /login` (form-urlencoded with CSRF) | `reviewer` (`REVIEWER`) | Returns `204 No Content` with distinct reviewer actor UUID. |
 | **6. Human Decision** | `POST /api/v1/reviews/{id}/decisions` (`Idempotency-Key`) | `reviewer` (`REVIEWER`) | Returns `201 Created` with `Location: .../decisions/{decisionId}`. Replaying returns `200 OK` with same ID. Author calling decisions returns `403 Forbidden`. |
 | **7. Keyset Audit** | `GET /api/v1/reviews/{id}/audit` | `reviewer` / Owner | Returns `200 OK` with immutable keyset records (`SUBMIT`, `DECIDE`, and `CANCEL` when used; worker callback evidence resides in engine inbox). |
-| **8. Isolation Check** | `GET /api/v1/reviews/{id}` | `submitter_b` (Foreign `SUBMITTER`) | Returns `404 Not Found`, enforcing cross-tenant privacy. |
+| **8. Isolation Check** | `GET /api/v1/reviews/{id}` | `submitter_b` (Foreign `SUBMITTER`) | Returns `404 Not Found`, enforcing per-user object isolation. |
 
 ---
 

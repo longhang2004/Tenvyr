@@ -5,7 +5,7 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-11-16
+last_verified: 2026-11-17
 sources:
   - package.json
   - docs/reference/implementation-status.json
@@ -103,8 +103,6 @@ Developer tooling is not a Tenvyr production runtime feature.
 
 ## Roadmap, plans, and history
 
-- Portfolio execution: [Spring review-service worker plan](plans/active/spring-review-portfolio/README.md)
-  (reuse the Java engine for a fixed Spring business workflow; T00–T07 accepted 8/9, T08 in progress).
 - Planned work: [roadmap index](roadmap/README.md), the accepted
   [M8–M11 productization roadmap](plans/active/tenvyr-productization-roadmap/ROADMAP.md) (M8–M10 plans archived; M11 remains active),
   its [DeepSeek entrypoint](plans/active/tenvyr-productization-roadmap/DEEPSEEK_LONG_RUN.md),
@@ -114,6 +112,8 @@ Developer tooling is not a Tenvyr production runtime feature.
   the [polyglot HTTP workers slice](plans/active/polyglot-http-workers/GOAL.md)
   (Java Worker SDK, C++ worker, truthful Rust host; original slice scope),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
+- Completed portfolio plan: [Spring review-service portfolio plan](archive/plans/spring-review-portfolio/README.md)
+  (fixed asynchronous review workflow on the Java engine; all 9 of 9 tasks accepted; archived implementation history).
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take
   precedence where its assumptions are stale.

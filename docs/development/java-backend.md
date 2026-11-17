@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-10-16
+last_verified: 2026-11-17
 sources:
   - backend/pom.xml
   - backend/Dockerfile
@@ -74,10 +74,9 @@ original production services against the same PostgreSQL rows and compares the
 entire DTO/hash, connections, execution summaries/projection, and Attention.
 Dynamic coordination countdowns are verified at a common observation time using
 each projection's `serverTime`, proving identical underlying loop deadlines and
-expiry clamping even when inter-snapshot startup latency exceeds 5s (root actual
-final gate remains pending). Worker deliveries are drained first so the two captures
-observe settled rows. Node is a comparison tool here, not a backend dependency
-behind the Java service.
+expiry clamping even when inter-snapshot startup latency exceeds 5s. Worker
+deliveries are drained first so the two captures observe settled rows. Node is a
+comparison tool here, not a backend dependency behind the Java service.
 
 ## Real acceptance checks
 
@@ -112,7 +111,7 @@ checks. Its gates include real HTTP security; original TypeORM versus Java up/
 down schema and ledger comparison; engine authority; composition and restart;
 coordinator/operator commands; all four public SDK processes; gateway protocol
 tests and actual Socket.IO v4 clients (with Engine.IO heartbeat ping/pong
-handled across event deliveries; actual full gate still pending); Kafka agent delivery/offsets; Worker
+handled across event deliveries); Kafka agent delivery/offsets; Worker
 HTTP/stress/shutdown; native host HTTP/process execution; and Docker maintenance.
 Unavailable infrastructure is a failed gate, never a skipped success.
 

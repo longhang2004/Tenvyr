@@ -4,7 +4,7 @@ status: current
 audience:
   - product
   - developer
-last_verified: 2026-11-16
+last_verified: 2026-11-17
 sources:
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java
   - backend/review-api/src/main/java/io/tenvyr/review/ReviewDecisionService.java
@@ -67,6 +67,19 @@ Production systems require transparent observability without introducing perform
 - **Fixed-Tag Command Metrics:** Micrometer Timer `review.commands` pre-registers fixed combinations of command (`SUBMIT`, `DECIDE`, `CANCEL`) and outcome (`success`, `replay`, `conflict`, `invalid`, `error`). High-cardinality metadata (actor IDs, code snippets, tokens) are strictly excluded to protect metric storage.
 - **Dynamic Backlog Gauge:** Metric `review.backlog` reports pending `AWAITING_REVIEW` tasks via read-only repository projections. The candidate scan evaluates unreviewed submissions through an explicit $N+1$ query pattern. Rather than claiming theoretical $O(1)$ scaling, this design explicitly documents this honest ceiling.
 - **Bounded Resource Allocations:** Tomcat threads (50 max, 50 accept-count), Hikari connections (10 max, 2,000 ms acquisition timeout), and Worker task queues (concurrency: 2, queue capacity: 16) ensure graceful backpressure under load.
+
+## Empirical Verification and Admission Benchmark
+
+The implementation has been verified through exhaustive integration suites and empirical benchmarking:
+
+- **Review Integration Gate:** 89 Surefire tests (44 API + 45 Worker) + 120 real PostgreSQL integration tests across 15 suites completed in 10m23s with 0 failures, 0 errors, 0 skipped. Includes comprehensive role enforcement (`ReviewAccessMatrixIT`, 16 tests), transaction serialization (`ReviewConcurrencyIT`, 2 tests), and crash recovery (`ReviewRecoveryIT`, 4 tests). Launcher contract tests pass 21/21 in 10.885s.
+- **Polyglot & Recovery Suite:** Retained backend check (`sh scripts/backend-checks.sh --integration`) executed 21 programs across Node, Python, Java, C++ in 1189s with exit code 0, alongside 17 Docker recovery tests (0 failures, 0 skipped).
+- **Measured Admission Benchmark (100 Requests, Concurrency 4):**
+  - Admission throughput: 65.53 requests/sec (100 HTTP 202 Accepted, 0 HTTP 503, wall-clock 1525.986 ms).
+  - Latency: p50 54.605 ms, p95 102.088 ms, mean 60.112 ms (min 42.561 ms, max 147.790 ms).
+  - Asynchronous background worker progression: Immediate post-submit snapshot at 5000 ms timeout inspected 100 accepted records: 5 `AWAITING_REVIEW`, 95 `PROCESSING`. This bounded snapshot reflects in-flight queue progression under configured bounds (worker concurrency 2, queue 16) and is explicitly distinguished from admission latency (no completed throughput SLA claimed).
+  - Environment: Local WSL2 kernel `6.18.58.1-microsoft-standard-WSL2`, Node `v24.22.0`, 12 logical CPUs, Docker Server `29.8.2` memory ~7.44 GiB, PostgreSQL 16.16. Retains 100 DEMO records in the database without reset.
+- **Runtime Integrity:** Tested on revision SHA `e7c57dfef2237dc948d71791f5fce111f3600167` on loopback `127.0.0.1:18080`. Stable 3 user UUIDs, private credential byte hashes, and volume CreatedAt timestamp preserved across teardown (`review-showcase.sh down`). Supplemental development check safely refused existing user default stack (not passed); hosted CI configured but not run / no push or deploy.
 
 ## Conclusion
 

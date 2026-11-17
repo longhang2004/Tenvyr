@@ -1,9 +1,11 @@
 ---
 title: "T01 — Add isolated Spring application, signed callbacks and lifecycle gates"
-status: current
+status: historical
 audience:
   - developer
 last_verified: 2026-11-13
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
   - backend/control-plane/src/main/java/io/tenvyr/control/Main.java
   - backend/control-plane/src/main/java/io/tenvyr/control/engine/ExecutionService.java

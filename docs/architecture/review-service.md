@@ -4,7 +4,7 @@ status: current
 audience:
   - developer
   - operator
-last_verified: 2026-11-16
+last_verified: 2026-11-17
 sources:
   - backend/platform/src/main/java/io/tenvyr/platform/Db.java
   - backend/control-plane/src/main/java/io/tenvyr/control/ControlPlaneRuntime.java
@@ -54,7 +54,7 @@ sources:
 
 ## Overview
 
-The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. Tasks T00 through T07 are accepted local checkpoints (8/9 tasks accepted; HEAD 140390e). T08 (crash/security acceptance, CI, and portfolio documentation) is currently in progress. Full review gate passes 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites in 10m23s (0 failures, errors, or skips).
+The review service reuses the existing Tenvyr execution engine composition without altering legacy control plane behaviors, database schema migrations, or protocol identities. All nine tasks T00 through T08 are accepted local checkpoints (9/9 tasks accepted; plan completed and archived under `docs/archive/plans/spring-review-portfolio/`). Full review gate passes 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites in 10m23s (0 failures, errors, or skips). Full retained backend `--integration` passed in 1189s, launcher contracts pass 21/21 in 10.885s, and measured 100/C4 admission benchmark achieved 65.53 requests/sec (p50 54.605 ms, p95 102.088 ms).
 
 ## Delivered Components
 
@@ -135,7 +135,7 @@ startup. The fixed definition is `review-request-v1`, version `1`, with one
 
 `ReviewTypes` supplies immutable records and enums for the session, review API,
 and Worker boundaries. `Page.items` and `ReviewReport.findings` copy their lists;
-the exact signatures are in the [T02 handoff](../plans/active/spring-review-portfolio/tasks/T02-review-schema.md#interfaces).
+the exact signatures are in [ReviewTypes](../../backend/review-api/src/main/java/io/tenvyr/review/domain/ReviewTypes.java).
 No submission route, authentication system, or human decision behavior is
 delivered by the schema itself.
 
@@ -260,7 +260,7 @@ T01 was accepted on 2026-11-13 with 11 unit tests, 13 integration tests,
 The runner and both direct IT URL guards validate the disposable JDBC target,
 reject routing query overrides/aliases and raw `#` fragments, and preserve
 normal options such as `sslmode`/`currentSchema` and IPv6 hosts.
-The [T01 report](../plans/active/spring-review-portfolio/reports/T01.md) records
+The [T01 report](../archive/plans/spring-review-portfolio/reports/T01.md) records
 commands, dependency closure, red-to-green evidence, and verification results.
 The full retained Kafka/polyglot compatibility suite remains a T08 gate.
 
@@ -277,7 +277,7 @@ the base ledger absent.
 The unchanged production code also passed 9 retained pure programs
 (`AgentCheck`: 95 checks), exact parity with the original 27 up/down migrations
 and physical schema, and the focused three-case report probe.
-The [T02 report](../plans/active/spring-review-portfolio/reports/T02.md) records
+The [T02 report](../archive/plans/spring-review-portfolio/reports/T02.md) records
 the evidence and exact DTO handoff. Business review routes remain T04/T06 work.
 
 T03 was accepted locally on 2026-11-14 with 32 unit tests (11 compatibility,
@@ -288,18 +288,26 @@ regressions. It verifies real CSRF/session rotation, current DB actors,
 bootstrap rollback/no implicit seeding, failed-startup pool cleanup, and
 local/HTTPS cookie flags. Two manifest-value leak regressions first failed,
 then passed with field/index-only parser messages. See the
-[T03 report](../plans/active/spring-review-portfolio/reports/T03.md).
+[T03 report](../archive/plans/spring-review-portfolio/reports/T03.md).
 
 T04 was accepted on 2026-11-14 with combined integration (89 Surefire [44 API + 45 Worker including 13 HTTP loopbacks] + 73 real PostgreSQL ITs) passing with zero failures/errors/skips in 5m24s (finished 2026-11-14T13:27:09Z). Unit runner without DB URL passes 89 Surefire tests; 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks on serial retry with same 120s timeout. Independent review aaaf9ca5 found 0 actionable findings. Source provenance commit 6e4bec5 (root 049e5cb).
 
 T06 was accepted locally on 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 88 real PostgreSQL ITs across 11 suites, 0 failures, 0 errors, 0 skipped in 6m18 (finished 2026-11-15T17:05:14Z). 9 retained pure programs pass; retained Engine passes 38 real PostgreSQL checks; unchanged Control passes 93 real PostgreSQL/HTTP/restart checks. Independent review retracted all 3 initial findings after verifying parent request `FOR UPDATE` serialization, same-DataSource Spring transaction binding, monotonic terminal state, and authoritative cancel result (0 remaining verified production defects). Cancellation-winning test fixture blocks audit `INSERT` after engine locks; callback proven blocked by cancel PostgreSQL backend; release yields 200/204 REJECTED. T00–T06 accepted 7/9; T07 and T08 planned.
 
-T07 was accepted locally on 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including 10 ReviewMetricsIT tests) in 6m47 (0 failures/errors/skips). Delivers HTTP-only showcase topology (API + Worker + PostgreSQL), `scripts/review-showcase.sh`, `scripts/review-smoke.mjs`, `ReviewMetrics.java` (`review.commands` timer with exact fixed tags, `review.backlog` gauge), and bounded capacity settings (Tomcat 50/50, Hikari 10/2000). Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 21/21 cases in 102.5s (verifying default 8080 and custom 18080 ports), independent AGY review `b1fad5be` confirmed 0 open findings, initial 8080 host httpd block resolved via `TENVYR_REVIEW_PORT=18080`, and two consecutive Docker up/smoke/down cycles verified on committed revision 237e8b6 on 127.0.0.1:18080 with exact preserved identities and volume CreatedAt integrity. T00–T07 accepted 8/9; T08 in progress.
+T07 was accepted locally on 2026-11-16 (Asia/Saigon): full standard review gate PASS with 89 Surefire (44 API + 45 Worker including 13 HTTP loopbacks) + 98 real PostgreSQL ITs across 12 suites (including 10 ReviewMetricsIT tests) in 6m47 (0 failures/errors/skips). Delivers HTTP-only showcase topology (API + Worker + PostgreSQL), `scripts/review-showcase.sh`, `scripts/review-smoke.mjs`, `ReviewMetrics.java` (`review.commands` timer with exact fixed tags, `review.backlog` gauge), and bounded capacity settings (Tomcat 50/50, Hikari 10/2000). Root launcher contract tests (`node --test scripts/review-showcase.test.mjs`) pass 21/21 cases in 102.5s (verifying default 8080 and custom 18080 ports), independent AGY review `b1fad5be` confirmed 0 open findings, initial 8080 host httpd block resolved via `TENVYR_REVIEW_PORT=18080`, and two consecutive Docker up/smoke/down cycles verified on committed revision 237e8b6 on 127.0.0.1:18080 with exact preserved identities and volume CreatedAt integrity. T00–T07 accepted 8/9; T08 accepted (9/9 accepted; plan completed and archived).
 
-T08 verification is in progress (2026-11-16): 22 new integration tests have passed focused execution runs across three new suites without modifying main production Java features (test-scope worker dependency only):
-- `ReviewAccessMatrixIT` (16 tests) and `ReviewConcurrencyIT` (2 tests) passed collectively in one focused gate, proving comprehensive RBAC enforcement, session invalidation on user disable (401), CSRF rejection (403), foreign request 404 masking, Unicode/chunked body limits, and strict row-level lock serialization (`FOR UPDATE`) under concurrent decision and cancel races.
-- `ReviewRecoveryIT` (4 tests) passed in a separate focused gate, proving deterministic process recovery: kill before submit commit leaves zero orphaned rows; kill after commit before HTTP response allows safe replay with identical ID and natural worker recovery; worker crashes trigger natural retry after the default 30s deadline; and graceful SIGTERM during in-flight 202 stops web admission, drains held DB work, commits active rows, and closes the connection pool last. In-memory sessions are discarded; actors must re-login against live PostgreSQL credentials.
-- Full combined review gate PASSED in 10m23s: 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites (0 failures, errors, skips). Fresh Surefire XML asserted and verified before clean. Full retained backend `--integration` check is running serially; benchmark 100-request C4 numbers remain pending.
-- Polyglot SDK checks pass (Node 199, Java 6, Python 261, C++ 2, Go 1); launcher tests pass 21/21 in 10.9s; benchmark script `--self-check` passes with actual 100-request / concurrency 4 empirical numbers pending.
-- Dedicated CI job `review-workflow` added with dedicated PostgreSQL; OpenAPI specification (14 paths, 56 refs) valid with semantic corrections in progress.
-- Open limitations: global public exposure gate, HTTPS live provider integrations, and worker process-local outbox durability remain open.
+T08 final acceptance was accepted on 2026-11-17 (Asia/Saigon) from revision SHA `e7c57dfef2237dc948d71791f5fce111f3600167` with all 9 of 9 tasks completed and the plan archived to `docs/archive/plans/spring-review-portfolio/`:
+- **Combined review test gate:** PASSED in 10m23s with 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites (0 failures, errors, skips). 46 review Java source hashes verified unchanged.
+  - `ReviewAccessMatrixIT` (16 tests) and `ReviewConcurrencyIT` (2 tests): RBAC enforcement, session invalidation on user disable (401), CSRF rejection (403), foreign request 404 masking, Unicode/chunked body limits, and row-level lock serialization (`FOR UPDATE`) under concurrent decision and cancel races.
+  - `ReviewRecoveryIT` (4 tests): Deterministic recovery: kill before submit commit leaves zero orphaned rows; kill after commit before HTTP response allows safe replay with identical ID and natural worker recovery; worker crashes trigger natural retry after default 30s deadline; and graceful SIGTERM during in-flight 202 stops web admission, drains held DB work, commits active rows, and closes connection pool last. Actors must re-authenticate against live PostgreSQL credentials.
+- **Launcher contracts:** `node --test scripts/review-showcase.test.mjs` passed 21 of 21 tests in 10.885s.
+- **Polyglot & recovery integration:** Full retained backend command (`sh scripts/backend-checks.sh --integration`) executed and PASSED (exit code 0 in 1189s, log SHA `847def43546010b9486250cc3feffd27977a13fc17e77ce00bdfe71e2df263e8`) covering 21 programs across Node, Python, Java, and C++, plus 17 Docker recovery tests (0 failures, 0 skipped).
+- **Runtime verification & down retention:** End-to-end 3-actor smoke test (`scripts/review-smoke.mjs`) and documented metrics querying example passed against loopback `127.0.0.1:18080`. Stable 3 UUIDs, private credential byte hashes, and volume CreatedAt integrity (`tenvyr_review_pgdata`) preserved across `review-showcase.sh down` (exit code 0, 3 owned containers removed, private directory mode 0700 and file modes 0600 preserved, 100 DEMO records retained).
+- **Measured 100-request / concurrency 4 benchmark:** `node scripts/review-benchmark.mjs --output docs/_scratch/review-benchmark.json` (raw JSON SHA `1f0f3efbad6e453d2dfec35e9d2c7f3207d9353bdc3e7691173e070a762c14cc` independently recalculated):
+  - Admission status: 100 HTTP 202 Accepted, 0 HTTP 503 Service Unavailable (0% rejection, wall-clock 1525.986 ms).
+  - Throughput: 65.53 requests/sec (max observed in-flight: 4).
+  - Latency (nearest-rank): p50 54.605 ms, p95 102.088 ms, mean 60.112 ms (min 42.561 ms, max 147.790 ms).
+  - Asynchronous background worker progression: Immediate bounded post-submit snapshot at 5000 ms timeout inspected 100 accepted records: 5 `AWAITING_REVIEW`, 95 `PROCESSING`. This immediate bounded post-submit snapshot is NOT a claim of completed throughput or an end-to-end drain SLA; worker progression is measured separately from admission latency.
+  - Environment: Local WSL2 kernel `6.18.58.1-microsoft-standard-WSL2`, Node `v24.22.0`, 12 logical CPUs, Docker Server `29.8.2` memory 7,986,753,536 bytes (~7.44 GiB), PostgreSQL 16.16. Other user-owned containers retained; no claim of an isolated benchmark host or capacity SLA. Benchmark leaves 100 DEMO records with no reset.
+- **Supplemental & CI status:** Supplemental development check (`scripts/backend-dev-check.mjs`) safely refused existing user-owned default stack (recorded as NOT passed and not modified). Dedicated CI workflow job `review-workflow` configured in `.github/workflows/release-ci.yml` but not run or pushed to remote CI.
+- **Open limitations:** Default `MOCK` mode does not analyze source / no paid calls; worker queue is process-local without exactly-once compute guarantees; backlog gauge evaluated via $N+1$ per-request scan ceiling; global release, package publishing, and external exposure gates remain open.

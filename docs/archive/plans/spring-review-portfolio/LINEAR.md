@@ -1,11 +1,13 @@
 ---
 title: "Spring Review Portfolio — Linear task mapping"
-status: planned
+status: historical
 audience:
   - developer
 last_verified: 2026-11-12
+superseded_by:
+  - docs/architecture/review-service.md
 sources:
-  - docs/plans/active/spring-review-portfolio/PLAN.md
+  - docs/archive/plans/spring-review-portfolio/PLAN.md
 ---
 
 # Linear task mapping
