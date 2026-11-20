@@ -5,12 +5,13 @@ audience:
   - developer
   - operator
   - product
-last_verified: 2026-09-15
+last_verified: 2026-11-17
 sources:
   - package.json
   - docs/reference/implementation-status.json
   - docs/architecture/workers/java-worker-sdk.md
   - docs/architecture/workers/cpp-worker.md
+  - docs/architecture/workers/review-worker.md
   - docs/plans/active/polyglot-http-workers/GOAL.md
   - services/orchestrator/src/agent-adapters/http-java-worker.integration.spec.ts
 ---
@@ -39,12 +40,14 @@ prose. The conflict must still be corrected rather than ignored.
 
 - [System overview](architecture/overview.md)
 - [Control plane](architecture/control-plane.md)
+- [Review service architecture seam](architecture/review-service.md) and
+  [review worker architecture](architecture/workers/review-worker.md)
 - [Coordinator loop domain](architecture/coordination-loop.md)
 - [Operator Workbench](architecture/workbench.md),
   [workspace execution / isolation](architecture/workspace-execution.md),
   the [attention queue](architecture/attention.md), and the
   [portable handoff](architecture/handoff.md)
-- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md), [supervised coding team runs](operations/supervised-coding-team.md)
+- Operations: [self-hosted deployment](operations/self-hosted.md), [runbooks](operations/self-hosted-runbooks.md), [supervised coding team runs](operations/supervised-coding-team.md), [review showcase operations](operations/review-showcase.md)
 - [Agents and runners](architecture/agents-and-runners.md)
 - Contracts: [agent protocol v1](architecture/contracts/agent-protocol-v1.md)
   and [JSON interoperability](architecture/contracts/json-interoperability.md)
@@ -60,7 +63,8 @@ prose. The conflict must still be corrected rather than ignored.
 - Workers: [TypeScript](architecture/workers/typescript-worker-sdk.md),
   [Python](architecture/workers/python-worker-sdk.md),
   [Java](architecture/workers/java-worker-sdk.md),
-  [C++](architecture/workers/cpp-worker.md), and the
+  [C++](architecture/workers/cpp-worker.md),
+  [review worker](architecture/workers/review-worker.md), and the
   [machine parity ledger](architecture/workers/worker-sdk-parity.json)
 
 ## Operations
@@ -74,9 +78,10 @@ prose. The conflict must still be corrected rather than ignored.
 
 ## Showcase
 
-- [5–10 minute demo guide](showcase/demo-guide.md)
-- [Using model providers](showcase/using-model-providers.md)
+- [Review service & showcase demo guide](showcase/demo-guide.md)
 - [Portfolio case study](showcase/case-study.md)
+- [Review showcase operations](operations/review-showcase.md)
+- [Using model providers](showcase/using-model-providers.md)
 
 ## Development and tooling
 
@@ -107,6 +112,8 @@ Developer tooling is not a Tenvyr production runtime feature.
   the [polyglot HTTP workers slice](plans/active/polyglot-http-workers/GOAL.md)
   (Java Worker SDK, C++ worker, truthful Rust host; original slice scope),
   and the [Product Phase 1 plan](plans/active/supervised-coding-team/PLAN.md)
+- Completed portfolio plan: [Spring review-service portfolio plan](archive/plans/spring-review-portfolio/README.md)
+  (fixed asynchronous review workflow on the Java engine; all 9 of 9 tasks accepted; archived implementation history).
 - The older [observability/provenance roadmap](roadmap/observability-provenance.md)
   is thematic research; current M0–M7 contracts and the accepted roadmap take
   precedence where its assumptions are stale.

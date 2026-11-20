@@ -1,0 +1,95 @@
+name: tenvyr-review
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tenvyr-review-postgres
+    environment:
+      POSTGRES_DB: tenvyr_review
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${TENVYR_REVIEW_DB_PASSWORD}
+    volumes:
+      - tenvyr_review_pgdata:/var/lib/postgresql/data
+    labels:
+      io.tenvyr.review.owner: "tenvyr-review"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tenvyr_review"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  review-api:
+    build:
+      context: ${TENVYR_REVIEW_BUILD_CONTEXT:-.}
+      dockerfile: backend/review-api/Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION}
+    image: tenvyr-review-api:${SOURCE_REVISION:-latest}
+    container_name: tenvyr-review-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tenvyr_review
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${TENVYR_REVIEW_DB_PASSWORD}
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: 8080
+      HTTP_AGENT_CALLBACK_BASE_URL: http://review-api:8080
+      HTTP_AGENT_ALLOW_INSECURE: "true"
+      REVIEW_BOOTSTRAP_USERS_FILE: ${TENVYR_REVIEW_BOOTSTRAP_CONTAINER_PATH:-}
+      AGENT_TRANSPORT_CONFIG: '{"code-reviewer":{"kind":"http","submitUrl":"http://review-worker:8081/v1/runs","outboundAuthentication":{"type":"bearer","tokenEnv":"TENVYR_REVIEW_WORKER_BEARER_TOKEN"},"callbackAuthentication":{"keyId":"key-1","secretEnv":"TENVYR_REVIEW_CALLBACK_SECRET"},"requestTimeoutMs":30000,"maxResponseBytes":65536}}'
+      TENVYR_REVIEW_WORKER_BEARER_TOKEN: ${TENVYR_REVIEW_WORKER_BEARER_TOKEN}
+      TENVYR_REVIEW_CALLBACK_SECRET: ${TENVYR_REVIEW_CALLBACK_SECRET}
+    volumes:
+      - type: bind
+        source: ${TENVYR_REVIEW_RUNTIME_DIR}/bootstrap.json
+        target: /run/secrets/bootstrap.json
+        read_only: true
+    labels:
+      io.tenvyr.review.owner: "tenvyr-review"
+    ports:
+      - "127.0.0.1:${TENVYR_REVIEW_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -s http://127.0.0.1:8080/actuator/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  review-worker:
+    build:
+      context: ${TENVYR_REVIEW_BUILD_CONTEXT:-.}
+      dockerfile: backend/review-worker/Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION}
+    image: tenvyr-review-worker:${SOURCE_REVISION:-latest}
+    container_name: tenvyr-review-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      review-api:
+        condition: service_healthy
+    environment:
+      TENVYR_REVIEW_WORKER_HOST: 0.0.0.0
+      PORT: 8081
+      TENVYR_REVIEW_WORKER_BEARER_TOKEN: ${TENVYR_REVIEW_WORKER_BEARER_TOKEN}
+      TENVYR_REVIEW_WORKER_CALLBACK_KEYS: '{"key-1":"${TENVYR_REVIEW_CALLBACK_SECRET}"}'
+      TENVYR_REVIEW_WORKER_CALLBACK_ORIGINS: '["http://review-api:8080"]'
+      TENVYR_REVIEW_WORKER_ALLOW_INSECURE_HTTP: "true"
+      TENVYR_REVIEW_WORKER_MODE: MOCK
+    labels:
+      io.tenvyr.review.owner: "tenvyr-review"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -s http://127.0.0.1:8081/health/ready || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  tenvyr_review_pgdata:
+    name: tenvyr_review_pgdata
+    labels:
+      io.tenvyr.review.owner: "tenvyr-review"

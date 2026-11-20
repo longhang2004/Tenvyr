@@ -1,251 +1,105 @@
-# Tenvyr
+# Tenvyr: Asynchronous Code Review Service
 
-## Run your coding agents as a team — without babysitting terminals.
+Java and Spring Boot 3 (Java 17) backend portfolio demonstrating a fixed asynchronous review workflow with a private **Java HTTP Worker** and **PostgreSQL 16**.
 
-Connect **Codex, Claude Code, OpenCode**, and other runtime-owned agent
-harnesses. Tenvyr supervises execution, isolates workspace work, routes
-exceptional decisions to you, and preserves one durable evidence trail.
+The service coordinates a reliable business workflow: submitters submit code snippets, an isolated review worker generates score and diagnostic findings (default configuration generates an explicit offline `MOCK` fixture without source code analysis or external LLM calls), and designated reviewers record binding human verdicts (`APPROVE` or `REQUEST_CHANGES`) backed by an immutable audit trail.
 
-> **Bring your agents. Tenvyr controls the work.**
-
-Agent runtimes own intelligence — prompts, tools, reasoning, sessions,
-models, and provider calls stay inside the runtime. Tenvyr owns execution
-authority, lifecycle, workspace boundaries, supervision, bounded context,
-approval, provenance, and evidence.
-
-### How it works
-
-```text
-Connect Runtime
-→ Select Repository (Workspace)
-→ Goal
-→ Planner
-→ Workers
-→ Verifier
-→ Attention only when needed
-→ Result / Handoff / Evidence
+```mermaid
+flowchart LR
+    A["Submitter (Client)"] -->|"POST /api/v1/reviews (Idempotent)"| B["Review API (Spring Boot 3)"]
+    B -->|"Transaction: Bind Request + Execution"| C[("PostgreSQL 16 (Authoritative)")]
+    B -->|"HTTP Dispatch (Private)"| D["Review Worker (Java 17 MOCK)"]
+    D -->|"POST /internal/agent-callbacks (Raw HMAC)"| B
+    E["Reviewer (Human)"] -->|"POST /api/v1/reviews/{id}/decisions"| B
+    B -->|"Atomic Verdict + Keyset Audit"| C
 ```
 
-1. **Connect Runtime** — onboard Codex / Claude Code / OpenCode (or a generic
-   CLI / HTTP Worker / Kafka Worker). Tenvyr detects, version-probes, and
-   freezes a secret-free connection revision per attempt.
-2. **Select Workspace** — choose the repository. Every Team Run picks its
-   execution isolation: a **Git worktree** (Tenvyr-owned isolated execution
-   workspace — the source tree stays untouched) or the **shared working
-   tree**. Every runtime child of the run executes against Tenvyr's
-   authoritative execution path — planner-authored JSON can never choose or
-   override `cwd`.
-3. **Goal → Planner → Workers → Verifier** — the deterministic Coordinator
-   runs bounded iterations under policy, budgets, deadlines, and approvals.
-4. **Attention only when needed** — an exception-driven queue
-   (human approval required, run failed, limits reached, preserved
-   workspace with uncommitted work) is the default supervision experience;
-   resolution always goes through the existing authority commands.
-5. **Result / Handoff / Evidence** — a terminal run can be **continued with
-   another runtime** through a bounded HandoffBundle (references, never raw
-   logs/credentials); every attempt freezes context bundles, efficiency
-   evidence, and a reconstructable Capsule.
+## Business Workflow & Core Architecture
 
-### What it is not
+1. **Idempotent Submission & Request Binding:** Submitters authenticate via form session with CSRF protection and submit code snippets. Submissions are deduplicated via client `Idempotency-Key` headers inside a single database transaction binding the business request and underlying engine execution (preventing duplicate request/execution records; compute retries remain lease-driven without exactly-once worker compute claims).
+2. **Private Asynchronous Review Worker:** A dedicated Java HTTP worker processes code submissions against bounded queues (concurrency: 2, capacity: 16). In default showcase mode, it runs offline with an explicit `MOCK` score and diagnostic findings fixture (no code analysis, external LLM, or live code execution).
+3. **Signed HMAC Callback:** The worker delivers results to `/internal/agent-callbacks/http/code-reviewer` authenticated with SHA-256 HMAC signatures over canonical raw body bytes, bounded to 1 MiB with replay protection.
+4. **Report Provenance & Keyset Reads:** Reports are projected strictly from verified `APPLIED` inbox rows matching the execution step. Listings use stable keyset pagination (`createdAt DESC, id DESC`).
+5. **Human Verdicts & Cancel Races:** Authenticated reviewers (enforcing separation of duties: author cannot review their own submission) record binding verdicts (`APPROVE` or `REQUEST_CHANGES`). Strict row-level locking (`FOR UPDATE`) resolves races between reviewer decisions and owner cancellations cleanly without duplicate state transitions.
+6. **Crash Recovery & Auditability:** Process restarts re-login safely and recover uncompleted work naturally via database leasing; session cookies require dynamic re-validation against PostgreSQL roles on every request. Business actions record immutable audit entries (`SUBMIT`, `DECIDE`, and `CANCEL` when used; callback evidence resides in the engine inbox).
 
-Tenvyr is not a Codex / Claude Code / OpenCode replacement, an LLM gateway,
-a provider router, a memory/RAG/vector platform, a sandbox, a new workflow
-language, or an agent-result cache. Local execution is trusted-code-only;
-credentials are runtime-owned or reference-only. Tenvyr does not claim
-secure sandboxing, deterministic LLM output, universal runtime support,
-conflict-free merging, or guaranteed prompt caching.
+### Source Architecture
 
-## Technical architecture
+| Component | Source Path | Description |
+| --- | --- | --- |
+| **Review Application** | [ReviewApplication.java](backend/review-api/src/main/java/io/tenvyr/review/ReviewApplication.java) | Spring Boot 3 entrypoint and auto-configuration |
+| **Business Facade** | [ReviewService.java](backend/review-api/src/main/java/io/tenvyr/review/ReviewService.java) | Transactional submission, keyset reads, and report projection |
+| **Decision & Audit** | [ReviewDecisionService.java](backend/review-api/src/main/java/io/tenvyr/review/ReviewDecisionService.java) | Concurrent-safe verdicts, cancellations, and keyset audit log |
+| **Data Repository** | [ReviewRepository.java](backend/review-api/src/main/java/io/tenvyr/review/ReviewRepository.java) | Keyset pagination, row-level locks, and backlog metrics query |
+| **Security & Auth** | [ReviewSecurityConfiguration.java](backend/review-api/src/main/java/io/tenvyr/review/ReviewSecurityConfiguration.java) | Session auth, CSRF rotation, RBAC, and raw HMAC exemption |
+| **Lifecycle & Seam** | [EngineLifecycle.java](backend/review-api/src/main/java/io/tenvyr/review/EngineLifecycle.java) | Embedded [ControlPlaneRuntime.java](backend/control-plane/src/main/java/io/tenvyr/control/ControlPlaneRuntime.java) lifecycle seam |
+| **Review Worker** | [ReviewWorkerMain.java](backend/review-worker/src/main/java/io/tenvyr/reviewworker/ReviewWorkerMain.java) | Isolated Java HTTP worker with [StrictReviewRunner.java](backend/review-worker/src/main/java/io/tenvyr/reviewworker/StrictReviewRunner.java) |
 
-Tenvyr is an **Agent Execution Control Plane**:
+## Demonstration Walkthrough
 
-- **Control plane** (`services/orchestrator`): PostgreSQL-authoritative
-  executions, immutable plan revisions, logical steps and attempts,
-  policy/budget/approvals, runtime connections with frozen revisions,
-  workspace execution leases (shared | git-worktree), the supervised
-  Planner/Worker/Verifier loop, Capsules, attention, and handoffs.
-- **Runtime boundary** (`services/local-executor-host`): trusted-code-only
-  process execution of fixed operator-configured commands; every child
-  spawns at the invocation's Tenvyr-validated execution workspace path
-  (containment-checked inside `EXECUTOR_HOST_ALLOWED_ROOT`); structured
-  results, signed callbacks, deadline/cancel supervision.
-- **Operator Workbench** (`services/gateway` + `frontend`): Work / Setup /
-  Advanced IA — New Run, Runs, Attention, Runtimes, Workspaces, Pipelines,
-  Audit.
-- **Framework-neutral SDKs**: `@tenvyr/worker` (TypeScript),
-  `tenvyr-worker` (Python), and the Java Agent Runner remain supported
-  execution surfaces (their showcase is documented below).
+Run the self-contained three-container review showcase (`review-api`, `review-worker`, `postgres`). The demonstration sequence takes ~5 minutes once containers are ready (initial image build and cold tool pulls vary by environment).
 
-### Legacy showcase (Python / TypeScript / Kafka / Java)
+### Prerequisites
+- Linux or WSL2 (Ubuntu 22.04+ recommended)
+- Node.js 22+, Git, `tar`, and Docker Compose v2.24+
+- *Note:* Host JDK 17 and Maven are required for local tests/builds, but Docker Compose builds run hermetically with internal build tools. No Kafka, Zookeeper, Node backend, frontend, or paid LLM provider credentials are required.
 
-Tenvyr's original showcase — Python `echo-analyzer` + TypeScript Workers +
-Kafka-runtime Java `quality-gate` — remains a supported, verified surface:
-Kafka runtime v1 (the legacy compatibility topics) routes to the specialized
-agents, HTTP adapter v1 routes to Python/TypeScript Workers, and both
-produce the same versioned `AgentResultV1` contract. See
-[the showcase guide](docs/showcase/demo-guide.md) for the offline demo.
-
-## Why it exists
-
-Agent code is easy to start and hard to operate. A production workflow needs a
-durable execution record, bounded retries and timeouts, authenticated callbacks,
-failure classification, and a consistent contract across languages. Tenvyr
-puts those controls outside the agent process so each Worker stays isolated and
-replaceable.
-
-## Native subagents vs Tenvyr
-
-Native subagents decompose and reason about a task inside an agent environment.
-Tenvyr supervises execution outside that environment: dispatch, runtime choice,
-timeouts, retries, persisted state, standardized results, and auditability. A
-Tenvyr Worker may call native subagents; the boundaries are complementary.
-
-## Architecture
-
-```text
-Workbench (UI) -> Gateway -> Orchestrator (PostgreSQL authority)
-                                  |-> local executor host -> Codex / Claude Code / OpenCode / CLI
-                                  |      `-> child cwd = Tenvyr execution workspace (worktree/shared)
-                                  |-> HTTP adapter v1 -> Python/TypeScript Worker -> model or framework
-                                  `-> Kafka runtime v1 -> specialized agent -> Java Runner -> model
-                                  `-> signed callbacks -> Orchestrator
-```
-
-The local executor host is the primary coding-runtime boundary (fixed
-operator commands, trusted-code-only, workspace-validated cwd). HTTP
-protocol v1 dispatches asynchronously to TypeScript or Python Workers and
-authenticates callbacks with HMAC signatures. Kafka runtime v1 supports the
-specialized agents. All paths produce the same versioned `AgentResultV1`
-contract.
-
-## Supported runtimes and model providers
-
-| Path                               | Current verification                                        |
-| ---------------------------------- | ----------------------------------------------------------- |
-| Python Worker                      | SDK, conformance, HTTP lifecycle, and showcase path         |
-| TypeScript Worker                  | SDK, conformance, HTTP lifecycle, and package-consumer path |
-| Java-backed agent                  | Kafka agent plus Java Runner unit/integration path          |
-| OpenAI                             | Configured Java Runner path; no live API call in CI         |
-| Anthropic                          | Configured Java Runner path; no live API call in CI         |
-| Ollama                             | Configured Java Runner path; no live model call in CI       |
-| Arbitrary provider inside a Worker | Provider-neutral application pattern                        |
-
-Local runtime connection profiles (M8, official docs accessed 2026-08-12):
-
-| Runtime connection | Pinned version    | Probe (documented, non-billable)                           |
-| ------------------ | ----------------- | ---------------------------------------------------------- |
-| Codex CLI          | 0.147.0           | `codex login status` (auth; version output not documented) |
-| Claude Code        | 2.1.228           | `claude --version` + `claude auth status`                  |
-| OpenCode           | 1.18.16           | `opencode --version` (provider auth is runtime-owned)      |
-| Generic CLI        | operator-declared | fixed `--version`-style probe per operator profile         |
-
-Live gates are opt-in and non-billable; deterministic fake-CLI conformance
-tests always run. Detected installed versions are evidence — the pin is the
-version the profile was written against.
-
-Gemini, Azure OpenAI, Bedrock, Vertex AI, and other compatible providers can be
-called from Worker application code, but they are not first-class verified
-v0.1.0 integrations. See [using model providers](docs/showcase/using-model-providers.md).
-
-## Quick start (coding-agent team)
+### Quick Start Commands
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm dev          # concise local dev launcher (orchestrator + gateway + host + UI)
+# 1. (Optional) Set custom port if default 8080 is occupied
+export TENVYR_REVIEW_PORT=18080
+
+# 2. Start self-contained topology (API loopback on 127.0.0.1:18080)
+sh scripts/review-showcase.sh up
+
+# 3. Execute automated 3-actor verification smoke test
+node scripts/review-smoke.mjs
+
+# 4. Tear down containers (preserves database volume and credentials)
+sh scripts/review-showcase.sh down
 ```
 
-Then in the Workbench: **Runtimes** → onboard a runtime (Codex / Claude Code
-/ OpenCode) → **Workspaces** → add your repository → **New Run** → pick the
-workspace + execution isolation (Git worktree / Shared) + the team + the
-goal → launch. Supervise from **Attention**; continue terminal runs with
-another runtime from the run page.
+### Runtime Security & Persistence Guarantees
+- **Private State:** Runtime credentials and secrets are generated in `~/.tenvyr/review-runtime` with POSIX file mode `0600` and directory `0700` (insecure/world-writable mounts fail closed).
+- **Network Isolation:** Only `review-api` is bound to host loopback `127.0.0.1:${TENVYR_REVIEW_PORT:-8080}`; worker and database remain private on an internal bridge network.
+- **Data Retention:** `review-showcase.sh down` preserves the Docker-managed named volume `tenvyr_review_pgdata` (stored in Docker volume storage, not in the private runtime directory) and user UUIDs across cycles. Restarting recovers existing state.
+- **Fail-Safe Restart:** The API container uses `restart: "no"` to prevent crash loops; recovery is performed explicitly via `review-showcase.sh up`.
 
-See [the supervised coding team guide](docs/operations/supervised-coding-team.md)
-and [local development](docs/operations/local-development.md).
+## Benchmark & Load Verification
 
-### Offline showcase (original)
-
-Requirements: Node.js 22+, pnpm 9.0.0, Python 3.11+, JDK 17, Maven, Go 1.23+, Docker, and Docker
-Compose 2.24.4+. The default backend runs Java and the native process helper
-runs Go; Node remains frontend/SDK/development tooling. See
-[backend development and verification](docs/development/java-backend.md).
+The review showcase includes a bounded 100-request / concurrency 4 benchmark harness separating immediate admission latency from asynchronous worker completion:
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm setup:check
-pnpm showcase:up
-pnpm showcase:smoke
+# Run offline self-check (no network or credentials required)
+node scripts/review-benchmark.mjs --self-check
+
+# Run benchmark against active showcase (output JSON evidence)
+node scripts/review-benchmark.mjs --output docs/_scratch/review-benchmark.json
 ```
 
-Open [http://localhost:4000/dashboard](http://localhost:4000/dashboard). Stop
-only the showcase resources with:
+Measured 100-request / concurrency 4 admission results (`MOCK` mode, wall-clock 1525.986 ms):
+- **Admission Status:** 100 HTTP 202 Accepted, 0 HTTP 503 Service Unavailable (rejection rate: 0%).
+- **Observed Throughput:** 65.53 requests/sec (max observed in-flight: 4).
+- **Admission Latency (nearest-rank):** p50: 54.605 ms, p95: 102.088 ms, mean: 60.112 ms (min: 42.561 ms, max: 147.790 ms).
+- **Asynchronous Worker Progression:** Immediate post-submit snapshot at 5000 ms timeout inspected 100 accepted records: 5 `AWAITING_REVIEW`, 95 `PROCESSING`. This immediate bounded post-submit snapshot is NOT a claim of completed throughput or an end-to-end drain SLA; worker progression is measured separately from admission latency.
+- **Environment:** Local WSL2 Linux kernel `6.18.58.1-microsoft-standard-WSL2`, Node `v24.22.0`, 12 logical CPUs, Docker Server `29.8.2` memory 7,986,753,536 bytes (~7.44 GiB), PostgreSQL 16.16. Other user-owned containers were retained; no claim of an isolated benchmark host or capacity SLA. The benchmark leaves 100 DEMO records in the database with no automatic reset.
 
-```bash
-pnpm showcase:down
-```
+## Current Status & Verification (17 Nov 2026)
 
-## Dashboard showcase
+- **Portfolio Plan:** 9 of 9 tasks accepted locally ([T00–T08 completed plan](docs/archive/plans/spring-review-portfolio/README.md)); plan completed and archived.
+- **Automated Verification:** Source and runtime revision SHA `e7c57dfef2237dc948d71791f5fce111f3600167`. Combined review gate PASSED in 10m23s: 89 Surefire tests (44 API + 45 Worker including 13 HTTP loopbacks) and 120 real PostgreSQL ITs across 15 suites with 0 failures, 0 errors, 0 skipped (including 16 Access Matrix, 2 Concurrency, and 4 Process Crash & Recovery). Launcher contract suite passed 21/21 in 10.885s. Retained polyglot backend checks (`sh scripts/backend-checks.sh --integration`) executed and PASSED (21 programs across Node, Python, Java, C++ in 1189s) plus 17 Docker recovery tests (0 fail/skip). Actual 3-actor smoke test and documented metrics example passed against loopback `127.0.0.1:18080`. Stable 3 UUIDs, private credential byte hashes, and volume integrity vs T07 preserved across down retention. Supplemental development check safely refused existing user default stack (not passed and not modified); hosted CI configured but not run / no push or deploy.
+- **Open Boundaries & Ceilings:** Default `MOCK` mode does not analyze source code / no paid calls; no exactly-once compute claim (worker queue is process-local; lease-based retry can duplicate compute); backlog gauge evaluates candidate submissions via an honest $N+1$ per-request scan ceiling; global release, package publishing, and external production exposure gates remain open.
 
-The offline showcase records each step's runtime, transport, attempt count,
-duration, safe previews, and provider metadata in the dashboard.
+## Architecture Documentation & Retained Legacy
 
-![Tenvyr dashboard showing a completed retry-once execution](docs/showcase/images/tenvyr-dashboard-showcase.png)
+The review service reuses Tenvyr's underlying 27 PostgreSQL database migrations, engine composition, and polyglot SDK architecture without breaking compatibility:
 
-The default showcase is offline and deterministic. Unless `LLM_PROVIDER` is
-explicitly exported in the invoking shell, `showcase:up` selects mock even when
-Compose auto-loads a provider value from `.env`; no provider key is required.
-For an exported real provider, leaving `LLM_FAILURE_MODE` unset derives `fail`.
+- [Review Architecture & Seam](docs/architecture/review-service.md) — Reusable engine lifecycle, pooled JDBC seam, and transaction boundaries.
+- [Review Operations Guide](docs/operations/review-showcase.md) — Container topology, environment configuration, and troubleshooting.
+- [Portfolio Case Study](docs/showcase/case-study.md) — Engineering problem, architectural tradeoffs, and recovery proofs.
+- [Showcase Demo Guide](docs/showcase/demo-guide.md) — Step-by-step 5-minute walkthrough script with roles and sample calls.
+- [Implementation Status Ledger](docs/reference/implementation-status.md) — Machine-readable capability ledger ([JSON](docs/reference/implementation-status.json)).
+- [Documentation Index](docs/README.md) — Full index covering legacy multi-agent runtimes, Kafka adapters, and SDKs.
 
-## Showcase walkthrough
-
-`pnpm showcase:smoke` seeds **Tenvyr Supervised Pipeline**, runs a successful
-Python-to-Java-backed flow, then runs `retry-once` and verifies the Python step
-completed on its second attempt. The dashboard exposes step status, runtime,
-transport, attempts, duration, safe input/output previews, and provider metadata
-when present. Use the [5–10 minute demo guide](docs/showcase/demo-guide.md) for an
-interview flow.
-
-## Key technical decisions
-
-- Provider SDKs stay in agent applications; neither Worker core package depends
-  on OpenAI or Anthropic libraries.
-- Versioned contracts keep Kafka and HTTP execution paths interoperable.
-- HTTP callbacks are signed, replay-checked, and correlated to persisted steps.
-- Offline mock behavior is deterministic and labeled; real-provider failures
-  derive `fail` unless `LLM_FAILURE_MODE=mock` is explicitly exported.
-- Compatibility identifiers remain unchanged to avoid a protocol or data
-  migration disguised as a branding change.
-
-## Current limitations
-
-- Worker idempotency, queues, callback delivery state, and replay tracking are
-  process-local; there is no crash-durable outbox or multi-process coordination.
-- Cancellation is cooperative, and remote cancellation is not implemented.
-- Provider calls are application/runtime responsibilities. Java Runner token
-  usage is currently estimated and labeled `usageSource=estimated`.
-- Runtime Connections: connection administration is local/internal behind the
-  open External Production Exposure Gate; probes are operator-initiated,
-  rate-limited, and bounded; probe concurrency is limited per connection;
-  health status is projection, never dispatch authority (only REVOKED denies).
-- Local execution is trusted-code-only, not a sandbox.
-- Protocol v1 retains compatibility identifiers documented in the
-  [identity record](docs/product/identity.md).
-- Packages are MIT-licensed but remain private and unpublished.
-
-## Documentation
-
-- [Documentation index](docs/README.md)
-- [Architecture overview](docs/architecture/overview.md)
-- [Local development](docs/operations/local-development.md)
-- [Using model providers](docs/showcase/using-model-providers.md)
-- [Portfolio case study](docs/showcase/case-study.md)
-- [Implementation status](docs/reference/implementation-status.md)
-
-## Release status
-
-**Tenvyr v0.1.0 source release.** The owner selected the
-[MIT License](LICENSE), and the exact merged `main` commit passed the complete
-release workflow, including the Docker showcase. npm and PyPI packages remain
-private and unpublished.
+*Legacy Multi-Agent Showcase:* The original polyglot multi-agent platform (TypeScript/Python workers, Kafka runtime, Operator Workbench, and `pnpm showcase:*` commands) is preserved intact. See the [documentation index](docs/README.md) for legacy guides.

@@ -1,0 +1,38 @@
+server:
+  port: 8080
+  address: 127.0.0.1
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 50
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+spring:
+  application:
+    name: review-api
+  flyway:
+    enabled: true
+    locations: classpath:db/review
+    schemas: tenvyr_review
+    default-schema: tenvyr_review
+  datasource:
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 2000
+      connection-init-sql: "SET TIME ZONE 'UTC'"

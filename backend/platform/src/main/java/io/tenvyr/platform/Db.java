@@ -10,17 +10,18 @@ import org.postgresql.util.PGobject;
 /** JDBC owns all persistent truth. A transaction pins one connection, including row locks. */
 public final class Db implements AutoCloseable {
     @FunctionalInterface public interface Work<T> { T run(Db tx) throws Exception; }
-    private final String url,user,password; private final Connection pinned;
-    public Db(String url,String user,String password) { this(url,user,password,null); }
-    private Db(String url,String user,String password,Connection pinned) { this.url=url;this.user=user;this.password=password;this.pinned=pinned; }
+    private final String url,user,password; private final Connection pinned; private final javax.sql.DataSource dataSource;
+    public Db(String url,String user,String password) { this(url,user,password,null,null); }
+    private Db(String url,String user,String password,Connection pinned,javax.sql.DataSource dataSource) { this.url=url;this.user=user;this.password=password;this.pinned=pinned;this.dataSource=dataSource; }
     public static Db fromEnv() { return new Db(env("DATABASE_URL","jdbc:postgresql://"+env("POSTGRES_HOST","localhost")+":"+env("POSTGRES_PORT","5432")+"/"+env("POSTGRES_DB","agentweave")),env("POSTGRES_USER","postgres"),env("POSTGRES_PASSWORD","postgres")); }
-    public static Db on(Connection connection) { return new Db(null,null,null,Objects.requireNonNull(connection)); }
+    public static Db on(Connection connection) { return new Db(null,null,null,Objects.requireNonNull(connection),null); }
+    public static Db fromDataSource(javax.sql.DataSource source) { return new Db(null,null,null,null,Objects.requireNonNull(source)); }
     public Connection connection() { if(pinned==null) throw new IllegalStateException("connection() requires a transaction"); return pinned; }
     private static String env(String k,String d) { return System.getenv().getOrDefault(k,d); }
     public <T> T transaction(Work<T> work) {
         if(pinned!=null) { try { return work.run(this); } catch(RuntimeException e) {throw e;} catch(Exception e) {throw new Failure(e);} }
         try(Connection c=openConnection()) {
-            c.setAutoCommit(false); try { T result=work.run(new Db(url,user,password,c)); c.commit(); return result; }
+            c.setAutoCommit(false); try { T result=work.run(new Db(url,user,password,c,dataSource)); c.commit(); return result; }
             catch(Exception e) { try {c.rollback();} catch(SQLException rollback) {e.addSuppressed(rollback);} if(e instanceof RuntimeException r) throw r; throw new Failure(e); }
         } catch(SQLException e) {throw new Failure(e);}
     }
@@ -37,7 +38,7 @@ public final class Db implements AutoCloseable {
         List<String> keys=Json.keys(fields); List<Object> values=new ArrayList<>();keys.forEach(k->values.add(fieldValue(table,k,fields.get(k))));values.add(UUID.fromString(id));
         return one("UPDATE "+identifier(table)+" SET "+String.join(",",keys.stream().map(k->identifier(k)+"=?").toList())+" WHERE \"id\"=? RETURNING *",values.toArray());
     }
-    private Connection openConnection()throws SQLException {Connection c=DriverManager.getConnection(url,user,password);try(var statement=c.createStatement()){statement.execute("SET TIME ZONE 'UTC'");return c;}catch(SQLException e){c.close();throw e;}}
+    private Connection openConnection()throws SQLException {Connection c=dataSource!=null?dataSource.getConnection():DriverManager.getConnection(url,user,password);try(var statement=c.createStatement()){statement.execute("SET TIME ZONE 'UTC'");return c;}catch(SQLException e){try{c.close();}catch(SQLException cleanup){e.addSuppressed(cleanup);}throw e;}}
     private <T> T withConnection(SqlWork<T> work) {try {if(pinned!=null)return work.run(pinned);try(Connection c=openConnection()){return work.run(c);}}catch(SQLException e){throw new Failure(e);}}
     @FunctionalInterface private interface SqlWork<T>{T run(Connection c)throws SQLException;}
     private static Object fieldValue(String table,String key,JsonNode value) {JsonNode column=Entities.column(table,key);if(column!=null&&Set.of("json","jsonb").contains(Json.text(column,"type"))&&(value!=null&&!value.isNull()||!Json.bool(column,"nullable",false))) {try{PGobject json=new PGobject();json.setType(Json.text(column,"type"));json.setValue(Json.stringify(value));return json;}catch(SQLException e){throw new Failure(e);}}return value;}

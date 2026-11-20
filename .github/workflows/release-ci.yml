@@ -516,3 +516,138 @@ jobs:
         run: sh scripts/backend-build.sh
       - name: Original-to-Java upgrade and source identity
         run: node scripts/backend-upgrade-check.mjs
+
+  review-workflow:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tenvyr_review_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tenvyr_review_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TZ: UTC
+      MAVEN_OPTS: "-Duser.timezone=UTC"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Review unit checks
+        run: sh scripts/review-checks.sh unit
+
+      - name: Review integration checks
+        env:
+          TENVYR_REVIEW_TEST_DATABASE_URL: jdbc:postgresql://127.0.0.1:5432/tenvyr_review_test
+        run: sh scripts/review-checks.sh integration
+
+      - name: Assert Surefire and Failsafe reports
+        run: |
+          python3 - << 'EOF'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          directories = [
+              "backend/review-api/target/surefire-reports",
+              "backend/review-worker/target/surefire-reports",
+              "backend/review-api/target/failsafe-reports",
+          ]
+
+          required_failsafe = {
+              "TEST-io.tenvyr.review.ReviewRecoveryIT.xml",
+              "TEST-io.tenvyr.review.ReviewAccessMatrixIT.xml",
+              "TEST-io.tenvyr.review.ReviewConcurrencyIT.xml",
+          }
+
+          failsafe_reports = {}
+
+          for d in directories:
+              if not os.path.isdir(d):
+                  sys.exit(f"Reports directory does not exist: {d}")
+              files = sorted([f for f in os.listdir(d) if f.startswith("TEST-") and f.endswith(".xml")])
+              if not files:
+                  sys.exit(f"No XML reports found in: {d}")
+
+              dir_tests = 0
+              for f in files:
+                  file_path = os.path.join(d, f)
+                  try:
+                      tree = ET.parse(file_path)
+                      root = tree.getroot()
+                  except Exception as e:
+                      sys.exit(f"Malformed XML report {file_path}: {e}")
+
+                  tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+                  if tag != "testsuite":
+                      sys.exit(f"Root element in {file_path} is not testsuite: {root.tag}")
+
+                  try:
+                      tests = int(root.attrib["tests"])
+                      failures = int(root.attrib["failures"])
+                      errors = int(root.attrib["errors"])
+                      skipped = int(root.attrib["skipped"])
+                  except (KeyError, ValueError) as e:
+                      sys.exit(f"Missing or non-numeric testsuite attributes in {file_path}: {e}")
+
+                  if tests <= 0:
+                      sys.exit(f"Test suite {file_path} had non-positive tests: {tests}")
+                  if failures != 0 or errors != 0 or skipped != 0:
+                      sys.exit(f"Test report {file_path} had failures={failures}, errors={errors}, skipped={skipped}")
+
+                  dir_tests += tests
+                  if d == "backend/review-api/target/failsafe-reports":
+                      failsafe_reports[f] = tests
+
+              print(f"Verified {d}: {len(files)} suites, {dir_tests} tests, 0 failures, 0 errors, 0 skipped")
+
+          missing = required_failsafe - set(failsafe_reports.keys())
+          if missing:
+              sys.exit(f"Required Failsafe reports missing: {', '.join(sorted(missing))}")
+
+          for name in sorted(required_failsafe):
+              print(f"Targeted acceptance verified: {name} ({failsafe_reports[name]} tests passed, 0 skipped)")
+          EOF
+
+      - name: Review showcase and launcher contract tests
+        run: node --test scripts/review-showcase.test.mjs
+
+      - name: Preserve test diagnostics artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-test-diagnostics
+          path: |
+            backend/review-api/target/surefire-reports/*.txt
+            backend/review-api/target/surefire-reports/*.xml
+            backend/review-api/target/failsafe-reports/*.txt
+            backend/review-api/target/failsafe-reports/*.xml
+            backend/review-worker/target/surefire-reports/*.txt
+            backend/review-worker/target/surefire-reports/*.xml
+          if-no-files-found: ignore
