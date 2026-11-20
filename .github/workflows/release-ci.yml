@@ -569,83 +569,71 @@ jobs:
 
       - name: Assert Surefire and Failsafe reports
         run: |
-          node -e '
-            const fs = require("node:fs");
-            const path = require("node:path");
+          python3 - << 'EOF'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
 
-            function checkReports(dir) {
-              if (!fs.existsSync(dir)) {
-                throw new Error("Reports directory does not exist: " + dir);
-              }
-              const files = fs.readdirSync(dir).filter(f => f.startsWith("TEST-") && f.endsWith(".xml"));
-              if (files.length === 0) {
-                throw new Error("No XML reports found in: " + dir);
-              }
-              let totalTests = 0;
-              let totalFailures = 0;
-              let totalErrors = 0;
-              let totalSkipped = 0;
+          directories = [
+              "backend/review-api/target/surefire-reports",
+              "backend/review-worker/target/surefire-reports",
+              "backend/review-api/target/failsafe-reports",
+          ]
 
-              for (const file of files) {
-                const content = fs.readFileSync(path.join(dir, file), "utf8");
-                const m = content.match(/<testsuite[^>]*\btests="(\d+)"[^>]*\bfailures="(\d+)"[^>]*\berrors="(\d+)"(?:[^>]*\bskipped="(\d+)")?/);
-                if (!m) continue;
-                const tests = parseInt(m[1], 10);
-                const failures = parseInt(m[2], 10);
-                const errors = parseInt(m[3], 10);
-                const skipped = m[4] ? parseInt(m[4], 10) : 0;
-                totalTests += tests;
-                totalFailures += failures;
-                totalErrors += errors;
-                totalSkipped += skipped;
+          required_failsafe = {
+              "TEST-io.tenvyr.review.ReviewRecoveryIT.xml",
+              "TEST-io.tenvyr.review.ReviewAccessMatrixIT.xml",
+              "TEST-io.tenvyr.review.ReviewConcurrencyIT.xml",
+          }
 
-                if (failures > 0 || errors > 0) {
-                  throw new Error(`Test report ${file} had failures (${failures}) or errors (${errors})`);
-                }
-              }
+          failsafe_reports = {}
 
-              if (totalTests === 0) {
-                throw new Error("Total tests in " + dir + " was 0 (fail-closed)");
-              }
-              console.log(`Verified ${dir}: ${files.length} suites, ${totalTests} tests, 0 failures, 0 errors, ${totalSkipped} skipped`);
-              return files;
-            }
+          for d in directories:
+              if not os.path.isdir(d):
+                  sys.exit(f"Reports directory does not exist: {d}")
+              files = sorted([f for f in os.listdir(d) if f.startswith("TEST-") and f.endswith(".xml")])
+              if not files:
+                  sys.exit(f"No XML reports found in: {d}")
 
-            checkReports("backend/review-api/target/surefire-reports");
-            checkReports("backend/review-worker/target/surefire-reports");
+              dir_tests = 0
+              for f in files:
+                  file_path = os.path.join(d, f)
+                  try:
+                      tree = ET.parse(file_path)
+                      root = tree.getroot()
+                  except Exception as e:
+                      sys.exit(f"Malformed XML report {file_path}: {e}")
 
-            const failsafeFiles = checkReports("backend/review-api/target/failsafe-reports");
+                  tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+                  if tag != "testsuite":
+                      sys.exit(f"Root element in {file_path} is not testsuite: {root.tag}")
 
-            const targeted = ["ReviewRecoveryIT", "ReviewAccessMatrixIT", "ReviewConcurrencyIT"];
-            for (const name of targeted) {
-              const srcFile = `backend/review-api/src/test/java/io/tenvyr/review/${name}.java`;
-              const reportFile = failsafeFiles.find(f => f.includes(name));
-              if (fs.existsSync(srcFile) || reportFile) {
-                if (!reportFile) {
-                  throw new Error(`Targeted test suite ${name} exists on disk but produced no Failsafe report`);
-                }
-                const content = fs.readFileSync(path.join("backend/review-api/target/failsafe-reports", reportFile), "utf8");
-                const m = content.match(/<testsuite[^>]*\btests="(\d+)"[^>]*\bfailures="(\d+)"[^>]*\berrors="(\d+)"(?:[^>]*\bskipped="(\d+)")?/);
-                if (!m) {
-                  throw new Error(`Could not parse testsuite XML for ${reportFile}`);
-                }
-                const tests = parseInt(m[1], 10);
-                const failures = parseInt(m[2], 10);
-                const errors = parseInt(m[3], 10);
-                const skipped = m[4] ? parseInt(m[4], 10) : 0;
-                if (tests <= 0) {
-                  throw new Error(`Targeted test suite ${name} reported 0 tests executed`);
-                }
-                if (failures > 0 || errors > 0) {
-                  throw new Error(`Targeted test suite ${name} had failures (${failures}) or errors (${errors})`);
-                }
-                if (skipped > 0) {
-                  throw new Error(`Targeted test suite ${name} had skipped tests (${skipped}); skips forbidden`);
-                }
-                console.log(`Targeted acceptance verified: ${name} (${tests} tests passed, 0 skipped)`);
-              }
-            }
-          '
+                  try:
+                      tests = int(root.attrib["tests"])
+                      failures = int(root.attrib["failures"])
+                      errors = int(root.attrib["errors"])
+                      skipped = int(root.attrib["skipped"])
+                  except (KeyError, ValueError) as e:
+                      sys.exit(f"Missing or non-numeric testsuite attributes in {file_path}: {e}")
+
+                  if tests <= 0:
+                      sys.exit(f"Test suite {file_path} had non-positive tests: {tests}")
+                  if failures != 0 or errors != 0 or skipped != 0:
+                      sys.exit(f"Test report {file_path} had failures={failures}, errors={errors}, skipped={skipped}")
+
+                  dir_tests += tests
+                  if d == "backend/review-api/target/failsafe-reports":
+                      failsafe_reports[f] = tests
+
+              print(f"Verified {d}: {len(files)} suites, {dir_tests} tests, 0 failures, 0 errors, 0 skipped")
+
+          missing = required_failsafe - set(failsafe_reports.keys())
+          if missing:
+              sys.exit(f"Required Failsafe reports missing: {', '.join(sorted(missing))}")
+
+          for name in sorted(required_failsafe):
+              print(f"Targeted acceptance verified: {name} ({failsafe_reports[name]} tests passed, 0 skipped)")
+          EOF
 
       - name: Review showcase and launcher contract tests
         run: node --test scripts/review-showcase.test.mjs
